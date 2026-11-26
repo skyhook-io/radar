@@ -345,8 +345,8 @@ func listActorsPage(c *conn) func(ctx context.Context, atespace, token string) (
 	}
 }
 
-// readSnapshot reads every kind once. It returns a TierError only when the
-// connection or identity fails as a whole.
+// readSnapshot reads every kind once. It returns a TierError for a connection
+// or identity failure, or when a kind failed and none of the kinds can be shown.
 //
 // scope is the settings' atespaces, read when Substrate will not list them.
 func readSnapshot(parent context.Context, c *conn, now time.Time, scope []string) (*Snapshot, *TierError) {
@@ -446,6 +446,18 @@ func readSnapshot(parent context.Context, c *conn, now time.Time, scope []string
 	snap.Workers, snap.Coverage.Workers = workers.items, workers.coverage
 	snap.Templates, snap.Coverage.Templates = templates.items, templates.coverage
 	snap.Actors, snap.Coverage.Actors = actors.items, actors.coverage
+	var firstFailure *TierError
+	for _, coverage := range []Coverage{atespaces.coverage, workers.coverage, templates.coverage, actors.coverage} {
+		if coverage.Usable() {
+			return snap, nil
+		}
+		if firstFailure == nil && coverage.State == CoverageFailed {
+			firstFailure = &TierError{Code: CodeFailed, Message: coverage.Message, keepConn: true}
+		}
+	}
+	if firstFailure != nil {
+		return nil, firstFailure
+	}
 	return snap, nil
 }
 

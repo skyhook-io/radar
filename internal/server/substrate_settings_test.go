@@ -209,7 +209,11 @@ func TestSubstrateCallerUsesOSSImpersonationAndUserToken(t *testing.T) {
 			api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls++
 				w.Header().Set("Content-Type", "application/json")
-				if r.Header.Get("Impersonate-User") != "alice" || r.Header.Get("Authorization") != "Bearer radar-sa" {
+				impersonatedUser, bearer := "alice", "Bearer radar-sa"
+				if mode == "user-token" {
+					impersonatedUser, bearer = "", "Bearer user-token"
+				}
+				if r.Header.Get("Impersonate-User") != impersonatedUser || r.Header.Get("Authorization") != bearer {
 					t.Errorf("wrong caller headers: %v", r.Header)
 				}
 				if r.URL.Path != "/api/v1/namespaces/ate-system/serviceaccounts/ate-client/token" {
@@ -231,7 +235,11 @@ func TestSubstrateCallerUsesOSSImpersonationAndUserToken(t *testing.T) {
 				t.Cleanup(func() { pkgauth.SetCredentialMode(previous) })
 			}
 			r := httptest.NewRequest("GET", "/api/substrate/status", nil)
-			r = r.WithContext(auth.ContextWithUser(r.Context(), &auth.User{Username: "alice", Groups: []string{"team"}}))
+			user := &auth.User{Username: "alice", Groups: []string{"team"}}
+			if mode == "user-token" {
+				user.Token = "user-token"
+			}
+			r = r.WithContext(auth.ContextWithUser(r.Context(), user))
 			gated, denied := s.substrateGate(r)
 			if denied != nil {
 				t.Fatalf("gate: %+v", denied)
@@ -239,12 +247,8 @@ func TestSubstrateCallerUsesOSSImpersonationAndUserToken(t *testing.T) {
 			// Minting alone must use this user's client, without needing a Substrate dial.
 			client := s.getClientForRequest(gated)
 			_, err := client.CoreV1().ServiceAccounts("ate-system").CreateToken(gated.Context(), "ate-client", &authv1.TokenRequest{}, metav1.CreateOptions{})
-			if mode == "user-token" {
-				if err == nil || calls != 0 {
-					t.Fatalf("missing user token reached SA: calls=%d err=%v", calls, err)
-				}
-			} else if err != nil || calls != 1 {
-				t.Fatalf("impersonated mint: calls=%d err=%v", calls, err)
+			if err != nil || calls != 1 {
+				t.Fatalf("mint: calls=%d err=%v", calls, err)
 			}
 		})
 	}

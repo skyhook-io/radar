@@ -160,6 +160,13 @@ describe('API tier readings', () => {
     expect(tierReading({ state: 'notConfigured', code: 'notConfigured' }).title).toBe('Not connected')
   })
 
+  it('explains a missing user token without suggesting an RBAC grant', () => {
+    const reason = 'Live actions need a user token, which only single sign-on sessions carry; this request has none.'
+    expect(tierReading({ state: 'failed', code: 'mintDenied', reason })).toEqual({
+      title: 'Sign-in token required', detail: reason, tone: 'unhealthy',
+    })
+  })
+
   it('doesn’t send a reader already in Settings to Settings', () => {
     for (const code of ['notConfigured', 'targetChanged', 'notInstalled', 'tls'] as const) {
       const state = code === 'notConfigured' ? 'notConfigured' : 'failed'

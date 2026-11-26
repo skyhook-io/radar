@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -266,5 +267,46 @@ func waitFor(t *testing.T, cond func() bool) {
 			t.Fatal("condition not reached")
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func TestRefreshWithNoUsableKindKeepsLastGoodSnapshot(t *testing.T) {
+	m, k, settings := stubManager(t, fixedKube)
+	clock := t0
+	m.Now = func() time.Time { return clock }
+	key := connKey(k, settings)
+	m.conn = &conn{key: key, client: &stubControl{}}
+	first, tier := m.Snapshot(t.Context())
+	if first == nil || tier.State != TierConnected {
+		t.Fatalf("first snapshot = %+v", tier)
+	}
+
+	clock = clock.Add(Freshness + time.Second)
+	connection := &conn{key: key, client: &stubControl{listError: status.Error(codes.Internal, "read failed")}}
+	m.conn = connection
+	_, tier = m.Snapshot(t.Context())
+	if !tier.Refreshing {
+		t.Fatalf("stale snapshot = %+v", tier)
+	}
+	waitFor(t, func() bool {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return m.good.snap != first || m.failed != nil
+	})
+	served, tier := m.Snapshot(t.Context())
+	if served != first || tier.State != TierConnected || !tier.Refreshing ||
+		tier.LastError == nil || tier.LastError.Code != CodeFailed || !strings.Contains(tier.LastError.Message, "read failed") {
+		t.Errorf("after failed refresh, previous snapshot = %t, tier = %+v", served == first, tier)
+	}
+	if m.conn != connection {
+		t.Error("per-kind failures discarded the connection")
+	}
+}
+
+func TestSnapshotWithOnlyDeniedKindsKeepsCoverage(t *testing.T) {
+	c := &conn{client: &stubControl{listError: status.Error(codes.PermissionDenied, "no access")}}
+	snap, err := readSnapshot(t.Context(), c, t0, nil)
+	if err != nil || snap == nil || snap.Coverage.Actors.State != CoverageDenied {
+		t.Errorf("denied read = %+v, %v", snap, err)
 	}
 }

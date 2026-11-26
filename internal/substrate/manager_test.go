@@ -2,6 +2,10 @@ package substrate
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"slices"
 	"sync/atomic"
@@ -12,6 +16,15 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/httpstream"
+	"k8s.io/apimachinery/pkg/util/httpstream/spdy"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+	pfclient "k8s.io/client-go/tools/portforward"
+
+	"github.com/skyhook-io/radar/internal/portforward"
 )
 
 // stubControl answers the snapshot's list RPCs. With block set, ListAtespaces
@@ -27,6 +40,7 @@ type stubControl struct {
 	during func()
 	// unavailable fails ListAtespaces as an unreachable API.
 	unavailable bool
+	listError   error
 }
 
 func (c *stubControl) ListAtespaces(ctx context.Context, _ *ateapi.ListAtespacesRequest, _ ...grpc.CallOption) (*ateapi.ListAtespacesResponse, error) {
@@ -41,6 +55,9 @@ func (c *stubControl) ListAtespaces(ctx context.Context, _ *ateapi.ListAtespaces
 	if c.unavailable {
 		return nil, status.Error(codes.Unavailable, "connection refused")
 	}
+	if c.listError != nil {
+		return nil, c.listError
+	}
 	if c.scoped {
 		return nil, status.Error(codes.PermissionDenied, "global viewer required")
 	}
@@ -51,10 +68,16 @@ func (c *stubControl) ListWorkers(context.Context, *ateapi.ListWorkersRequest, .
 	if c.during != nil {
 		c.during()
 	}
+	if c.listError != nil {
+		return nil, c.listError
+	}
 	return &ateapi.ListWorkersResponse{}, nil
 }
 
 func (c *stubControl) allowed(atespace string) error {
+	if c.listError != nil {
+		return c.listError
+	}
 	if c.scoped && atespace != "team" {
 		return status.Error(codes.PermissionDenied, "viewer on team only")
 	}
@@ -302,4 +325,98 @@ func TestPeekKeepsTheLastFailureWhileARetryRuns(t *testing.T) {
 	}
 	<-blocked.entered
 	close(blocked.release)
+}
+
+func TestFailedProbePreservesPublishedForward(t *testing.T) {
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/namespaces/ate-system/services/api":
+			json.NewEncoder(w).Encode(&corev1.Service{
+				TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "Service"},
+				ObjectMeta: metav1.ObjectMeta{Namespace: SystemNamespace, Name: APIService},
+				Spec:       corev1.ServiceSpec{Selector: map[string]string{"app": "api"}, Ports: []corev1.ServicePort{{Port: APIPort}}},
+			})
+		case "/api/v1/namespaces/ate-system/pods":
+			json.NewEncoder(w).Encode(&corev1.PodList{
+				TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "PodList"},
+				Items: []corev1.Pod{{
+					ObjectMeta: metav1.ObjectMeta{Namespace: SystemNamespace, Name: "api-pod"},
+					Status:     corev1.PodStatus{Phase: corev1.PodRunning},
+				}},
+			})
+		case "/api/v1/namespaces/ate-system/pods/api-pod/portforward":
+			if r.Method != http.MethodPost {
+				http.Error(w, "SPDY upgrade only", http.StatusBadRequest)
+				return
+			}
+			if _, err := httpstream.Handshake(r, w, []string{pfclient.PortForwardProtocolV1Name}); err != nil {
+				t.Error(err)
+				return
+			}
+			stream := spdy.NewResponseUpgrader().UpgradeResponse(w, r, func(httpstream.Stream, <-chan struct{}) error { return nil })
+			if stream != nil {
+				<-stream.CloseChan()
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(api.Close)
+	t.Cleanup(func() { portforward.Stop(portforward.OwnerSubstrate) })
+	cfg := &rest.Config{Host: api.URL}
+	client, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kube := func() (Kube, error) {
+		return Kube{Binding: "ctx-a", Context: "ctx-a", Fingerprint: "cluster-a", Client: client, Config: cfg}, nil
+	}
+	m, k, settings := stubManager(t, kube)
+
+	// With no ClusterTrustBundle API, the probe fails after establishing a
+	// tunnel. It must release this tunnel when nobody else uses it.
+	if err := m.Probe(t.Context(), k, settings); err == nil || err.Code != CodeTLS {
+		t.Fatalf("probe = %+v, want TLS failure", err)
+	}
+	if portforward.GetConnectionInfo(portforward.OwnerSubstrate).Connected {
+		t.Fatal("failed probe left its own forward running")
+	}
+
+	port, err := startForward(t.Context(), k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.conn = &conn{key: connKey(k, settings), forwardPort: port, client: &stubControl{}}
+	if err := m.Probe(t.Context(), k, settings); err == nil || err.Code != CodeTLS {
+		t.Fatalf("probe with live forward = %+v, want TLS failure", err)
+	}
+	if !m.conn.alive() {
+		t.Fatal("failed probe stopped the published connection's forward")
+	}
+}
+
+func TestSaveRevisionRetiresSelectedSettings(t *testing.T) {
+	m, k, old := stubManager(t, fixedKube)
+	_, selected, _, oldGen, oldCtx := m.settings(t.Context())
+	if selected == nil || selected.Identity != old.Identity {
+		t.Fatalf("selected before save = %+v", selected)
+	}
+	_, _, revision, err := m.Store.GetRevision(k.Binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := Settings{Identity: IdentityShared, Endpoint: "api.example:443"}
+	target := Target{Binding: k.Binding, Fingerprint: k.Fingerprint}
+	if err := m.SaveRevision(t.Context(), target, revision, &next); err != nil {
+		t.Fatal(err)
+	}
+	savedGen, _ := m.generation()
+	_, selected, tier, selectedGen, _ := m.settings(t.Context())
+	if selected == nil || selected.Endpoint != next.Endpoint || oldCtx.Err() == nil || oldGen == selectedGen || savedGen != selectedGen {
+		t.Fatalf("settings after save = %+v, tier %+v, generation %d (was %d, save set %d)", selected, tier, selectedGen, oldGen, savedGen)
+	}
+	if c, err := m.client(t.Context(), k, old, oldGen); c != nil || !errors.Is(err, errRetired) {
+		t.Errorf("dial with retired settings = %v, %v", c, err)
+	}
 }

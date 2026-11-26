@@ -1,13 +1,16 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	authv1 "k8s.io/api/authentication/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -18,7 +21,9 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/k8s"
 	substrateapi "github.com/skyhook-io/radar/internal/substrate"
+	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 )
 
 // mintRecorder stands in for the requesting user's Kubernetes client: it
@@ -30,8 +35,9 @@ type mintRecorder struct {
 	asked []string // users whose client was asked for
 	mints []string // users whose client minted
 	// deny is the users whose access cannot mint.
-	deny    map[string]bool
-	expires time.Time
+	deny       map[string]bool
+	expires    time.Time
+	firstToken string
 }
 
 func (m *mintRecorder) count() (asked, minted int) {
@@ -58,9 +64,13 @@ func (m *mintRecorder) install(t *testing.T) {
 				return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "serviceaccounts/token"}, "ate-client", nil)
 			}
 			m.mu.Lock()
+			token := fullToken
+			if len(m.mints) == 0 && m.firstToken != "" {
+				token = m.firstToken
+			}
 			m.mints = append(m.mints, user)
 			m.mu.Unlock()
-			return true, &authv1.TokenRequest{Status: authv1.TokenRequestStatus{Token: fullToken, ExpirationTimestamp: metav1.NewTime(m.expires)}}, nil
+			return true, &authv1.TokenRequest{Status: authv1.TokenRequestStatus{Token: token, ExpirationTimestamp: metav1.NewTime(m.expires)}}, nil
 		})
 		return c
 	}
@@ -218,5 +228,90 @@ func TestSubstrateHubOwnerFailuresNameTheIdentity(t *testing.T) {
 	call(t, s, s.handleSubstrateWorkspace, substrateCall{path: "/api/substrate/workspace", user: hubUser("o", "owner")}, &ws)
 	if ws.APITier.Code != substrateapi.CodeMintDenied || ws.APITier.Identity == nil || ws.APITier.Identity.Mode != substrateapi.IdentitySharedAsCaller {
 		t.Errorf("no user client = %+v", ws.APITier)
+	}
+}
+
+func TestSubstrateUserTokenRequiredWithWarmProof(t *testing.T) {
+	s, mints := cloudSubstrate(t)
+	prev := pkgauth.CurrentCredentialMode()
+	pkgauth.SetCredentialMode(pkgauth.CredentialsUserToken)
+	t.Cleanup(func() { pkgauth.SetCredentialMode(prev) })
+
+	user := &auth.User{Username: "alice", Groups: []string{"system:authenticated"}, Token: "user-token"}
+	req := substrateCall{path: "/api/substrate/actors", user: user}
+	if rec := call(t, s, s.handleSubstrateActors, req, nil); rec.Code != http.StatusOK {
+		t.Fatalf("warm proof: %d %s", rec.Code, rec.Body)
+	}
+
+	user.Token = ""
+	rec := call(t, s, s.handleSubstrateActors, req, nil)
+	if rec.Code != http.StatusForbidden || substrateErrorCode(t, rec) != substrateapi.CodeMintDenied ||
+		!strings.Contains(rec.Body.String(), k8s.UserTokenRequiredMessage) {
+		t.Errorf("request missing its token: %d %s", rec.Code, rec.Body)
+	}
+	if asked, minted := mints.count(); asked != 1 || minted != 1 {
+		t.Errorf("refused request reached the Kubernetes client: %d client lookups, %d mints", asked, minted)
+	}
+
+	system := &auth.User{Username: "radar:system:test", Groups: []string{"radar:system"}, System: true}
+	ctx := auth.ContextWithUser(t.Context(), system)
+	if _, tier := s.substrateGate((&http.Request{}).WithContext(ctx)); tier != nil {
+		t.Errorf("system request gate: %+v", tier)
+	}
+}
+
+func TestSubstrateCallerRemintsAfterRemoteRejection(t *testing.T) {
+	for name, read := range map[string]func(*substrateapi.Manager, context.Context) string{
+		"snapshot": func(m *substrateapi.Manager, ctx context.Context) string {
+			_, tier := m.Snapshot(ctx)
+			return tier.Code
+		},
+		"scoped actors": func(m *substrateapi.Manager, ctx context.Context) string {
+			_, _, tier := m.AtespaceActors(ctx, "research")
+			if tier != nil {
+				return tier.Code
+			}
+			return ""
+		},
+		"detail RPC": func(m *substrateapi.Manager, ctx context.Context) string {
+			tier, code, _ := m.Call(ctx, func(ctx context.Context, client ateapi.ControlClient) error {
+				_, err := client.ListAtespaces(ctx, &ateapi.ListAtespacesRequest{})
+				return err
+			})
+			if tier != nil {
+				return tier.Code
+			}
+			return code
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s, mints := cloudSubstrate(t)
+			mints.firstToken = "rejected-token"
+			m := s.substrateManager()
+			now := time.Now()
+			var elapsed atomic.Int64
+			m.Now = func() time.Time { return now.Add(time.Duration(elapsed.Load())) }
+			ctx := auth.ContextWithUser(t.Context(), hubUser("alice", "owner"))
+			req, tier := s.substrateGate((&http.Request{}).WithContext(ctx))
+			if tier != nil {
+				t.Fatalf("gate: %+v", tier)
+			}
+			if code := read(m, req.Context()); code != substrateapi.CodeUnauthenticated {
+				t.Fatalf("first request = %q, want unauthenticated", code)
+			}
+			// The next request mints, even if the failed snapshot is still
+			// cached. The recovered token has the same expiry as the old one.
+			code := read(m, req.Context())
+			if _, minted := mints.count(); minted != 2 {
+				t.Fatalf("next request minted %d total tokens, want 2", minted)
+			}
+			if name == "snapshot" {
+				elapsed.Store(int64(substrateapi.Freshness + time.Second))
+				code = read(m, req.Context())
+			}
+			if code != "" {
+				t.Errorf("request after mint = %q, want success", code)
+			}
+		})
 	}
 }

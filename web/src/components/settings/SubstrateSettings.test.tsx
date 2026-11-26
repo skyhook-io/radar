@@ -109,7 +109,7 @@ describe('Settings → Agent Substrate on an in-cluster Radar or Radar Hub', () 
 
   it('tells a person whose access can’t mint the token what to ask for', () => {
     const html = render(managedConnection({ access: mintDeniedTier }), { canConfigure: false })
-    expect(html).toContain('Your access can’t create the shared identity’s token')
+    expect(html).toContain('Couldn’t create the shared identity’s token')
     expect(html).toContain('kubectl auth can-i create serviceaccounts/ate-client --subresource=token -n ate-system')
   })
 

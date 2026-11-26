@@ -47,7 +47,7 @@ export type SubstrateCode =
   | 'sharedRadar'
   /** The operator turned Substrate's API off for this Radar (Helm substrate.api.enabled: false) (403). */
   | 'apiDisabled'
-  /** The caller's own Kubernetes access cannot create a token for ate-system/ate-client (403). */
+  /** Radar cannot mint ate-system/ate-client using the Kubernetes credentials for this read (403). */
   | 'mintDenied'
   | 'notConfigured'
   | 'targetChanged'
@@ -62,6 +62,7 @@ export type SubstrateCode =
   | 'scoped'
   /** The cluster connection or the settings changed during the read; safe to retry. */
   | 'contextChanged'
+  /** A read failed, including a snapshot read with no usable kind and at least one failed kind. */
   | 'failed'
   /** The submitted connection settings are invalid (PUT /connection, 400). */
   | 'invalidSettings'
@@ -93,7 +94,7 @@ export interface SubstrateAPITier {
   /**
    * With notConfigured (notConfigured), disabled (sharedRadar) and failed
    * (targetChanged, contextChanged, notInstalled, tls, unreachable,
-   * unauthenticated, settingsFile, failed); absent when connected or connecting.
+   * unauthenticated, mintDenied, settingsFile, failed); absent when connected or connecting.
    */
   code?: SubstrateCode
   /** Set once settings are saved. */
@@ -108,7 +109,7 @@ export interface SubstrateAPITier {
   readAt?: string
   /** The snapshot served is older than ~5s and a newer read is running, or the newest one failed (lastError). Served for up to 2 min. */
   refreshing?: boolean
-  /** The newest read's failure while an older snapshot is served. */
+  /** The newest read's failure while an older snapshot is served, including a failure with no usable kind. */
   lastError?: { code: SubstrateCode; message: string; at: string }
 }
 

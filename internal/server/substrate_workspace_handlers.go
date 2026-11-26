@@ -179,6 +179,10 @@ func (s *Server) substrateGate(r *http.Request) (*http.Request, *substrateapi.AP
 	if user == nil {
 		return r, &substrateapi.APITier{State: substrateapi.TierFailed, Code: substrateapi.CodeMintDenied, Reason: "Radar has no signed-in Kubernetes identity for this request, so it cannot create Substrate's token for you."}
 	}
+	if pkgauth.UserTokenMode() && !user.System && user.Token == "" {
+		return r, &substrateapi.APITier{State: substrateapi.TierFailed, Code: substrateapi.CodeMintDenied, Reason: k8s.UserTokenRequiredMessage,
+			Identity: &substrateapi.Identity{Mode: substrateapi.IdentitySharedAsCaller, Principal: substrateapi.SharedPrincipal}}
+	}
 	if installation.Err != nil {
 		return r, &substrateapi.APITier{State: substrateapi.TierFailed, Code: substrateapi.CodeInvalidSettings, Reason: installation.Err.Error()}
 	}

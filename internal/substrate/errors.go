@@ -64,8 +64,9 @@ const (
 
 // TierError is a failure of the whole API tier: nothing could be read.
 type TierError struct {
-	Code    string
-	Message string
+	Code     string
+	Message  string
+	keepConn bool
 }
 
 func (e *TierError) Error() string { return e.Message }

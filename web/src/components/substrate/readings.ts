@@ -437,10 +437,10 @@ const CODE_READING: Partial<Record<SubstrateCode, Omit<TierReading, 'detail'> & 
     nextStep: 'Ask your operator to set substrate.api.enabled in Radar’s Helm values.',
   },
   mintDenied: {
-    title: 'Your access can’t create the shared identity’s token',
+    title: 'Couldn’t create the shared identity’s token',
     tone: 'unhealthy',
-    detail: 'Radar reads Substrate as ate-system/ate-client, with a token created with your own Kubernetes access, and that access can’t create one.',
-    nextStep: 'Ask a cluster admin for create on serviceaccounts/token for ate-client in ate-system.',
+    detail: 'Radar needs Kubernetes credentials that can create a token for ate-system/ate-client.',
+    nextStep: 'Check your Kubernetes credentials. If Kubernetes denied the token request, ask a cluster admin for create on serviceaccounts/token for ate-client in ate-system.',
     command: 'kubectl auth can-i create serviceaccounts/ate-client --subresource=token -n ate-system',
   },
   notInstalled: { title: 'API server not found', tone: 'unknown', nextStep: 'Check that Substrate’s API server runs as Service ate-system/api, or set its endpoint in Settings → Agent Substrate, under Advanced.' },
@@ -514,6 +514,10 @@ const IN_SETTINGS_STEP: Partial<Record<SubstrateCode, string | undefined>> = {
 export function tierReading(tier: SubstrateAPITier, { inSettings = false }: { inSettings?: boolean } = {}): TierReading {
   if (tier.state === 'connected') return { title: 'Connected', detail: '', tone: 'healthy' }
   if (tier.state === 'connecting') return { title: 'Connecting', detail: 'The connection is saved; Radar is reading Substrate’s API for the first time.', tone: 'unknown' }
+  // The server uses UserTokenRequiredMessage with the existing mintDenied code.
+  if (tier.code === 'mintDenied' && tier.reason === 'Live actions need a user token, which only single sign-on sessions carry; this request has none.') {
+    return { title: 'Sign-in token required', detail: tier.reason, tone: 'unhealthy' }
+  }
   const noForm = tier.code ? tier.identity?.mode === 'sharedAsCaller' && NO_FORM_READING[tier.code] : undefined
   if (noForm) {
     // The plain state is Radar's; the server's own words follow as its reason.

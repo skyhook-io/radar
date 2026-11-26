@@ -231,11 +231,11 @@ describe('Agent Substrate on an in-cluster Radar with sign-in, or Radar Hub', ()
 
   it('tells a person whose access can’t mint the token what to ask for, and how to check', () => {
     const html = render(notConnectedWorkspace(mintDeniedTier), status({ apiTier: mintDeniedTier, canConfigure: false }))
-    expect(html).toContain('Substrate API: your access can’t create the shared identity’s token')
+    expect(html).toContain('Substrate API: couldn’t create the shared identity’s token')
     expect(html).toContain('serviceaccounts/token for ate-client in ate-system')
     expect(html).toContain('kubectl auth can-i create serviceaccounts/ate-client --subresource=token -n ate-system')
     // The banner states the next step once; the notice below only leads to Settings.
-    expect(html.split('Ask a cluster admin for create on serviceaccounts/token').length - 1).toBe(1)
+    expect(html.split('ask a cluster admin for create on serviceaccounts/token').length - 1).toBe(1)
     expect(html).toContain('Actors, templates and workers aren’t read')
   })
 

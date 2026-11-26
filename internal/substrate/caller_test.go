@@ -8,10 +8,15 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	authv1 "k8s.io/api/authentication/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes/fake"
+	ktesting "k8s.io/client-go/testing"
 )
 
 // A caller's request mints; what reads after it, a background refresh
@@ -32,7 +37,7 @@ func TestCallerTokenIsMintedOnlyOnARequest(t *testing.T) {
 	var requests []*authv1.TokenRequest
 	tokenReactor(c, now, &requests, nil)
 	caller := Caller{Client: c}
-	_, s, tier := m.settings(WithCaller(context.Background(), caller))
+	_, s, tier, _, _ := m.settings(WithCaller(context.Background(), caller))
 	if s == nil || s.Identity != IdentitySharedAsCaller || !strings.HasPrefix(s.Endpoint, APIServerName+":") || tier.Identity.Principal != SharedPrincipal {
 		t.Fatalf("caller settings = %+v, %+v", s, tier)
 	}
@@ -52,7 +57,7 @@ func TestCallerTokenIsMintedOnlyOnARequest(t *testing.T) {
 		t.Errorf("a request within tokenRefreshBefore of expiry mints again: %d", len(requests))
 	}
 	// Saved settings are not affected by a caller's token.
-	if _, s, _ := m.settings(context.Background()); s != nil {
+	if _, s, _, _, _ := m.settings(context.Background()); s != nil {
 		t.Errorf("without a caller, the saved settings (none here) are used: %+v", s)
 	}
 	m.Reset()
@@ -79,7 +84,7 @@ func TestCallerTokenNeedsEachCallersOwnProof(t *testing.T) {
 		return Caller{Client: c}, &requests
 	}
 	read := func(c Caller) *APITier {
-		_, _, tier := m.settings(WithCaller(context.Background(), c))
+		_, _, tier, _, _ := m.settings(WithCaller(context.Background(), c))
 		if tier.State == TierFailed {
 			return tier
 		}
@@ -139,5 +144,87 @@ func TestCallerTokenNeedsEachCallersOwnProof(t *testing.T) {
 	m.callerTok.mu.Unlock()
 	if !cleared {
 		t.Error("Reset clears the token and the proofs")
+	}
+}
+
+func TestCallerTokenKubernetesUnauthorized(t *testing.T) {
+	m := NewManager(nil, fixedKube)
+	client := fake.NewClientset()
+	var requests []*authv1.TokenRequest
+	tokenReactor(client, m.Now, &requests, apierrors.NewUnauthorized("token expired"))
+	_, _, tier, _, _ := m.settings(WithCaller(t.Context(), Caller{Client: client}))
+	if tier.Code != CodeMintDenied || !strings.Contains(tier.Reason, "Kubernetes did not accept the credentials for this request") {
+		t.Errorf("Kubernetes 401 = %+v", tier)
+	}
+}
+
+func TestWarmCallerDoesNotWaitForAnotherMint(t *testing.T) {
+	m := NewManager(nil, fixedKube)
+	aliceClient, bobClient := fake.NewClientset(), fake.NewClientset()
+	var aliceMints, bobMints []*authv1.TokenRequest
+	tokenReactor(aliceClient, m.Now, &aliceMints, nil)
+	tokenReactor(bobClient, m.Now, &bobMints, nil)
+	entered, release := make(chan struct{}), make(chan struct{})
+	defer close(release)
+	bobClient.PrependReactor("create", "serviceaccounts", func(ktesting.Action) (bool, runtime.Object, error) {
+		close(entered)
+		<-release
+		return false, nil, nil
+	})
+
+	alice := WithCaller(t.Context(), Caller{Identity: "alice", Client: aliceClient})
+	bob := WithCaller(t.Context(), Caller{Identity: "bob", Client: bobClient})
+	if _, _, tier, _, _ := m.settings(alice); tier.State == TierFailed {
+		t.Fatalf("warm proof = %+v", tier)
+	}
+	go m.settings(bob)
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("cold caller did not start minting")
+	}
+	warm := make(chan *APITier, 1)
+	go func() {
+		_, _, tier, _, _ := m.settings(alice)
+		warm <- tier
+	}()
+	select {
+	case tier := <-warm:
+		if tier.State == TierFailed || len(aliceMints) != 1 {
+			t.Errorf("warm caller = %+v after %d mints", tier, len(aliceMints))
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("warm caller waited for the cold mint")
+	}
+}
+
+func TestCallerTokenLateRejectionKeepsReplacement(t *testing.T) {
+	m := NewManager(nil, fixedKube)
+	clock := time.Now()
+	m.Now = func() time.Time { return clock }
+	k, _ := fixedKube()
+	client := fake.NewClientset()
+	var requests []*authv1.TokenRequest
+	tokenReactor(client, m.Now, &requests, nil)
+	alice := Caller{Identity: "alice", Client: client}
+	bob := Caller{Identity: "bob", Client: client}
+	if err := m.ensureCallerToken(t.Context(), k, alice); err != nil {
+		t.Fatal(err)
+	}
+
+	source := callerSource{m: m, key: callerTokenKey(k)}
+	_ = source.invalidateOnRejection(t.Context(), "", nil, nil, nil, func(ctx context.Context, _ string, _, _ any, _ *grpc.ClientConn, _ ...grpc.CallOption) error {
+		if token, err := source.token(ctx); err != nil || token != "token-1" {
+			t.Fatalf("token sent = %q, %v", token, err)
+		}
+		clock = clock.Add(time.Second)
+		if err := m.ensureCallerToken(t.Context(), k, bob); err != nil {
+			t.Fatal(err)
+		}
+		return status.Error(codes.Unauthenticated, "token-1 was rejected")
+	})
+
+	if token, err := source.token(t.Context()); err != nil || token != "token-2" {
+		t.Errorf("token after rejection of its predecessor = %q, %v", token, err)
 	}
 }

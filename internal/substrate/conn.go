@@ -129,14 +129,15 @@ func endpointLabel(s Settings) string {
 }
 
 // dial connects with s. caller is the token source of IdentitySharedAsCaller,
-// nil for the other identities.
-func dial(ctx context.Context, k Kube, s Settings, caller tokenSource) (*conn, error) {
+// nil for the other identities. On error the caller releases the partial conn
+// because only the manager knows whether its port-forward is shared.
+func dial(ctx context.Context, k Kube, s Settings, caller *callerSource) (*conn, error) {
 	c := &conn{key: connKey(k, s), endpoint: endpointLabel(s)}
 	target := s.Endpoint
 	if target == "" {
 		port, err := startForward(ctx, k)
 		if err != nil {
-			return nil, err
+			return c, err
 		}
 		c.forwardPort = port
 		target = net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
@@ -150,18 +151,16 @@ func dial(ctx context.Context, k Kube, s Settings, caller tokenSource) (*conn, e
 	if s.CAFile != "" {
 		pool, err := caFilePool(s.CAFile)
 		if err != nil {
-			c.close()
 			if s.Identity == IdentitySharedAsCaller {
-				return nil, &TierError{Code: CodeTLS, Message: "Cannot read a PEM CA certificate from RADAR_SUBSTRATE_CA_FILE; check the installation's mounted CA."}
+				return c, &TierError{Code: CodeTLS, Message: "Cannot read a PEM CA certificate from RADAR_SUBSTRATE_CA_FILE; check the installation's mounted CA."}
 			}
-			return nil, err
+			return c, err
 		}
 		tlsCfg.RootCAs = pool
 	} else {
 		pool, err := clusterTrustPool(ctx, k.Client)
 		if err != nil {
-			c.close()
-			return nil, err
+			return c, err
 		}
 		tlsCfg.RootCAs = pool
 	}
@@ -170,8 +169,7 @@ func dial(ctx context.Context, k Kube, s Settings, caller tokenSource) (*conn, e
 	switch s.Identity {
 	case IdentitySharedAsCaller:
 		if caller == nil {
-			c.close()
-			return nil, &TierError{Code: CodeUnauthenticated, Message: "no token was minted for this request"}
+			return c, &TierError{Code: CodeUnauthenticated, Message: "no token was minted for this request"}
 		}
 		source = caller
 	case IdentityShared:
@@ -179,19 +177,21 @@ func dial(ctx context.Context, k Kube, s Settings, caller tokenSource) (*conn, e
 	case IdentityTokenFile:
 		source = &fileToken{path: s.TokenFile}
 	default:
-		c.close()
-		return nil, &TierError{Code: CodeNotConfigured, Message: "choose who Radar reads Substrate as"}
+		return c, &TierError{Code: CodeNotConfigured, Message: "choose who Radar reads Substrate as"}
 	}
 	c.creds = &bearerCreds{source: source}
 
-	cc, err := grpc.NewClient("passthrough:///"+target,
+	opts := []grpc.DialOption{
 		grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
 		grpc.WithPerRPCCredentials(c.creds),
 		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(maxRecvMessage)),
-	)
+	}
+	if caller != nil {
+		opts = append(opts, grpc.WithUnaryInterceptor(caller.invalidateOnRejection))
+	}
+	cc, err := grpc.NewClient("passthrough:///"+target, opts...)
 	if err != nil {
-		c.close()
-		return nil, &TierError{Code: CodeUnreachable, Message: "cannot set up the connection to Substrate's API: " + err.Error()}
+		return c, &TierError{Code: CodeUnreachable, Message: "cannot set up the connection to Substrate's API: " + err.Error()}
 	}
 	c.cc = cc
 	c.client = ateapi.NewControlClient(cc)

@@ -2,7 +2,6 @@ package substrate
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log"
 	"strconv"
@@ -110,7 +109,7 @@ type Manager struct {
 	// and server name. Zero dials the API's Service in the cluster.
 	CallerDial  Settings
 	selectionMu sync.Mutex
-	selection   string
+	selection   localSelection
 	callerTok   callerToken
 
 	// dialMu serializes dials: every conn shares Radar's one Substrate
@@ -197,8 +196,8 @@ func (m *Manager) stillCaptured(k Kube) bool {
 // settings returns the settings to read with, or a tier state that says why
 // there are none: for a request served as IdentitySharedAsCaller (WithCaller)
 // the implicit ones, with the token minted for it; otherwise the current
-// context's saved settings.
-func (m *Manager) settings(ctx context.Context) (Kube, *Settings, *APITier) {
+// context's saved settings and the generation selected with them.
+func (m *Manager) settings(ctx context.Context) (Kube, *Settings, *APITier, uint64, context.Context) {
 	c, isCaller := callerFrom(ctx)
 	// A caller's tier names its identity in every state, failures included,
 	// so the UI can tell it has no settings to change.
@@ -211,38 +210,39 @@ func (m *Manager) settings(ctx context.Context) (Kube, *Settings, *APITier) {
 	if errors.Is(err, ErrClusterChanging) {
 		tier := callerTier
 		tier.State, tier.Code, tier.Reason = TierFailed, CodeContextChanged, err.Error()
-		return k, nil, &tier
+		return k, nil, &tier, 0, nil
 	}
 	if err != nil {
 		m.Reset()
 		tier := callerTier
 		tier.State, tier.Code, tier.Reason = TierFailed, CodeUnreachable, "Not connected to Kubernetes: "+err.Error()
-		return k, nil, &tier
+		return k, nil, &tier, 0, nil
 	}
 	if isCaller {
 		s := m.callerSettings()
 		tier := &callerTier
+		gen, genCtx := m.generation()
 		if tierErr := m.ensureCallerToken(ctx, k, c); tierErr != nil {
 			tier.State, tier.Code, tier.Reason = TierFailed, tierErr.Code, tierErr.Message
-			return k, nil, tier
+			return k, nil, tier, 0, nil
 		}
-		return k, &s, tier
+		return k, &s, tier, gen, genCtx
 	}
-	saved, ok, settingsErr := m.selectLocal(k)
+	saved, ok, settingsErr, gen, genCtx := m.selectLocal(k)
 	if settingsErr != nil {
-		return k, nil, &APITier{State: TierFailed, Code: CodeSettingsFile, Reason: settingsErr.Error()}
+		return k, nil, &APITier{State: TierFailed, Code: CodeSettingsFile, Reason: settingsErr.Error()}, 0, nil
 	}
 	if !ok {
-		return k, nil, &APITier{State: TierNotConfigured, Code: CodeNotConfigured, Reason: "Choose who Radar reads Substrate's API as."}
+		return k, nil, &APITier{State: TierNotConfigured, Code: CodeNotConfigured, Reason: "Choose who Radar reads Substrate's API as."}, 0, nil
 	}
 	tier := &APITier{Identity: identityOf(saved.Settings), Endpoint: endpointLabel(saved.Settings)}
 	if saved.Target != k.Fingerprint {
 		tier.State, tier.Code = TierFailed, CodeTargetChanged
 		tier.Reason = "This context now points at a different cluster than the one these settings were saved for. Save them again to use them here."
-		return k, nil, tier
+		return k, nil, tier, 0, nil
 	}
 	s := saved.Settings
-	return k, &s, tier
+	return k, &s, tier, gen, genCtx
 }
 
 // ErrClusterChanging is returned by a Kube capture taken while a context
@@ -272,12 +272,13 @@ func (m *Manager) client(ctx context.Context, k Kube, s Settings, gen uint64) (*
 	old.close()
 	m.mu.Unlock()
 
-	var caller tokenSource
+	var caller *callerSource
 	if s.Identity == IdentitySharedAsCaller {
-		caller = callerSource{m: m, key: callerTokenKey(k)}
+		caller = &callerSource{m: m, key: callerTokenKey(k)}
 	}
 	c, err := dial(ctx, k, s, caller)
 	if err != nil {
+		m.closeUnpublished(c)
 		if ctx.Err() != nil && !m.current(gen) {
 			return nil, errRetired
 		}
@@ -324,13 +325,16 @@ func (m *Manager) Peek(ctx context.Context) (*Snapshot, APITier) {
 }
 
 func (m *Manager) snapshot(ctx context.Context, wait bool) (*Snapshot, APITier) {
-	k, s, tier := m.settings(ctx)
+	k, s, tier, gen, genCtx := m.settings(ctx)
 	if s == nil {
 		return nil, *tier
 	}
 	key := connKey(k, *s)
 	m.mu.Lock()
-	gen, genCtx := m.gen, m.genCtx
+	if m.gen != gen {
+		m.mu.Unlock()
+		return nil, withRead(*tier, nil, errRetired)
+	}
 	now := m.Now()
 	good, failed := m.good, m.failed
 	if good != nil && (good.gen != gen || good.key != key) {
@@ -439,8 +443,9 @@ func (m *Manager) read(ctx context.Context, k Kube, s Settings, gen uint64) (*Sn
 		model.MarkKagentSessions(snap.Actors, k.KagentServed)
 	}
 	if tierErr != nil {
-		// The next read dials again: a fresh token, a new port-forward.
-		m.dropIf(c)
+		if !tierErr.keepConn {
+			m.dropIf(c)
+		}
 		log.Printf("[substrate] Read failed (%s)", tierErr.Code)
 	}
 	return snap, tierErr
@@ -452,12 +457,11 @@ const MaxScopedReads = 16
 // AtespaceActors reads one atespace's actors directly, for a query the shared
 // snapshot cannot answer in full. A read under Freshness old is reused.
 func (m *Manager) AtespaceActors(ctx context.Context, atespace string) ([]model.Actor, Coverage, *APITier) {
-	k, s, tier := m.settings(ctx)
+	k, s, tier, gen, genCtx := m.settings(ctx)
 	if s == nil {
 		return nil, Coverage{}, tier
 	}
 	key := connKey(k, *s)
-	gen, genCtx := m.generation()
 	cacheKey := strconv.FormatUint(gen, 10) + "\x00" + key + "\x00" + atespace
 	m.mu.Lock()
 	if e := m.scoped[cacheKey]; e != nil && m.Now().Sub(e.at) < Freshness {
@@ -519,11 +523,10 @@ func (m *Manager) AtespaceActors(ctx context.Context, atespace string) ([]model.
 // (an actor's detail). It returns the tier when the call could not be made,
 // and maps a failed RPC to a code and a scrubbed message. Reset cancels it.
 func (m *Manager) Call(ctx context.Context, fn func(ctx context.Context, client ateapi.ControlClient) error) (*APITier, string, string) {
-	k, s, tier := m.settings(ctx)
+	k, s, tier, gen, genCtx := m.settings(ctx)
 	if s == nil {
 		return tier, "", ""
 	}
-	gen, genCtx := m.generation()
 	ctx, cancel := context.WithTimeout(ctx, readTimeout)
 	defer cancel()
 	stop := context.AfterFunc(genCtx, cancel)
@@ -583,11 +586,11 @@ func (m *Manager) Probe(ctx context.Context, k Kube, s Settings) *TierError {
 		return &TierError{Code: CodeContextChanged, Message: ErrClusterChanging.Error()}
 	}
 	c, err := dial(ctx, k, s, nil)
+	defer m.closeUnpublished(c)
 	if err != nil {
 		code, msg := classify(err, nil)
 		return &TierError{Code: code, Message: msg}
 	}
-	defer m.closeProbe(c)
 	_, err = c.client.ListAtespaces(ctx, &ateapi.ListAtespacesRequest{Options: &ateapi.ListOptions{PageSize: 1}})
 	if err == nil {
 		return nil
@@ -599,10 +602,9 @@ func (m *Manager) Probe(ctx context.Context, k Kube, s Settings) *TierError {
 	return &TierError{Code: code, Message: msg}
 }
 
-// closeProbe closes a probe's client. Its port-forward is Radar's one
-// Substrate forward, which the published client may share, so it is stopped
+// closeUnpublished closes a probe or failed dial. Its port-forward is stopped
 // only when no published client uses it.
-func (m *Manager) closeProbe(c *conn) {
+func (m *Manager) closeUnpublished(c *conn) {
 	if c.cc != nil {
 		c.cc.Close()
 	}
@@ -639,10 +641,16 @@ func (m *Manager) SaveRevision(ctx context.Context, target Target, revision stri
 		}
 		saved = &Saved{Context: target.Context, Target: target.Fingerprint, Identity: target.Identity, Settings: *s}
 	}
-	if _, err := m.Store.Update(ctx, revision, target.Binding, saved); err != nil {
+	m.selectionMu.Lock()
+	defer m.selectionMu.Unlock()
+	nextRevision, err := m.Store.Update(ctx, revision, target.Binding, saved)
+	if err != nil {
 		return err
 	}
 	m.Reset()
+	if m.selection.binding == target.Binding && m.selection.fingerprint == target.Fingerprint {
+		m.selection.revision, m.selection.errorText = nextRevision, ""
+	}
 	return nil
 }
 
@@ -664,7 +672,11 @@ func (m *Manager) SavedSettings() (*Saved, bool, error) {
 // It never calls the runtime refresh hook: activation may hold its lock.
 func (m *Manager) Select(k Kube) { m.selectLocal(k) }
 
-func (m *Manager) selectLocal(k Kube) (Saved, bool, error) {
+type localSelection struct {
+	binding, fingerprint, generation, revision, errorText string
+}
+
+func (m *Manager) selectLocal(k Kube) (Saved, bool, error, uint64, context.Context) {
 	m.selectionMu.Lock()
 	defer m.selectionMu.Unlock()
 	saved, exists, revision, err := m.Store.GetRevision(k.Binding)
@@ -672,11 +684,14 @@ func (m *Manager) selectLocal(k Kube) (Saved, bool, error) {
 	if err != nil {
 		errorText = err.Error()
 	}
-	data, _ := json.Marshal([]string{k.Binding, k.Fingerprint, k.Generation, revision, errorText})
-	selection := string(data)
+	selection := localSelection{
+		binding: k.Binding, fingerprint: k.Fingerprint, generation: k.Generation,
+		revision: revision, errorText: errorText,
+	}
 	if m.selection != selection {
 		m.Reset()
 		m.selection = selection
 	}
-	return saved, exists, err
+	gen, genCtx := m.generation()
+	return saved, exists, err, gen, genCtx
 }
