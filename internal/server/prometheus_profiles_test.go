@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/skyhook-io/radar/internal/connectionruntime"
 	"github.com/skyhook-io/radar/internal/connections"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/opencost"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/pkg/prom"
 	"k8s.io/client-go/rest"
@@ -230,6 +232,38 @@ func TestLocalProfileEnvironmentOriginGuidance(t *testing.T) {
 	res := updateProfile(t, s, s.localPrometheusView(), "save", "https://different.example", nil)
 	if res.Code != 400 || !strings.Contains(res.Body.String(), "environment references in clusters.json") || strings.Contains(res.Body.String(), "synthetic-secret") {
 		t.Fatalf("guidance: %d %s", res.Code, res.Body.String())
+	}
+}
+
+func TestOfflineKubecostSaveWithoutClusterIDDefersProbe(t *testing.T) {
+	s := setupLocalProfileTest(t)
+	k8s.RetireServingConnection()
+	view := getLocalConnections(t, s).Profiles[config.IntegrationCost]
+	url := "https://kubecost.example.com"
+	body, err := json.Marshal(connections.Update{
+		Target: view.Target, Revision: view.Revision, Kind: config.IntegrationCost,
+		Action: "save", URL: &url,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	s.handleUpdateLocalConnection(response, httptest.NewRequest(http.MethodPut, "/api/integrations/connections", strings.NewReader(string(body))))
+	var saved localConnectionResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &saved); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != http.StatusOK || saved.Connected || saved.Checked || !strings.Contains(saved.Error, "could not verify Kubecost without this cluster's ID") {
+		t.Fatalf("offline cost save returned %d %s", response.Code, response.Body.String())
+	}
+	if got := saved.Profiles[config.IntegrationCost]; got.URL != url || got.State != "saved" {
+		t.Fatalf("saved cost settings = %+v", got)
+	}
+	previous := opencost.ConfigSnapshot()
+	t.Cleanup(func() { _ = opencost.Configure(previous) })
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	if _, err := opencost.Selected(t.Context()); !errors.Is(err, opencost.ErrKubecostClusterID) {
+		t.Fatalf("first cost operation returned %v, want missing cluster ID", err)
 	}
 }
 

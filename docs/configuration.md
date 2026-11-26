@@ -635,7 +635,7 @@ choose **Save changes**. **Discard** resets the form without changing saved sett
 Switching A → B → A restores A's settings. A context with no saved settings uses
 discovery. Local CLI and Desktop share `~/.radar/clusters.json`.
 
-Saving asks active views to refetch their integration data. Metrics saves also
+Saving cancels affected fetches and asks active views to refetch their integration data. Metrics saves also
 invalidate cost, traffic and charts that depend on the metrics backend,
 including when Settings reports that the saved backend is unreachable.
 
@@ -780,6 +780,10 @@ tab identifies its kubeconfig entry. In-cluster installations show operator
 configuration guidance instead of local-file information. Discovery-only credentials may require
 reentry. An unavailable kubeconfig is distinguished from a context confirmed
 removed from a readable file.
+
+If you save a Kubecost URL while disconnected and Radar cannot resolve the
+cluster ID, Settings reports that it saved the URL without checking it. Cost
+checks the saved connection once Kubernetes is available.
 
 CAPI profiles use management-source/namespace/name identity, not temporary
 kubeconfig paths. Changes to the Kubernetes server, CA trust, TLS settings, proxy

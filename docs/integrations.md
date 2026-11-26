@@ -1818,6 +1818,8 @@ installations use operator configuration.
 
 Local Settings tests Kubecost mode, and Automatic with any Kubecost override
 (URL, API key or cluster ID), before saving; a failed test blocks the save.
+While disconnected, Radar saves an explicit URL without verification if the
+cluster ID is unavailable and reports that the check was deferred.
 Automatic without Kubecost overrides, or Prometheus mode, saves a preference
 without asserting that the backend is reachable.
 

@@ -124,6 +124,10 @@ func (s *Server) handleUpdateLocalConnection(w http.ResponseWriter, r *http.Requ
 					build = nil
 				}
 				probe, err = opencost.PrepareCandidateFor(build, false, candidate)
+				if offline && errors.Is(err, opencost.ErrKubecostClusterID) {
+					response.Error = "Saved, but Radar could not verify Kubecost without this cluster's ID. Connect to Kubernetes to check the cost source."
+					err = nil
+				}
 			}
 		}
 		return err
