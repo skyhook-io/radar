@@ -146,7 +146,7 @@ type CacheConfig struct {
 
 	// OnReceived is called for every non-Event resource change before any
 	// filtering (noisy checks, suppress-initial-adds). Used for metrics
-	// tracking (e.g., timeline.IncrementReceived). May be nil.
+	// tracking. May be nil.
 	OnReceived func(kind string)
 
 	// OnTransform is called immediately before DropManagedFields strips an
@@ -257,6 +257,10 @@ type CacheConfig struct {
 	// exercising the progressive-readiness window on fast clusters. Never
 	// set in production paths.
 	DebugSyncDelays map[string]time.Duration
+
+	// Clock dates each informer's InformerWatchedSince boundary. time.Now
+	// when nil.
+	Clock func() time.Time
 
 	// ListPageSize, when > 0, makes high-cardinality informers fetch their
 	// initial LIST in pages of this size via a consistent (resourceVersion="")

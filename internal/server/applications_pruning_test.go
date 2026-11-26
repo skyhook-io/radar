@@ -169,6 +169,8 @@ func appPruningFixture() (typed []runtime.Object, dynamic []*unstructured.Unstru
 		object("source.toolkit.fluxcd.io/v1", "HelmChart", "prod-chart", map[string]any{"sourceRef": map[string]any{"kind": "HelmRepository", "name": "charts"}}),
 		object("source.toolkit.fluxcd.io/v1", "GitRepository", "repo", map[string]any{}),
 		object("source.toolkit.fluxcd.io/v1", "HelmRepository", "charts", map[string]any{}),
+		object("source.extensions.fluxcd.io/v1beta1", "ArtifactGenerator", "bundle", map[string]any{"sources": []any{map[string]any{"alias": "repo", "kind": "GitRepository", "name": "repo"}}}),
+		object("source.toolkit.fluxcd.io/v1", "ExternalArtifact", "bundle-app", map[string]any{"sourceRef": map[string]any{"apiVersion": "source.extensions.fluxcd.io/v1beta1", "kind": "ArtifactGenerator", "name": "bundle"}}),
 		cluster("karpenter.sh/v1", "NodePool", "general", map[string]any{"template": map[string]any{"spec": map[string]any{"nodeClassRef": map[string]any{"group": "karpenter.k8s.aws", "kind": "EC2NodeClass", "name": "default"}}}}),
 		cluster("karpenter.k8s.aws/v1", "EC2NodeClass", "default", map[string]any{}),
 		object("cluster.x-k8s.io/v1beta2", "Cluster", "fleet", map[string]any{"topology": map[string]any{"classRef": map[string]any{"name": "quick-start"}}}),

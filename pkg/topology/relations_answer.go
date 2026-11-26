@@ -294,22 +294,14 @@ func (n *neighborhood) answer(session relations.Session, v *relations.View, fami
 	}
 }
 
-// RelationsAnswer projects caller-readable family and ownership answers onto
-// Related Resources. Traverse is used only for intermediate networking hops;
-// all emitted references, including ownership, use access. Coverage is keyed
-// by family and includes only incomplete answers. Istio's service domain is
-// read from provider's istiod Deployments, as the graph builder reads it. A
-// subject access refuses is answered by RefusedRelationships.
-func RelationsAnswer(session relations.Session, access, traverse ownership.Access, ov *ownership.View, subject resourceid.Ref, obj runtime.Object, provider ResourceProvider, dp DynamicProvider) (*Relationships, map[string]relations.Coverage) {
-	rel, extras := RelationsAnswerWithExtras(session, access, traverse, ov, subject, obj, provider, dp)
-	if extras == nil {
-		return rel, nil
-	}
-	return rel, extras.Coverage
-}
-
-// RelationsAnswerWithExtras also preserves declaration provenance and coverage
-// for in-process consumers. Extras must not be serialized as resource data.
+// RelationsAnswerWithExtras projects caller-readable family and ownership
+// answers onto Related Resources. Traverse is used only for intermediate
+// networking hops; all emitted references, including ownership, use access.
+// Extras keep declaration provenance and coverage (keyed by family, incomplete
+// answers only) for in-process consumers; they must not be serialized as
+// resource data. Istio's service domain is read from provider's istiod
+// Deployments, as the graph builder reads it. A subject access refuses is
+// answered by RefusedRelationships.
 func RelationsAnswerWithExtras(session relations.Session, access, traverse ownership.Access, ov *ownership.View, subject resourceid.Ref, obj runtime.Object, provider ResourceProvider, dp DynamicProvider) (*Relationships, *RelationshipExtras) {
 	return relationsAnswer(session, access, traverse, ov, subject, obj, provider, dp, false)
 }
@@ -478,24 +470,11 @@ func (n *neighborhood) above(session relations.Session, ov *ownership.View, r re
 	return n.nodePool(session, r)
 }
 
-// OwnerAboveToManager is OwnerAbove, except that the controller chain ends at
-// the first GitOps manager on it (ControllerChain.ToManager).
+// OwnerAboveToManager returns the highest readable controller ancestor of r,
+// stopping at the first GitOps manager. Without a controller reference,
+// it returns a sole owner reference if that owner resolves.
 func OwnerAboveToManager(ov *ownership.View, r resourceid.Ref) (resourceid.Ref, bool) {
-	return ownerAbove(ov, r, ChainOf(ov.ControllerChain(r)).ToManager())
-}
-
-// OwnerAbove returns the highest readable controller ancestor; an object with
-// no controller reference climbs only to a sole owner reference that
-// resolves. Display and application climbs share this choice so
-// non-controller ownership follows the same rule.
-func OwnerAbove(ov *ownership.View, r resourceid.Ref) (resourceid.Ref, bool) {
-	return ownerAbove(ov, r, ChainOf(ov.ControllerChain(r)))
-}
-
-// ownerAbove answers from chain, r's controller chain as the caller cut it,
-// and falls back to r's own owner references only when the chain doesn't
-// climb past r.
-func ownerAbove(ov *ownership.View, r resourceid.Ref, chain *ControllerChain) (resourceid.Ref, bool) {
+	chain := ChainOf(ov.ControllerChain(r)).ToManager()
 	if top := chain.Top(); top != nil {
 		if id := refIdentity(*top); id != r {
 			return id, true

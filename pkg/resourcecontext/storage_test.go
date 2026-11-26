@@ -92,7 +92,7 @@ func TestBuild_StorageClassAuthorizationBudgetKeepsReadableVolume(t *testing.T) 
 	refs = append(refs, topology.ResourceRef{Kind: "PersistentVolume", Name: "disk"})
 	checker := &countingRefChecker{deniedKind: "PersistentVolumeClaim"}
 	rc := Build(context.Background(), &storagev1.StorageClass{}, Options{Relationships: &topology.Relationships{Consumers: refs}, AccessChecker: checker})
-	if checker.calls != maxReferenceAccessChecks || len(rc.Dependents) != 1 || rc.Dependents[0].Name != "disk" {
+	if checker.calls != accessChecksPerPreviewItem*maxReferencedByItems || len(rc.Dependents) != 1 || rc.Dependents[0].Name != "disk" {
 		t.Fatalf("denied namespaces exhausted readable evidence: checks=%d refs=%+v", checker.calls, rc.Dependents)
 	}
 	for _, reason := range []OmittedReason{OmittedBudgetExceeded, OmittedRBACDenied} {

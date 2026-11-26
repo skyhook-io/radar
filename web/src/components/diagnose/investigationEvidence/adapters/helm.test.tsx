@@ -304,6 +304,36 @@ describe("helm release card detail", () => {
     expect(html).toContain("[2 items]");
   });
 
+  it("carries a k3s owner and names it on the card", () => {
+    const projection = project([
+      tool("helm-k3s", "get_helm_release", { ...helmRelease, controller: { tool: "k3s", kind: "HelmChart", group: "helm.cattle.io", namespace: "kube-system", name: "shop", valuesRef: { kind: "HelmChartConfig", group: "helm.cattle.io", namespace: "kube-system", name: "shop", exists: true } } }, { summary: JSON.stringify({ namespace: "shop", name: "shop" }) }),
+    ]);
+    const [group] = groupsOf(projection.groups, "helm");
+    const data = group.latest.data;
+    if (data.type !== "helm") throw new Error("expected a helm card");
+    expect(data.release.controller).toEqual({ tool: "k3s", kind: "HelmChart", namespace: "kube-system", name: "shop", values: "HelmChartConfig kube-system/shop" });
+    expect(renderToStaticMarkup(<HelmBody data={data} />)).toContain("Managed by k3s HelmChart kube-system/shop · values in HelmChartConfig kube-system/shop");
+  });
+
+  it("shows k3s ownership without naming a hidden HelmChart", () => {
+    const projection = project([tool("helm", "get_helm_release", { ...helmRelease, managedByK3s: true })]);
+    const [group] = groupsOf(projection.groups, "helm");
+    const data = group.latest.data;
+    if (data.type !== "helm") throw new Error("expected a helm card");
+    expect(data.release.managedByK3s).toBe(true);
+    expect(data.release.controller).toBeUndefined();
+    const html = renderToStaticMarkup(<HelmBody data={data} />);
+    expect(html).toContain("Managed by the k3s/RKE2 helm-controller");
+    expect(html).not.toContain("undefined");
+  });
+
+  it("drops a malformed controller instead of showing it", () => {
+    const projection = project([
+      tool("helm-k3s-bad", "get_helm_release", { ...helmRelease, controller: { tool: 7, kind: "HelmChart", name: "shop" } }, { summary: JSON.stringify({ namespace: "shop", name: "shop" }) }),
+    ]);
+    expect(groupsOf(projection.groups, "helm").every((g) => g.latest.data.type !== "helm" || g.latest.data.release.controller === undefined)).toBe(true);
+  });
+
   it("says how many objects were not checked and does not link them", () => {
     const projection = project([
       tool(

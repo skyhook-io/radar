@@ -114,16 +114,19 @@ func (r *PermissionCheckResult) CredentialRejectedNamespaces(resource string, na
 // Capabilities represents the features available based on RBAC permissions
 type Capabilities struct {
 	ConfigManagement       string                   `json:"configManagement"`
-	Exec                   bool                     `json:"exec"`           // Can create pods/exec (terminal feature)
-	LocalTerminal          bool                     `json:"localTerminal"`  // Local terminal available (not in-cluster, not disabled)
-	LocalShell             string                   `json:"localShell"`     // Shell family where a hand-off command runs: "powershell" on Windows, else "posix"
-	Logs                   bool                     `json:"logs"`           // Can get pods/log (log viewer)
-	PortForward            bool                     `json:"portForward"`    // Can create pods/portforward
-	Secrets                bool                     `json:"secrets"`        // Can list secrets
-	SecretsUpdate          bool                     `json:"secretsUpdate"`  // Can update secrets (inline editing)
-	HelmWrite              bool                     `json:"helmWrite"`      // Helm write ops (detected via secrets/create as sentinel RBAC check)
-	NodeWrite              bool                     `json:"nodeWrite"`      // Can patch nodes (cordon/uncordon/drain)
-	WorkloadWrites         WorkloadWritePermissions `json:"workloadWrites"` // Can patch workload kinds (restart/scale controls)
+	Exec                   bool                     `json:"exec"` // Can create pods/exec (terminal feature)
+	PodExecUID             bool                     `json:"podExecUID,omitempty"`
+	PodDebugImage          string                   `json:"podDebugImage,omitempty"`
+	PodDebug               bool                     `json:"podDebug,omitempty"` // Scoped to the requested namespace.
+	LocalTerminal          bool                     `json:"localTerminal"`      // Local terminal available (not in-cluster, not disabled)
+	LocalShell             string                   `json:"localShell"`         // Shell family where a hand-off command runs: "powershell" on Windows, else "posix"
+	Logs                   bool                     `json:"logs"`               // Can get pods/log (log viewer)
+	PortForward            bool                     `json:"portForward"`        // Can create pods/portforward
+	Secrets                bool                     `json:"secrets"`            // Can list secrets
+	SecretsUpdate          bool                     `json:"secretsUpdate"`      // Can update secrets (inline editing)
+	HelmWrite              bool                     `json:"helmWrite"`          // Helm write ops (detected via secrets/create as sentinel RBAC check)
+	NodeWrite              bool                     `json:"nodeWrite"`          // Can patch nodes (cordon/uncordon/drain)
+	WorkloadWrites         WorkloadWritePermissions `json:"workloadWrites"`     // Permissions for workload actions
 	MCPReadOnly            bool                     `json:"mcpReadOnly"`
 	MCPExecTools           bool                     `json:"mcpExecTools"`
 	MCPHelmTools           bool                     `json:"mcpHelmTools"` // Native Helm MCP tool registered; target Kubernetes permissions still required
@@ -198,9 +201,15 @@ type FeatureCapabilities struct {
 	SubstrateHealthMetrics bool `json:"substrateHealthMetrics"`
 	ResourceIssues         bool `json:"resourceIssues"`        // GET /api/issues/resource/{kind}/{namespace}/{name}
 	ResourceIssueCoverage  bool `json:"resourceIssueCoverage"` // Resource issues with ?coverage=1
-	PodEnvironment         bool `json:"podEnvironment"`        // GET /api/pods/{namespace}/{name}/environment
-	PolicyResource         bool `json:"policyResource"`        // GET /api/policy/resource/{kind}/{namespace}/{name}
-	WorkloadHistory        bool `json:"workloadHistory"`       // GET /api/workloads/{kind}/{namespace}/{name}/history
+	// Resource issues with ?correlate=<issueID>: that issue's correlated
+	// changes over a window anchored on when it was first seen; and
+	// GET /api/issues/recent-changes, the one change each listed issue row
+	// names.
+	IssueCorrelation bool `json:"issueCorrelation"`
+	PodDebugAccess   bool `json:"podDebugAccess"`
+	PodEnvironment   bool `json:"podEnvironment"`  // GET /api/pods/{namespace}/{name}/environment
+	PolicyResource   bool `json:"policyResource"`  // GET /api/policy/resource/{kind}/{namespace}/{name}
+	WorkloadHistory  bool `json:"workloadHistory"` // GET /api/workloads/{kind}/{namespace}/{name}/history
 	// The workspace and its read/action surfaces, excluding protection setup.
 	CNPGWorkspace       bool `json:"cnpgWorkspace"`
 	CNPGProtectionSetup bool `json:"cnpgProtectionSetup"`
@@ -215,10 +224,14 @@ type FeatureCapabilities struct {
 	VeleroDeleteBackup bool `json:"veleroDeleteBackup"`
 	// DELETE /api/resources/... honours ?uid=&resourceVersion= preconditions
 	ResourceDeletePreconditions bool `json:"resourceDeletePreconditions"`
-	ServiceEndpointSlices       bool `json:"serviceEndpointSlices"` // GET /api/services/{namespace}/{name}/endpointslices
-	TrafficRecords              bool `json:"trafficRecords"`        // GET /api/traffic/flows/records
-	GitOpsWriteEvidence         bool `json:"gitopsWriteEvidence"`   // POST /api/gitops/write-evidence
-	AgentSigninCheck            bool `json:"agentSigninCheck"`      // GET /api/agents/signin
+	// POST /api/workloads/{kind}/{ns}/{name}/restart accepts {uid, resourceVersion};
+	// an older Radar ignores the body and restarts unconditionally.
+	WorkloadRestartPreconditions bool `json:"workloadRestartPreconditions"`
+	ServiceEndpointSlices        bool `json:"serviceEndpointSlices"`    // GET /api/services/{namespace}/{name}/endpointslices
+	TrafficRecords               bool `json:"trafficRecords"`           // GET /api/traffic/flows/records
+	GitOpsWriteEvidence          bool `json:"gitopsWriteEvidence"`      // POST /api/gitops/write-evidence
+	GitOpsActionCapabilities     bool `json:"gitopsActionCapabilities"` // GET /api/gitops/capabilities/{kind}/{namespace}/{name}
+	AgentSigninCheck             bool `json:"agentSigninCheck"`         // GET /api/agents/signin
 	// POST /api/argo/applications/{namespace}/{name}/rollback starts a sync to
 	// the history entry (id 0 included), and .../resume also clears
 	// spec.syncPolicy.automated.enabled: false. An older Radar writes an
@@ -241,6 +254,7 @@ type FeatureCapabilities struct {
 	// GET /api/workloads/rayclusters/{namespace}/{name}/pods?ownerUID=. Radars
 	// from v1.15.0 serve the route without advertising this flag.
 	RayClusterPods bool `json:"rayClusterPods"`
+	ReplicaSetLogs bool `json:"replicaSetLogs"`
 	// Workload Pod info marks native sidecars (containerStatuses[].sidecar);
 	// without this, an absent mark doesn't mean "not a sidecar".
 	PodSidecarMarks bool `json:"podSidecarMarks"`
@@ -258,24 +272,72 @@ type FeatureCapabilities struct {
 	// POST /api/cronjobs/{namespace}/{name}/trigger accepts {"jobName": ...};
 	// an older Radar ignores the body and names the Job itself.
 	CronJobTriggerJobName bool `json:"cronJobTriggerJobName"`
+	// GET /api/sealedsecrets/cert
+	SealedSecretsCert bool `json:"sealedSecretsCert"`
+	// POST /api/workflows/{namespace}/{name}/stop
+	WorkflowStop bool `json:"workflowStop"`
+	// POST /api/workflowtemplates/{namespace}/{name}/submit
+	WorkflowTemplateSubmit bool `json:"workflowTemplateSubmit"`
+
+	// GET /api/metrics/openobserve/collector.
+	OpenObserveCollectorPresence bool `json:"openobserveCollectorPresence"`
+	// GET/DELETE /api/integrations/openobserve, POST .../setup and DELETE
+	// .../cluster: local Radar's OpenObserve setup in Settings → Metrics.
+	OpenObserveLocalSetup bool `json:"openobserveLocalSetup"`
 }
 
-// WorkloadWritePermissions indicates which workload resources the user can patch.
+// WorkloadWritePermissions records the permissions used by workload actions.
 type WorkloadWritePermissions struct {
 	Deployments  bool `json:"deployments"`
 	DaemonSets   bool `json:"daemonSets"`
 	StatefulSets bool `json:"statefulSets"`
 	Rollouts     bool `json:"rollouts"`
+	Workflows    bool `json:"workflows"` // Argo Workflows: Stop and Terminate patch spec.shutdown
+	// Argo Workflows: create, to submit a WorkflowTemplate.
+	CreateWorkflows bool `json:"createWorkflows"`
+	CronJobs        bool `json:"cronJobs"`   // Suspend and Resume patch spec.suspend
+	CreateJobs      bool `json:"createJobs"` // Trigger creates a Job from the CronJob's template
 }
 
 type WorkloadWriteCapabilityErrors struct {
-	Deployments  bool
-	DaemonSets   bool
-	StatefulSets bool
-	Rollouts     bool
+	Deployments     bool
+	DaemonSets      bool
+	StatefulSets    bool
+	Rollouts        bool
+	Workflows       bool
+	CreateWorkflows bool
+	CronJobs        bool
+	CreateJobs      bool
+}
+
+// workloadWriteChecks lists the workload write permissions in the order their
+// checks are started. Each is checked globally and per namespace, as Radar and as the
+// caller, and merged per namespace by MergeWorkloadWrites.
+var workloadWriteChecks = []struct {
+	group, resource, verb string
+	permission            func(*WorkloadWritePermissions) *bool
+	apiError              func(*WorkloadWriteCapabilityErrors) *bool
+}{
+	{"apps", "deployments", "patch", func(p *WorkloadWritePermissions) *bool { return &p.Deployments }, func(e *WorkloadWriteCapabilityErrors) *bool { return &e.Deployments }},
+	{"apps", "daemonsets", "patch", func(p *WorkloadWritePermissions) *bool { return &p.DaemonSets }, func(e *WorkloadWriteCapabilityErrors) *bool { return &e.DaemonSets }},
+	{"apps", "statefulsets", "patch", func(p *WorkloadWritePermissions) *bool { return &p.StatefulSets }, func(e *WorkloadWriteCapabilityErrors) *bool { return &e.StatefulSets }},
+	{"argoproj.io", "rollouts", "patch", func(p *WorkloadWritePermissions) *bool { return &p.Rollouts }, func(e *WorkloadWriteCapabilityErrors) *bool { return &e.Rollouts }},
+	{"argoproj.io", "workflows", "patch", func(p *WorkloadWritePermissions) *bool { return &p.Workflows }, func(e *WorkloadWriteCapabilityErrors) *bool { return &e.Workflows }},
+	{"argoproj.io", "workflows", "create", func(p *WorkloadWritePermissions) *bool { return &p.CreateWorkflows }, func(e *WorkloadWriteCapabilityErrors) *bool { return &e.CreateWorkflows }},
+	{"batch", "cronjobs", "patch", func(p *WorkloadWritePermissions) *bool { return &p.CronJobs }, func(e *WorkloadWriteCapabilityErrors) *bool { return &e.CronJobs }},
+	{"batch", "jobs", "create", func(p *WorkloadWritePermissions) *bool { return &p.CreateJobs }, func(e *WorkloadWriteCapabilityErrors) *bool { return &e.CreateJobs }},
+}
+
+// MergeWorkloadWrites folds one namespace's workload write answers into the
+// global ones, field by field, in table order.
+func MergeWorkloadWrites(global *WorkloadWritePermissions, namespaced WorkloadWritePermissions, errs WorkloadWriteCapabilityErrors, merge func(global, namespaced, errored bool) bool) {
+	for _, c := range workloadWriteChecks {
+		*c.permission(global) = merge(*c.permission(global), *c.permission(&namespaced), *c.apiError(&errs))
+	}
 }
 
 type NamespaceCapabilityErrors struct {
+	PodDebug       bool
 	Exec           bool
 	Logs           bool
 	PortForward    bool
@@ -285,6 +347,7 @@ type NamespaceCapabilityErrors struct {
 
 // NamespaceCapabilities holds the effective capabilities for a specific namespace.
 type NamespaceCapabilities struct {
+	PodDebug       bool                      `json:"podDebug"`
 	Exec           bool                      `json:"exec"`
 	Logs           bool                      `json:"logs"`
 	PortForward    bool                      `json:"portForward"`
@@ -460,10 +523,9 @@ func CheckCapabilities(ctx context.Context) (*Capabilities, error) {
 		{resource: "secrets", verb: "update", result: &caps.SecretsUpdate, namespaceFallback: true},
 		{resource: "secrets", verb: "create", result: &caps.HelmWrite, namespaceFallback: true},
 		{resource: "nodes", verb: "patch", result: &caps.NodeWrite, namespaceFallback: true},
-		{group: "apps", resource: "deployments", verb: "patch", result: &caps.WorkloadWrites.Deployments},
-		{group: "apps", resource: "daemonsets", verb: "patch", result: &caps.WorkloadWrites.DaemonSets},
-		{group: "apps", resource: "statefulsets", verb: "patch", result: &caps.WorkloadWrites.StatefulSets},
-		{group: "argoproj.io", resource: "rollouts", verb: "patch", result: &caps.WorkloadWrites.Rollouts},
+	}
+	for _, w := range workloadWriteChecks {
+		checks = append(checks, capCheck{group: w.group, resource: w.resource, verb: w.verb, result: w.permission(&caps.WorkloadWrites)})
 	}
 
 	var wg sync.WaitGroup
@@ -593,16 +655,18 @@ func CheckNamespaceCapabilities(ctx context.Context, namespace string) (*Namespa
 
 	var checks []capCheck
 	if !ForceDisableExec {
-		checks = append(checks, capCheck{resource: "pods/exec", verb: "create", result: &result.Exec, apiError: &result.Errors.Exec})
+		checks = append(checks,
+			capCheck{resource: "pods/exec", verb: "create", result: &result.Exec, apiError: &result.Errors.Exec},
+			capCheck{resource: "pods/ephemeralcontainers", verb: "update", result: &result.PodDebug, apiError: &result.Errors.PodDebug},
+		)
 	}
 	checks = append(checks,
 		capCheck{resource: "pods/log", verb: "get", result: &result.Logs, apiError: &result.Errors.Logs},
 		capCheck{resource: "pods/portforward", verb: "create", result: &result.PortForward, apiError: &result.Errors.PortForward},
-		capCheck{group: "apps", resource: "deployments", verb: "patch", result: &result.WorkloadWrites.Deployments, apiError: &result.Errors.WorkloadWrites.Deployments},
-		capCheck{group: "apps", resource: "daemonsets", verb: "patch", result: &result.WorkloadWrites.DaemonSets, apiError: &result.Errors.WorkloadWrites.DaemonSets},
-		capCheck{group: "apps", resource: "statefulsets", verb: "patch", result: &result.WorkloadWrites.StatefulSets, apiError: &result.Errors.WorkloadWrites.StatefulSets},
-		capCheck{group: "argoproj.io", resource: "rollouts", verb: "patch", result: &result.WorkloadWrites.Rollouts, apiError: &result.Errors.WorkloadWrites.Rollouts},
 	)
+	for _, w := range workloadWriteChecks {
+		checks = append(checks, capCheck{group: w.group, resource: w.resource, verb: w.verb, result: w.permission(&result.WorkloadWrites), apiError: w.apiError(&result.Errors.WorkloadWrites)})
+	}
 	if !ForceDisableHelmWrite {
 		checks = append(checks, capCheck{resource: "secrets", verb: "create", result: &result.HelmWrite, apiError: &result.Errors.HelmWrite})
 	}
@@ -738,10 +802,9 @@ func (state *permissionState) checkCapabilitiesForUser(conn *Connection, fallbac
 		{resource: "secrets", verb: "update", result: &caps.SecretsUpdate, namespaceFallback: true},
 		{resource: "secrets", verb: "create", result: &caps.HelmWrite, namespaceFallback: true},
 		{resource: "nodes", verb: "patch", result: &caps.NodeWrite, namespaceFallback: true},
-		{group: "apps", resource: "deployments", verb: "patch", result: &caps.WorkloadWrites.Deployments},
-		{group: "apps", resource: "daemonsets", verb: "patch", result: &caps.WorkloadWrites.DaemonSets},
-		{group: "apps", resource: "statefulsets", verb: "patch", result: &caps.WorkloadWrites.StatefulSets},
-		{group: "argoproj.io", resource: "rollouts", verb: "patch", result: &caps.WorkloadWrites.Rollouts},
+	}
+	for _, w := range workloadWriteChecks {
+		checks = append(checks, capCheck{group: w.group, resource: w.resource, verb: w.verb, result: w.permission(&caps.WorkloadWrites)})
 	}
 
 	var hadErrors atomic.Bool
@@ -844,16 +907,18 @@ func CheckNamespaceCapabilitiesForUser(ctx context.Context, username string, gro
 
 	var checks []capCheck
 	if !ForceDisableExec {
-		checks = append(checks, capCheck{resource: "pods/exec", verb: "create", result: &result.Exec, apiError: &result.Errors.Exec})
+		checks = append(checks,
+			capCheck{resource: "pods/exec", verb: "create", result: &result.Exec, apiError: &result.Errors.Exec},
+			capCheck{resource: "pods/ephemeralcontainers", verb: "update", result: &result.PodDebug, apiError: &result.Errors.PodDebug},
+		)
 	}
 	checks = append(checks,
 		capCheck{resource: "pods/log", verb: "get", result: &result.Logs, apiError: &result.Errors.Logs},
 		capCheck{resource: "pods/portforward", verb: "create", result: &result.PortForward, apiError: &result.Errors.PortForward},
-		capCheck{group: "apps", resource: "deployments", verb: "patch", result: &result.WorkloadWrites.Deployments, apiError: &result.Errors.WorkloadWrites.Deployments},
-		capCheck{group: "apps", resource: "daemonsets", verb: "patch", result: &result.WorkloadWrites.DaemonSets, apiError: &result.Errors.WorkloadWrites.DaemonSets},
-		capCheck{group: "apps", resource: "statefulsets", verb: "patch", result: &result.WorkloadWrites.StatefulSets, apiError: &result.Errors.WorkloadWrites.StatefulSets},
-		capCheck{group: "argoproj.io", resource: "rollouts", verb: "patch", result: &result.WorkloadWrites.Rollouts, apiError: &result.Errors.WorkloadWrites.Rollouts},
 	)
+	for _, w := range workloadWriteChecks {
+		checks = append(checks, capCheck{group: w.group, resource: w.resource, verb: w.verb, result: w.permission(&result.WorkloadWrites), apiError: w.apiError(&result.Errors.WorkloadWrites)})
+	}
 	if !ForceDisableHelmWrite {
 		checks = append(checks, capCheck{resource: "secrets", verb: "create", result: &result.HelmWrite, apiError: &result.Errors.HelmWrite})
 	}

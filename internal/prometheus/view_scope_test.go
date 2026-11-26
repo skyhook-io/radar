@@ -7,6 +7,7 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -38,7 +39,17 @@ func viewAnchorRow(metric string) prom.Series {
 	return vec(map[string]string{viewScopeAnchorLabel: metric}, 1)
 }
 
-func isReadback(query string) bool { return !strings.Contains(query, "topk(2") }
+func isReadback(query string) bool {
+	for _, part := range evaluatedPart.FindAllStringSubmatch(query, -1) {
+		grouped := strings.Split(part[2]+part[3], ",")
+		for _, m := range parseViewMatchers(part[5]) {
+			if m.op == "=" && slices.Contains(grouped, m.label) {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 func rows(series ...prom.Series) (*prom.QueryResult, error) {
 	return &prom.QueryResult{Series: series}, nil
@@ -80,7 +91,7 @@ func TestViewScopeConfiguredLabelsReadBack(t *testing.T) {
 		t.Fatalf("scope = %+v", scope)
 	}
 	for _, m := range []string{cpuMetric.Name, ownerMetric.Name} {
-		if scope.Filter(m) != `cluster="a"` {
+		if scope.Filter(m) != checkedClusterAFilter {
 			t.Errorf("filter for %s = %q", m, scope.Filter(m))
 		}
 	}
@@ -154,7 +165,7 @@ func TestViewScopeProvenLabelsUnlabeledMetric(t *testing.T) {
 			}
 			continue
 		}
-		if scope.State != ViewScopeUnlabeled || scope.Withheld || scope.Filter(cpuMetric.Name) != "" || scope.Filter(ownerMetric.Name) != `cluster="a"` {
+		if scope.State != ViewScopeUnlabeled || scope.Withheld || scope.Filter(cpuMetric.Name) != "" || scope.Filter(ownerMetric.Name) != checkedClusterAFilter {
 			t.Fatalf("anchored unlabeled metric: %+v", scope)
 		}
 		if _, ok := scope.Filters[cpuMetric.Name]; !ok {
@@ -218,7 +229,7 @@ func TestViewScopeJoinedUnfilteredIdentitiesAgree(t *testing.T) {
 				}
 				return
 			}
-			if scope.Withheld || scope.Filter(cpuMetric.Name) != "" || scope.Filter(ownerMetric.Name) != "" || scope.Filter(termMetric.Name) != `cluster="a"` {
+			if scope.Withheld || scope.Filter(cpuMetric.Name) != "" || scope.Filter(ownerMetric.Name) != "" || scope.Filter(termMetric.Name) != checkedClusterAFilter {
 				t.Errorf("scope = %+v", scope)
 			}
 		})
@@ -233,7 +244,7 @@ func TestViewScopeAbsentOptionalMetric(t *testing.T) {
 		return rows()
 	}}
 	scope := decide(t, q, viewRequest(true, cpuMetric, termMetric), clusterA, false)
-	if scope.State != ViewScopeVerified || scope.Withheld || scope.Filter(termMetric.Name) != `cluster="a"` {
+	if scope.State != ViewScopeVerified || scope.Withheld || scope.Filter(termMetric.Name) != checkedClusterAFilter {
 		t.Fatalf("absent metric withheld or unfiltered: %+v", scope)
 	}
 	if viewScopeTTL(scope) != viewScopeScopedTTL {
@@ -305,8 +316,8 @@ func TestViewScopeIncompleteAnswersAreUnknown(t *testing.T) {
 func TestViewScopeQueryShape(t *testing.T) {
 	req := viewRequest(true, cpuMetric, ViewMetric{Name: "kube_pod_info"})
 	got := viewReadbackQuery(req.Metrics, []string{"cluster", "region"}, `cluster="a",region="eu"`, req.Span)
-	want := `label_replace(count by (cluster,region) (count_over_time(container_cpu_usage_seconds_total{namespace="shop",pod=~"api-.*",cluster="a",region="eu"}[3600s])), "radar_metric", "container_cpu_usage_seconds_total", "", "")` +
-		` or label_replace(count by (cluster,region) (count_over_time(kube_pod_info{cluster="a",region="eu"}[3600s])), "radar_metric", "kube_pod_info", "", "")`
+	want := `label_replace(topk(2, count by (cluster,region) (count_over_time(container_cpu_usage_seconds_total{namespace="shop",pod=~"api-.*",cluster="a",region="eu"}[3600s]))), "radar_metric", "container_cpu_usage_seconds_total", "", "")` +
+		` or label_replace(topk(2, count by (cluster,region) (count_over_time(kube_pod_info{cluster="a",region="eu"}[3600s]))), "radar_metric", "kube_pod_info", "", "")`
 	if got != want {
 		t.Fatalf("readback query\n got: %s\nwant: %s", got, want)
 	}
@@ -490,7 +501,7 @@ func TestResolveViewScopeCache(t *testing.T) {
 		t.Fatalf("first check sent %d queries", store.count())
 	}
 	first.Filters[cpuMetric.Name] = "mutated"
-	if got := resolve(); got.Filter(cpuMetric.Name) != `cluster="a"` || store.count() != 1 {
+	if got := resolve(); got.Filter(cpuMetric.Name) != checkedClusterAFilter || store.count() != 1 {
 		t.Fatalf("cache miss or shared map: filter=%q queries=%d", got.Filter(cpuMetric.Name), store.count())
 	}
 	for key, entry := range c.viewScopes {

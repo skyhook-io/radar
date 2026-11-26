@@ -33,7 +33,7 @@ func longhornAnswer(t *testing.T, s *projectionSession, obj runtime.Object, acce
 	if !ok {
 		t.Fatal("capture failed")
 	}
-	return RelationsAnswer(captured, access, ownership.Unrestricted(), ownership.NewView(captured, access), projectionRef(obj), obj, nil, nil)
+	return answerWithCoverage(captured, access, ownership.Unrestricted(), ownership.NewView(captured, access), projectionRef(obj), obj, nil, nil)
 }
 
 var (

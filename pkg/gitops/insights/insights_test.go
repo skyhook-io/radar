@@ -3046,3 +3046,116 @@ func TestArgoApplicationConditionsCreateNamespaceAlreadySet(t *testing.T) {
 		}
 	})
 }
+
+func fluxKustomization(status map[string]any) *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "kustomize.toolkit.fluxcd.io/v1",
+		"kind":       "Kustomization",
+		"metadata":   map[string]any{"namespace": "team", "name": "app"},
+		"status":     status,
+	}}
+}
+
+// Ready moves on every reconcile, so a healthy Kustomization that deployed weeks
+// ago must not read as deployed just now.
+func TestKustomizationHistoryDatesARevisionByItsFirstReconcile(t *testing.T) {
+	root := fluxKustomization(map[string]any{
+		"lastAppliedRevision": "main@sha1:bbb",
+		"conditions": []any{map[string]any{
+			"type": "Ready", "status": "True", "reason": "ReconciliationSucceeded",
+			"message": "Applied revision: main@sha1:bbb", "lastTransitionTime": "2026-11-07T00:52:54Z",
+		}},
+		"history": []any{
+			map[string]any{"digest": "sha256:b", "firstReconciled": "2026-11-07T00:32:53Z", "lastReconciled": "2026-11-07T00:52:54Z", "lastReconciledStatus": "ReconciliationSucceeded", "metadata": map[string]any{"revision": "main@sha1:bbb"}},
+			map[string]any{"digest": "sha256:a", "firstReconciled": "2026-11-01T10:00:00Z", "lastReconciled": "2026-11-07T00:30:00Z", "lastReconciledStatus": "ReconciliationSucceeded", "metadata": map[string]any{"revision": "main@sha1:aaa"}},
+		},
+	})
+
+	got := BuildHistory(root)
+	if len(got) != 2 {
+		t.Fatalf("history = %+v, want one item per revision", got)
+	}
+	if got[0].Revision != "main@sha1:bbb" || got[0].DeployedAt != "2026-11-07T00:32:53Z" || got[0].Phase != "Succeeded" {
+		t.Fatalf("newest item = %+v", got[0])
+	}
+	if got[1].Revision != "main@sha1:aaa" || got[1].DeployedAt != "2026-11-01T10:00:00Z" {
+		t.Fatalf("older item = %+v", got[1])
+	}
+}
+
+func TestKustomizationHistoryKeepsAFailedReconcile(t *testing.T) {
+	root := fluxKustomization(map[string]any{
+		"lastAppliedRevision": "main@sha1:aaa",
+		"conditions": []any{map[string]any{
+			"type": "Ready", "status": "False", "reason": "BuildFailed",
+			"message": "kustomization path not found", "lastTransitionTime": "2026-11-07T01:00:00Z",
+		}},
+		"history": []any{
+			map[string]any{"digest": "sha256:a", "firstReconciled": "2026-11-01T10:00:00Z", "lastReconciledStatus": "ReconciliationSucceeded", "metadata": map[string]any{"revision": "main@sha1:aaa"}},
+		},
+	})
+
+	got := BuildHistory(root)
+	if len(got) != 2 || got[0].Phase != "Failed" || got[0].DeployedAt != "2026-11-07T01:00:00Z" {
+		t.Fatalf("history = %+v, want the failure first", got)
+	}
+}
+
+func TestKustomizationWithoutHistoryFallsBackToConditions(t *testing.T) {
+	root := fluxKustomization(map[string]any{
+		"lastAppliedRevision": "main@sha1:aaa",
+		"conditions": []any{map[string]any{
+			"type": "Ready", "status": "True", "reason": "ReconciliationSucceeded",
+			"message": "Applied revision: main@sha1:aaa", "lastTransitionTime": "2026-11-07T00:52:54Z",
+		}},
+	})
+
+	got := BuildHistory(root)
+	if len(got) != 1 || got[0].DeployedAt != "2026-11-07T00:52:54Z" {
+		t.Fatalf("history = %+v", got)
+	}
+}
+
+func TestFluxHelmReleaseHistoryDistinguishesSnapshotsFromConditions(t *testing.T) {
+	root := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "helm.toolkit.fluxcd.io/v2", "kind": "HelmRelease",
+		"status": map[string]any{
+			"lastAttemptedRevision": "2.1",
+			"history":               []any{map[string]any{"version": int64(14), "chartVersion": "2.1", "status": "failed", "lastDeployed": "2026-11-22T12:00:00Z"}},
+			"conditions":            []any{map[string]any{"type": "Stalled", "status": "True", "reason": "UpgradeFailed", "lastTransitionTime": "2026-11-22T12:01:00Z"}},
+		},
+	}}
+	got := BuildHistory(root)
+	if len(got) != 2 || !got[0].Condition || got[1].Condition || got[1].Revision != "14" || got[1].Phase != "failed" || got[1].Source != "2.1" {
+		t.Fatalf("unexpected records: %+v", got)
+	}
+}
+
+func TestBuildHistoryArgoCompareOnlyAdjacentSyncsFromSameSource(t *testing.T) {
+	entry := func(id int64, repo, path string) map[string]any {
+		return map[string]any{"id": id, "revision": fmt.Sprintf("%040x", id), "source": map[string]any{"repoURL": repo, "path": path}}
+	}
+	multi := entry(6, "repo", "prod")
+	multi["sources"] = []any{map[string]any{"repoURL": "other"}}
+	root := argoApp(map[string]any{"history": []any{
+		entry(2, "repo", "prod"), entry(1, "repo", "prod"), entry(4, "repo", "prod"),
+		entry(5, "other", "prod"), multi, entry(7, "repo", "prod"), entry(8, "repo", "stage"),
+	}})
+	root.Object["spec"].(map[string]any)["source"] = map[string]any{"repoURL": "repo", "path": "prod"}
+	items := BuildHistory(root)
+	for _, item := range items {
+		if item.ID == "6" {
+			if item.Git != nil {
+				t.Fatal("unexpected single-source comparison for multi-source sync")
+			}
+			continue
+		}
+		want, wantID := "", ""
+		if item.ID == "2" {
+			want, wantID = fmt.Sprintf("%040x", 1), "2"
+		}
+		if item.Git == nil || item.Git.PreviousRevision != want || item.Git.HistoryID != wantID {
+			t.Errorf("sync %s git = %+v, want previous %q and history ID %q", item.ID, item.Git, want, wantID)
+		}
+	}
+}

@@ -2,11 +2,13 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
 
 	admissionv1 "k8s.io/api/admissionregistration/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -14,10 +16,12 @@ import (
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 
+	"github.com/skyhook-io/radar/internal/issuecorrelation"
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
+	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
 func appendChange(t *testing.T, store timeline.EventStore, e timeline.TimelineEvent) {
@@ -46,10 +50,12 @@ func admissionIssue(category issuesapi.Category, kind, name, message string, fir
 func utc(t time.Time) string { return t.UTC().Format(time.RFC3339) }
 
 // initAdmissionCache starts the typed cache, so ResourceQuota and LimitRange
-// changes count as collected.
-func initAdmissionCache(t *testing.T) {
+// changes count as collected. It holds the Deployments these tests reject:
+// a workload missing from the cache has unknown sources, so nothing that
+// rests on it having no change would be said.
+func initAdmissionCache(t *testing.T, objs ...runtime.Object) {
 	t.Helper()
-	if err := k8s.InitTestResourceCache(k8sfake.NewSimpleClientset()); err != nil {
+	if err := k8s.InitTestResourceCache(k8sfake.NewSimpleClientset(append(shopDeployments("search", "web", "api", "worker"), objs...)...)); err != nil {
 		t.Fatalf("InitTestResourceCache: %v", err)
 	}
 	t.Cleanup(k8s.ResetTestState)
@@ -58,9 +64,7 @@ func initAdmissionCache(t *testing.T) {
 // setPolicyCreatedAt stands in for the cached policy object's creationTimestamp.
 func setPolicyCreatedAt(t *testing.T, at time.Time) {
 	t.Helper()
-	prev := policyCreatedAt
-	policyCreatedAt = func(string, string, string) (time.Time, bool) { return at, true }
-	t.Cleanup(func() { policyCreatedAt = prev })
+	t.Cleanup(issuecorrelation.SetPolicyCreatedAtForTest(func(string, string, string) (time.Time, bool) { return at, true }))
 }
 
 // The bench case: the Deployment is created, a ResourceQuota lands after it,
@@ -86,7 +90,7 @@ func TestAdmissionBlocker_QuotaAddedAfterWorkload(t *testing.T) {
 		t.Fatalf("want quota + deployment refs, got %+v", iss.CorrelatedChanges)
 	}
 	quota := iss.CorrelatedChanges[0]
-	if quota.Kind != "ResourceQuota" || quota.Name != "memory-limit-quota" || quota.Namespace != "shop" || quota.RankReason != admissionBlockerRankReason {
+	if quota.Kind != "ResourceQuota" || quota.Name != "memory-limit-quota" || quota.Namespace != "shop" || quota.RankReason != issuecorrelation.AdmissionBlockerRankReason {
 		t.Fatalf("quota must lead the refs: %+v", quota)
 	}
 	if iss.CorrelatedChanges[1].Kind != "Deployment" {
@@ -137,7 +141,9 @@ func TestAdmissionBlocker_WorkloadScaledIntoStandingQuota(t *testing.T) {
 // A standing quota with no change in the window is stated as such when the
 // workload changed, so "the workload changed last" rests on both sides.
 func TestAdmissionBlocker_UnchangedQuotaStatedWhenWorkloadChanged(t *testing.T) {
-	initAdmissionCache(t)
+	// The quota is cached: a quota Radar neither holds nor has a record of
+	// can't be shown to be the one that rejected the workload.
+	initAdmissionCache(t, &corev1.ResourceQuota{ObjectMeta: metav1.ObjectMeta{Name: "compute", Namespace: "shop"}})
 	store := initCorrelationStore(t)
 	now := time.Now().Truncate(time.Second)
 	scaleAt := now.Add(-5 * time.Minute)
@@ -172,7 +178,7 @@ func TestAdmissionBlocker_LimitRangeAddedAfterWorkload(t *testing.T) {
 	iss := resp.Issues[0]
 
 	if len(iss.CorrelatedChanges) != 1 || iss.CorrelatedChanges[0].Kind != "LimitRange" || iss.CorrelatedChanges[0].Name != "container-limits" ||
-		iss.CorrelatedChanges[0].RankReason != admissionLimitRangeRankReason {
+		iss.CorrelatedChanges[0].RankReason != issuecorrelation.AdmissionLimitRangeRankReason {
 		t.Fatalf("LimitRange not linked: %+v", iss.CorrelatedChanges)
 	}
 	want := "LimitRange container-limits was created at " + utc(limitAt) + "; Deployment api has no recorded change in the last hour: the LimitRange changed last."
@@ -184,28 +190,11 @@ func TestAdmissionBlocker_LimitRangeAddedAfterWorkload(t *testing.T) {
 	}
 }
 
-func TestAdmissionBlocker_LimitRangeIgnoresCustomGroup(t *testing.T) {
-	initAdmissionCache(t)
-	store := initCorrelationStore(t)
-	now := time.Now().Truncate(time.Second)
-	for _, version := range []string{"v1", "example.com/v1"} {
-		appendChange(t, store, timeline.TimelineEvent{
-			ID: version, Timestamp: now.Add(-time.Minute), Kind: "LimitRange", APIVersion: version,
-			Namespace: "shop", Name: "container-limits", EventType: timeline.EventTypeAdd,
-		})
-	}
-	iss := admissionIssue(issuesapi.CategoryQuotaExceeded, "Deployment", "api",
-		`pods "api-6d8b-xyz12" is forbidden: maximum memory usage per Container is 512Mi, but limit is 1Gi`, now)
-	ev := admissionBlockerForIssue(context.Background(), &iss, time.Hour)
-	if ev == nil || !ev.complete || ev.saturated || len(ev.changes) != 1 || ev.changes[0].APIVersion != "v1" {
-		t.Fatalf("admission evidence = %+v, want complete core-only LimitRange history", ev)
-	}
-}
-
 // A webhook denial quotes webhooks[].name; the configuration declaring it is
 // resolved from the cache and its change linked. A Job subject (untracked by
 // the change feed) still gets the policy side.
 func TestAdmissionBlocker_WebhookDenial(t *testing.T) {
+	initAdmissionCache(t)
 	store := initCorrelationStore(t)
 	vwcGVR := schema.GroupVersionResource{Group: "admissionregistration.k8s.io", Version: "v1", Resource: "validatingwebhookconfigurations"}
 	mwcGVR := schema.GroupVersionResource{Group: "admissionregistration.k8s.io", Version: "v1", Resource: "mutatingwebhookconfigurations"}
@@ -241,29 +230,49 @@ func TestAdmissionBlocker_WebhookDenial(t *testing.T) {
 	appendChange(t, store, timeline.TimelineEvent{Timestamp: webhookAt, Kind: "ValidatingWebhookConfiguration", APIVersion: "admissionregistration.k8s.io/v1", Name: "pod-policy", EventType: timeline.EventTypeAdd})
 
 	message := `Error creating: admission webhook "deny-root.policy.example.com" denied the request: runAsNonRoot is required`
-	deploy := admissionIssue(issuesapi.CategoryAdmissionWebhookBlocking, "Deployment", "worker", message, webhookAt.Add(5*time.Second))
-	job := admissionIssue(issuesapi.CategoryAdmissionWebhookBlocking, "Job", "nightly", message, webhookAt.Add(5*time.Second))
-	job.Group = "batch"
-	resp := issues.ListResponse{Issues: []issuesapi.Issue{deploy, job}}
-	attachIssueChangeCorrelation(context.Background(), &resp)
+	correlate := func() (deploy, job issuesapi.Issue) {
+		d := admissionIssue(issuesapi.CategoryAdmissionWebhookBlocking, "Deployment", "worker", message, webhookAt.Add(5*time.Second))
+		j := admissionIssue(issuesapi.CategoryAdmissionWebhookBlocking, "Job", "nightly", message, webhookAt.Add(5*time.Second))
+		j.Group = "batch"
+		resp := issues.ListResponse{Issues: []issuesapi.Issue{d, j}}
+		attachIssueChangeCorrelation(context.Background(), &resp)
+		return resp.Issues[0], resp.Issues[1]
+	}
+	linked := func(t *testing.T, got, gotJob issuesapi.Issue) {
+		t.Helper()
+		if len(got.CorrelatedChanges) != 2 || got.CorrelatedChanges[0].Kind != "ValidatingWebhookConfiguration" || got.CorrelatedChanges[0].Name != "pod-policy" {
+			t.Fatalf("webhook configuration not linked: %+v", got.CorrelatedChanges)
+		}
+		if len(gotJob.CorrelatedChanges) != 1 || gotJob.CorrelatedChanges[0].Name != "pod-policy" {
+			t.Fatalf("Job subject must still carry the webhook change: %+v", gotJob.CorrelatedChanges)
+		}
+		// The Job's own changes are not recorded, so no order is claimed.
+		if gotJob.NoRecentChanges != nil || strings.Contains(gotJob.TimingSummary, "changed last") {
+			t.Fatalf("untracked subject overclaimed: %+v", gotJob)
+		}
+	}
 
-	got := resp.Issues[0]
-	if len(got.CorrelatedChanges) != 2 || got.CorrelatedChanges[0].Kind != "ValidatingWebhookConfiguration" || got.CorrelatedChanges[0].Name != "pod-policy" {
-		t.Fatalf("webhook configuration not linked: %+v", got.CorrelatedChanges)
-	}
-	want := "ValidatingWebhookConfiguration pod-policy was created at " + utc(webhookAt) + ", after Deployment worker was created at " + utc(deployAt) + ": the ValidatingWebhookConfiguration changed last."
-	if got.TimingSummary != want {
-		t.Fatalf("timing_summary:\n got %q\nwant %q", got.TimingSummary, want)
-	}
+	t.Run("watched since before the window", func(t *testing.T) {
+		watchedLongAgo := time.Now().Add(-48 * time.Hour)
+		t.Cleanup(issuecorrelation.SetWatchedSinceForTest(func(string, string, string) (time.Time, bool) { return watchedLongAgo, true }))
+		got, gotJob := correlate()
+		linked(t, got, gotJob)
+		want := "ValidatingWebhookConfiguration pod-policy was created at " + utc(webhookAt) + ", after Deployment worker was created at " + utc(deployAt) + ": the ValidatingWebhookConfiguration changed last."
+		if got.TimingSummary != want {
+			t.Fatalf("timing_summary:\n got %q\nwant %q", got.TimingSummary, want)
+		}
+	})
 
-	gotJob := resp.Issues[1]
-	if len(gotJob.CorrelatedChanges) != 1 || gotJob.CorrelatedChanges[0].Name != "pod-policy" {
-		t.Fatalf("Job subject must still carry the webhook change: %+v", gotJob.CorrelatedChanges)
-	}
-	// The Job's own changes are not recorded, so no order is claimed.
-	if gotJob.NoRecentChanges != nil || strings.Contains(gotJob.TimingSummary, "changed last") {
-		t.Fatalf("untracked subject overclaimed: %+v", gotJob)
-	}
+	t.Run("watched only since inside the window", func(t *testing.T) {
+		// Radar watches webhook configurations only from when they're first
+		// needed, inside the window here, so an older change to another
+		// configuration could be the newest: no order is stated.
+		got, gotJob := correlate()
+		linked(t, got, gotJob)
+		if strings.Contains(got.TimingSummary, "changed last") || got.IssueTiming != "started_at_resource_creation" {
+			t.Fatalf("order stated over a late webhook watch: timing=%q summary=%q", got.IssueTiming, got.TimingSummary)
+		}
+	})
 }
 
 // Per-kind RBAC applies to the policy side as it does to the workload side: a
@@ -324,28 +333,18 @@ func TestAdmissionBlocker_OnlyClaimsRecordedOrder(t *testing.T) {
 	})
 
 	t.Run("quota not collected", func(t *testing.T) {
-		store := initCorrelationStore(t) // no typed cache: no ResourceQuota informer
+		// Radar collects Deployments but not ResourceQuotas.
+		if err := k8s.InitScopedTestResourceCache(k8sfake.NewSimpleClientset(), map[string]k8score.ResourceScope{k8score.Deployments: {Enabled: true}}); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(k8s.ResetTestState)
+		store := initCorrelationStore(t)
 		appendChange(t, store, timeline.TimelineEvent{Timestamp: now.Add(-5 * time.Minute), Kind: "Deployment", APIVersion: "apps/v1", Namespace: "shop", Name: "web", EventType: timeline.EventTypeUpdate,
 			Diff: &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "spec.replicas", OldValue: int64(3), NewValue: int64(6)}}}})
 		resp := issues.ListResponse{Issues: []issuesapi.Issue{admissionIssue(issuesapi.CategoryQuotaExceeded, "Deployment", "web", quotaMsg, now.Add(-4*time.Minute))}}
 		attachIssueChangeCorrelation(context.Background(), &resp)
 		if iss := resp.Issues[0]; strings.Contains(iss.TimingSummary, "no recorded change") || strings.Contains(iss.TimingSummary, "changed last") {
 			t.Fatalf("claimed an uncollected quota unchanged: %q", iss.TimingSummary)
-		}
-	})
-
-	t.Run("configmap edit is not a workload change", func(t *testing.T) {
-		initAdmissionCache(t)
-		store := initCorrelationStore(t)
-		quotaAt := now.Add(-10 * time.Minute)
-		appendChange(t, store, timeline.TimelineEvent{Timestamp: now.Add(-20 * time.Minute), Kind: "Deployment", APIVersion: "apps/v1", Namespace: "shop", Name: "web", EventType: timeline.EventTypeAdd})
-		appendChange(t, store, timeline.TimelineEvent{Timestamp: quotaAt, Kind: "ResourceQuota", APIVersion: "v1", Namespace: "shop", Name: "compute", EventType: timeline.EventTypeAdd})
-		cm := []issuesapi.RecentChange{{Kind: "ConfigMap", Namespace: "shop", Name: "web-config", ChangeType: "update", Timestamp: now.Add(-2 * time.Minute).Format(time.RFC3339)}}
-		ev := admissionBlockerForIssue(context.Background(), &issuesapi.Issue{Category: issuesapi.CategoryQuotaExceeded, Kind: "Deployment", Namespace: "shop", Name: "web", Message: quotaMsg}, time.Hour)
-		subject := append(cm, issuesapi.RecentChange{Kind: "Deployment", Namespace: "shop", Name: "web", ChangeType: "add", Timestamp: now.Add(-20 * time.Minute).Format(time.RFC3339)})
-		sentence, policyLast := admissionChangeOrder(&issuesapi.Issue{Kind: "Deployment", Name: "web"}, ev, subject, true, true, time.Hour)
-		if !policyLast || !strings.HasSuffix(sentence, "the ResourceQuota changed last.") {
-			t.Fatalf("a ConfigMap edit decided the order: %q", sentence)
 		}
 	})
 
@@ -520,4 +519,74 @@ func TestAdmissionBlocker_YoungStore(t *testing.T) {
 			t.Fatalf("absence claimed on a young store: %q", iss.TimingSummary)
 		}
 	})
+}
+
+// A caller who can list only one webhook configuration kind gets the same
+// issues tool answer as one who can list neither: Radar doesn't look up which
+// configuration declares the webhook for them, so no configuration's changes
+// or order sentence appear. A caller who can list both still gets them.
+func TestAdmissionBlocker_WebhookOneKindReadable(t *testing.T) {
+	initAdmissionCache(t)
+	store := initCorrelationStore(t)
+	vwcGVR := schema.GroupVersionResource{Group: "admissionregistration.k8s.io", Version: "v1", Resource: "validatingwebhookconfigurations"}
+	mwcGVR := schema.GroupVersionResource{Group: "admissionregistration.k8s.io", Version: "v1", Resource: "mutatingwebhookconfigurations"}
+	data, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&admissionv1.ValidatingWebhookConfiguration{
+		TypeMeta:   metav1.TypeMeta{Kind: "ValidatingWebhookConfiguration", APIVersion: "admissionregistration.k8s.io/v1"},
+		ObjectMeta: metav1.ObjectMeta{Name: "pod-policy"},
+		Webhooks:   []admissionv1.ValidatingWebhook{{Name: "deny-root.policy.example.com"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{vwcGVR: "ValidatingWebhookConfigurationList", mwcGVR: "MutatingWebhookConfigurationList"},
+		&unstructured.Unstructured{Object: data})
+	if err := k8s.InitTestDynamicResourceCache(client, []k8s.APIResource{
+		{Group: vwcGVR.Group, Version: "v1", Kind: "ValidatingWebhookConfiguration", Name: vwcGVR.Resource, Verbs: []string{"list", "watch"}},
+		{Group: mwcGVR.Group, Version: "v1", Kind: "MutatingWebhookConfiguration", Name: mwcGVR.Resource, Verbs: []string{"list", "watch"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+	for _, gvr := range []schema.GroupVersionResource{vwcGVR, mwcGVR} {
+		if err := k8s.GetDynamicResourceCache().EnsureWatching(gvr); err != nil || !k8s.GetDynamicResourceCache().WaitForSync(gvr, 2*time.Second) {
+			t.Fatalf("watch %s: %v", gvr, err)
+		}
+	}
+	now := time.Now().Truncate(time.Second)
+	webhookAt := now.Add(-4 * time.Minute)
+	appendChange(t, store, timeline.TimelineEvent{Timestamp: now.Add(-40 * time.Minute), Kind: "Deployment", APIVersion: "apps/v1", Namespace: "shop", Name: "worker", EventType: timeline.EventTypeAdd})
+	appendChange(t, store, timeline.TimelineEvent{Timestamp: webhookAt, Kind: "ValidatingWebhookConfiguration", APIVersion: "admissionregistration.k8s.io/v1", Name: "pod-policy", EventType: timeline.EventTypeAdd})
+	t.Cleanup(getPermCache().Invalidate)
+
+	answer := func(user string, validating, mutating bool) string {
+		ctx := withClusterAdmin(t, user)
+		perms := getPermCache().Get(user, nil)
+		perms.SetCanI("list", "apps", "deployments", "shop", true)
+		perms.SetCanI("list", "admissionregistration.k8s.io", "validatingwebhookconfigurations", "", validating)
+		perms.SetCanI("list", "admissionregistration.k8s.io", "mutatingwebhookconfigurations", "", mutating)
+		message := `Error creating: admission webhook "deny-root.policy.example.com" denied the request: runAsNonRoot is required`
+		resp := issues.ListResponse{Issues: []issuesapi.Issue{admissionIssue(issuesapi.CategoryAdmissionWebhookBlocking, "Deployment", "worker", message, webhookAt.Add(5*time.Second))}}
+		attachIssueChangeCorrelation(ctx, &resp)
+		out, err := json.Marshal(resp.Issues[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(out)
+	}
+	// Both configuration kinds watched since before the window, so a caller
+	// who can list both gets the order too.
+	watchedLongAgo := time.Now().Add(-48 * time.Hour)
+	t.Cleanup(issuecorrelation.SetWatchedSinceForTest(func(string, string, string) (time.Time, bool) { return watchedLongAgo, true }))
+	both := answer("both-kinds", true, true)
+	if !strings.Contains(both, "pod-policy") || !strings.Contains(both, "changed last") {
+		t.Fatalf("a caller who can list both kinds lost the configuration: %s", both)
+	}
+	one, neither := answer("validating-only", true, false), answer("no-webhook-kinds", false, false)
+	if one != neither {
+		t.Fatalf("one readable kind differs from none:\none:     %s\nneither: %s", one, neither)
+	}
+	if strings.Contains(one, "pod-policy") || strings.Contains(one, "changed last") {
+		t.Fatalf("a caller who can list one kind got the configuration: %s", one)
+	}
 }

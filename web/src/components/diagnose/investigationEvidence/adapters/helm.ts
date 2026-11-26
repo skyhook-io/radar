@@ -9,6 +9,7 @@ import { nonEmptyString, record, stringArray } from "../parse";
 import {
   type InvestigationEvidenceRelevance,
   type InvestigationEvidenceSource,
+  type InvestigationHelmController,
   type InvestigationHelmOperation,
   type InvestigationHelmOwnedResource,
   type InvestigationHelmRelease,
@@ -208,7 +209,10 @@ export function adaptHelmRelease(
       return;
     }
   }
-  if (value.managedByFlux !== undefined && typeof value.managedByFlux !== "boolean") {
+  if (
+    (value.managedByFlux !== undefined && typeof value.managedByFlux !== "boolean") ||
+    (value.managedByK3s !== undefined && typeof value.managedByK3s !== "boolean")
+  ) {
     invalidPayload(builder, source);
     return;
   }
@@ -259,8 +263,10 @@ export function adaptHelmRelease(
       ? { statusUnreadCount: value.statusUnreadCount }
       : {}),
     ...(value.managedByFlux === true ? { managedByFlux: true } : {}),
+    ...(value.managedByK3s === true ? { managedByK3s: true } : {}),
     managedByFluxHelmRelease: value.managedByFluxHelmRelease as
       string | undefined,
+    ...releaseControllerField(value.controller),
     lastOperation,
     resources,
     ...(history ? { history } : {}),
@@ -319,4 +325,18 @@ export function adaptHelmRelease(
       builder.limit(source, label, message, "error");
     }
   }
+}
+
+// controller is kept only when it names an object; any tool counts.
+function releaseControllerField(value: unknown): { controller?: InvestigationHelmController } {
+  const v = record(value);
+  if (!v) return {};
+  const { tool, kind, name, namespace } = v;
+  if (!nonEmptyString(tool) || !nonEmptyString(kind) || !nonEmptyString(name)) return {};
+  const ref = record(v.valuesRef);
+  const values =
+    ref && ref.exists === true && nonEmptyString(ref.kind) && nonEmptyString(ref.name)
+      ? `${ref.kind} ${typeof ref.namespace === "string" ? ref.namespace : ""}/${ref.name}`
+      : undefined;
+  return { controller: { tool, kind, name, namespace: typeof namespace === "string" ? namespace : "", ...(values ? { values } : {}) } };
 }

@@ -588,6 +588,21 @@
         }
       },
       {
+        "id": "kustomization/flux-system/infra",
+        "kind": "Kustomization",
+        "name": "infra",
+        "status": "healthy",
+        "data": {
+          "apiVersion": "kustomize.toolkit.fluxcd.io/v1",
+          "auditKey": "kustomize.toolkit.fluxcd.io|Kustomization|flux-system|infra",
+          "labels": null,
+          "namespace": "flux-system",
+          "ready": "True",
+          "resourceCount": 0,
+          "sourceRef": "GitRepository/repo"
+        }
+      },
+      {
         "id": "kustomization/flux-system/platform",
         "kind": "Kustomization",
         "name": "platform",
@@ -1477,6 +1492,13 @@
         "type": "manages"
       },
       {
+        "id": "gitrepository/flux-system/repo-to-kustomization/flux-system/infra-configures",
+        "source": "gitrepository/flux-system/repo",
+        "target": "kustomization/flux-system/infra",
+        "type": "configures",
+        "label": "source"
+      },
+      {
         "id": "gitrepository/flux-system/repo-to-kustomization/flux-system/platform-configures",
         "source": "gitrepository/flux-system/repo",
         "target": "kustomization/flux-system/platform",
@@ -1579,6 +1601,13 @@
         "source": "knativeservice/shop/hello",
         "target": "knativeroute/shop/hello",
         "type": "manages"
+      },
+      {
+        "id": "kustomization/flux-system/platform-to-kustomization/flux-system/infra",
+        "source": "kustomization/flux-system/platform",
+        "target": "kustomization/flux-system/infra",
+        "type": "uses",
+        "label": "depends on"
       },
       {
         "id": "kustomization/flux-system/shop-to-deployment/shop/cart",
@@ -2636,12 +2665,33 @@
       }
     },
     {
+      "root": "kustomize.toolkit.fluxcd.io|Kustomization|flux-system|infra",
+      "relationships": {
+        "configRefs": [
+          {"kind": "GitRepository", "namespace": "flux-system", "name": "repo", "group": "source.toolkit.fluxcd.io"}
+        ],
+        "dependencies": [
+          {"kind": "GitRepository", "namespace": "flux-system", "name": "repo", "group": "source.toolkit.fluxcd.io"}
+        ],
+        "dependents": [
+          {"kind": "Kustomization", "namespace": "flux-system", "name": "platform", "group": "kustomize.toolkit.fluxcd.io"}
+        ]
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Kustomization", "namespace": "flux-system", "name": "infra", "group": "kustomize.toolkit.fluxcd.io"},
+        "rootResolved": true,
+        "dependents": []
+      }
+    },
+    {
       "root": "kustomize.toolkit.fluxcd.io|Kustomization|flux-system|platform",
       "relationships": {
         "configRefs": [
           {"kind": "GitRepository", "namespace": "flux-system", "name": "repo", "group": "source.toolkit.fluxcd.io"}
         ],
         "dependencies": [
+          {"kind": "Kustomization", "namespace": "flux-system", "name": "infra", "group": "kustomize.toolkit.fluxcd.io"},
           {"kind": "GitRepository", "namespace": "flux-system", "name": "repo", "group": "source.toolkit.fluxcd.io"}
         ]
       },
@@ -2818,13 +2868,35 @@
       }
     },
     {
+      "root": "source.extensions.fluxcd.io|ArtifactGenerator|flux-system|bundle",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "ArtifactGenerator", "namespace": "flux-system", "name": "bundle", "group": "source.extensions.fluxcd.io"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "source.toolkit.fluxcd.io|ExternalArtifact|flux-system|bundle-app",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "ExternalArtifact", "namespace": "flux-system", "name": "bundle-app", "group": "source.toolkit.fluxcd.io"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
       "root": "source.toolkit.fluxcd.io|GitRepository|flux-system|repo",
       "relationships": {
         "consumers": [
+          {"kind": "Kustomization", "namespace": "flux-system", "name": "infra", "group": "kustomize.toolkit.fluxcd.io"},
           {"kind": "Kustomization", "namespace": "flux-system", "name": "platform", "group": "kustomize.toolkit.fluxcd.io"},
           {"kind": "Kustomization", "namespace": "flux-system", "name": "shop", "group": "kustomize.toolkit.fluxcd.io"}
         ],
         "dependents": [
+          {"kind": "Kustomization", "namespace": "flux-system", "name": "infra", "group": "kustomize.toolkit.fluxcd.io"},
           {"kind": "Kustomization", "namespace": "flux-system", "name": "platform", "group": "kustomize.toolkit.fluxcd.io"},
           {"kind": "Kustomization", "namespace": "flux-system", "name": "shop", "group": "kustomize.toolkit.fluxcd.io"}
         ]

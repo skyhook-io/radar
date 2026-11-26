@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from 'react'
-import { Activity, GitBranch, Terminal } from 'lucide-react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from 'react'
+import { Activity, Check, Copy, GitBranch, Terminal } from 'lucide-react'
 import { clsx } from 'clsx'
 import {
   Collapse,
@@ -14,7 +14,9 @@ import {
   podStatusClass,
   podStatusLabel,
   workloadPodDetail,
+  WorkflowShutdownBadge,
 } from '@skyhook-io/k8s-ui'
+import { copyText } from '@skyhook-io/k8s-ui/utils/clipboard'
 import { buildWorkflowExecutionModel, flattenWorkflowExecution, type WorkflowExecutionActivity, type WorkflowExecutionModel, type WorkflowExecutionNode, type WorkflowExecutionRow, type WorkflowTemplateReference } from '@skyhook-io/k8s-ui/utils/workflow-execution'
 import { midTruncate } from '@skyhook-io/k8s-ui/utils/format'
 import { isJobSetV1Alpha2 } from '@skyhook-io/k8s-ui/components/resources/resource-utils-jobset-lws'
@@ -27,6 +29,7 @@ import { getScaledJobStatus } from '../resources/resource-utils-keda'
 import { Tooltip } from '../ui/Tooltip'
 import { ImageFilesystemModal } from '../resources/ImageFilesystemModal'
 import { useIsAuthEnabled } from '../../contexts/CapabilitiesContext'
+import { WorkflowRunStopAction } from './WorkflowRunStopAction'
 import { executionDefinitionDiffers, executionDefinitionSummary, type ExecutionDefinitionSummary, type ExecutionUnitSummary } from './execution-definition'
 import { batchRunHasContainerOutcome, batchRunNextStep, isFailedRunPhase, type BatchRunNextStep } from './batch-run-actions'
 import { JobSetAdmission } from './JobSetAdmission'
@@ -254,6 +257,17 @@ function BatchExecutionContent({ leadContent, kind, apiKind, namespace, name, re
     { enabled: Boolean(fetchTarget), refetchInterval: selectedRun?.active ? 5000 : false },
   )
   const selectedResource = scheduled ? selectedResourceQuery.data : resource
+  // A scheduled parent's selected run is a child Workflow with no action bar
+  // of its own here; a standalone Workflow already has Stop in its bar.
+  // An older Radar's run rows carry no group; the Workflow object's own
+  // apiVersion still decides, in WorkflowStopAction.
+  const selectedRunStoppable = scheduled && selectedRun?.kind === 'workflows' && (!selectedRun.group || selectedRun.group === 'argoproj.io')
+  // Only the selected run's own, currently readable object: never the previous
+  // selection's, nor a last copy kept after a failed refetch.
+  const selectedWorkflow = selectedRunStoppable && !selectedResourceQuery.error &&
+    selectedResource?.metadata?.name === selectedRun.name && selectedResource?.metadata?.namespace === selectedRun.namespace
+    ? selectedResource
+    : undefined
   const workflowExecution = useMemo(
     () => selectedResource && selectedRun?.kind === 'workflows' ? buildWorkflowExecutionModel(selectedResource) : null,
     [selectedResource, selectedRun?.kind],
@@ -418,7 +432,14 @@ function BatchExecutionContent({ leadContent, kind, apiKind, namespace, name, re
                         {selectedResourceQuery.isFetching && <span>refreshing</span>}
                       </div>
                     </div>
-                    <span className={clsx('badge', selectedRunHeldByKueue ? 'status-neutral' : phaseBadgeClass(selectedRun.phase))}>{selectedRunHeldByKueue ? `Held by Kueue until admitted${selectedRun.deleting ? ' · deleting' : ''}` : runStateLabel(selectedRun)}</span>
+                    <div className="flex shrink-0 items-center gap-2">
+                      {/* Stays mounted across selections so a request in flight keeps its dialog. */}
+                      {selectedRunStoppable && (
+                        <WorkflowRunStopAction workflow={selectedWorkflow} namespace={selectedRun.namespace} name={selectedRun.name} />
+                      )}
+                      {selectedWorkflow && <WorkflowShutdownBadge data={selectedWorkflow} />}
+                      <span className={clsx('badge', selectedRunHeldByKueue ? 'status-neutral' : phaseBadgeClass(selectedRun.phase))}>{selectedRunHeldByKueue ? `Held by Kueue until admitted${selectedRun.deleting ? ' · deleting' : ''}` : runStateLabel(selectedRun)}</span>
+                    </div>
                   </div>
                   {memberCollection && <div className="flex flex-wrap items-center gap-3 border-b border-theme-border px-4 py-2 text-xs">
                     {!runs.some(run => workloadRunKey(run) === selectedRunKey) && <span className="text-theme-text-secondary">Selected Job is outside the current filter or shown window.</span>}
@@ -754,7 +775,7 @@ function ExecutionUnitDetails({ unit, namespace, pullSecrets, compact }: { unit:
         {!compact && <div className="mb-1 flex items-center justify-between gap-3"><span className="truncate text-xs font-medium text-theme-text-primary">{unit.name}</span><span className="text-[10px] uppercase tracking-wide text-theme-text-tertiary">{unit.type}</span></div>}
         <div className="space-y-1">
           {unit.image && <DefinitionFact label="Image" value={unit.image} mono onClick={canBrowseImage ? () => setBrowseImage(true) : undefined} tooltip={canBrowseImage ? 'Browse image filesystem from registry' : IMAGE_BROWSE_VIA_POD} hint={!canBrowseImage} />}
-          {unit.command && <DefinitionFact label="Command" value={unit.command} mono />}
+          {unit.command && <CommandFact key={unit.command} command={unit.command} />}
           {!compact && unit.requests && <DefinitionFact label="Requests" value={unit.requests} />}
           {!compact && unit.limits && <DefinitionFact label="Limits" value={unit.limits} />}
         </div>
@@ -775,8 +796,70 @@ function ExecutionUnitDetails({ unit, namespace, pullSecrets, compact }: { unit:
 
 const IMAGE_BROWSE_VIA_POD = "With sign-in on, browse an image's files from one of its Pods."
 
+// A command (command plus args, often a whole `sh -c` script) can be far wider and
+// taller than the card. It gets its own full-width line, keeps the script's line
+// breaks, clamps to a few lines with an explicit toggle when it overflows, and
+// copies whole; a hover tooltip can't hold or copy a script.
+export function CommandFact({ command }: { command: string }) {
+  const ref = useRef<HTMLElement>(null)
+  const [expanded, setExpanded] = useState(false)
+  const [overflows, setOverflows] = useState(false)
+  const [copied, setCopied] = useState(false)
+
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el || expanded) return
+    const measure = () => setOverflows(el.scrollHeight > el.clientHeight + 1)
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(measure)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [expanded])
+
+  useEffect(() => {
+    if (!copied) return
+    const timer = setTimeout(() => setCopied(false), 1500)
+    return () => clearTimeout(timer)
+  }, [copied])
+
+  return (
+    <div className="text-sm">
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-theme-text-tertiary">Command</span>
+        <button
+          type="button"
+          onClick={() => { void copyText(command).then((ok) => { if (ok) setCopied(true) }) }}
+          aria-label={copied ? 'Command copied' : 'Copy command'}
+          className="rounded p-0.5 text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary"
+        >
+          {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+        </button>
+      </div>
+      {/* Padding sits on the wrapper: inside the clamped box it would expose the top of the next line. */}
+      <div className="mt-1 rounded bg-theme-base px-2 py-1.5">
+        <code
+          ref={ref}
+          data-testid="definition-command"
+          className={clsx(
+            'whitespace-pre-wrap font-mono text-xs text-theme-text-primary [overflow-wrap:anywhere]',
+            expanded ? 'block' : 'line-clamp-4',
+          )}
+        >
+          {command}
+        </code>
+      </div>
+      {(overflows || expanded) && (
+        <button type="button" aria-expanded={expanded} onClick={() => setExpanded((open) => !open)} className="mt-1 text-xs text-accent-text hover:underline">
+          {expanded ? 'Show less' : 'Show all'}
+        </button>
+      )}
+    </div>
+  )
+}
+
 function DefinitionFact({ label, value, mono = false, onClick, tooltip, hint = false }: { label: string; value: string; mono?: boolean; onClick?: () => void; tooltip?: string; hint?: boolean }) {
-  const valueClassName = clsx('break-words text-theme-text-primary', mono && 'font-mono text-xs', onClick && 'text-accent-text hover:underline', hint && 'cursor-help underline decoration-dotted decoration-theme-text-tertiary underline-offset-2')
+  const valueClassName = clsx('min-w-0 text-theme-text-primary [overflow-wrap:anywhere]', mono && 'font-mono text-xs', onClick && 'text-accent-text hover:underline', hint && 'cursor-help underline decoration-dotted decoration-theme-text-tertiary underline-offset-2')
   return (
     <div className="flex items-start justify-between gap-3 text-sm">
       <span className="shrink-0 text-theme-text-tertiary">{label}</span>

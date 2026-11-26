@@ -119,6 +119,19 @@ func podSpecPath(kind string) []string {
 	return nil
 }
 
+// WorkloadPodSpecPath identifies the PodSpec in built-in workloads and Argo
+// Rollouts. A custom resource sharing a built-in kind need not use its schema.
+func WorkloadPodSpecPath(group, kind string) []string {
+	switch group + "/" + kind {
+	case "/Pod", "apps/Deployment", "apps/ReplicaSet", "apps/StatefulSet", "apps/DaemonSet", "batch/Job", "batch/CronJob":
+		return podSpecPath(kind)
+	case "/ReplicationController", "argoproj.io/Rollout":
+		return podSpecPath("Deployment")
+	default:
+		return nil
+	}
+}
+
 // checkFieldRemoval verifies that fields the agent intended to remove are
 // actually gone after apply. Server-side apply does not remove fields owned by
 // other managers when those fields are merely omitted from the submission —

@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"net/http"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -1978,3 +1980,5 @@ func ClusterActions() []string {
 }
 
 func IsScheduleAction(action string) bool { return scheduleActions[action] }
+
+func ScheduleActions() []string { return slices.Sorted(maps.Keys(scheduleActions)) }

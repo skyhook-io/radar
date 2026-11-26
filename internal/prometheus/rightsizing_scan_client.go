@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/prom"
@@ -11,7 +12,38 @@ import (
 
 const rightsizingScanQueryTimeout = 30 * time.Second
 
+// Leave room for the request line on proxies with an 8 KiB limit.
+const scanGETRequestTargetBytes = 7 * 1024
+
 var rightsizingScanHTTPClient = &http.Client{}
+
+// Keep ordinary scan reads on GET. For long URLs both query APIs accept
+// the same parameters in a POST form.
+type scanQueryTransport struct{ *prom.HTTPTransport }
+
+func (t scanQueryTransport) Do(ctx context.Context, method, path string, params url.Values) ([]byte, error) {
+	if method == http.MethodGet {
+		endpoint, err := url.Parse(t.Address() + path)
+		if err != nil {
+			return nil, err
+		}
+		if len(endpoint.RequestURI())+1+len(params.Encode()) > scanGETRequestTargetBytes {
+			method = http.MethodPost
+		}
+	}
+	return t.HTTPTransport.Do(ctx, method, path, params)
+}
+
+// A relay adds the cluster filter after this point, so the final URL length
+// is unknown here; both relays and OpenObserve accept the POST form.
+type relayScanQueryTransport struct{ prom.Transport }
+
+func (t relayScanQueryTransport) Do(ctx context.Context, method, path string, params url.Values) ([]byte, error) {
+	if method == http.MethodGet && (path == "/api/v1/query" || path == "/api/v1/query_range") {
+		method = http.MethodPost
+	}
+	return t.Transport.Do(ctx, method, path, params)
+}
 
 // scanQuerier runs a scan's queries on one store handle; conn is the
 // connection it was taken from, which the scan's cluster scope check must
@@ -31,8 +63,12 @@ func (c *Client) newScanQuerier(ctx context.Context, at time.Time) (*scanQuerier
 	if c.retired || c.baseURL == "" {
 		return nil, errors.New("metrics connection changed")
 	}
-	transport := prom.NewHTTPTransport(c.baseURL, c.basePath, rightsizingScanHTTPClient)
-	transport.Headers = copyHeaders(c.headers)
+	transport := c.newTransportLocked(c.baseURL, c.basePath, rightsizingScanHTTPClient, 0)
+	if direct, ok := transport.(*prom.HTTPTransport); ok {
+		transport = scanQueryTransport{direct}
+	} else {
+		transport = relayScanQueryTransport{transport}
+	}
 	return &scanQuerier{client: prom.NewClient(transport), at: at, conn: c.snapshotLocked()}, nil
 }
 

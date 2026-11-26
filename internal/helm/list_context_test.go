@@ -92,7 +92,7 @@ func TestHelmReleaseRowsStopWithTheirContext(t *testing.T) {
 		storageNamespaces: map[string]string{},
 		histories:         map[string][]HelmRevision{},
 		latest:            []*release.Release{helmTestRelease("api", "demo", 1, release.StatusDeployed, "Install complete")},
-	}, nil, "", scannedObjects{})
+	}, nil, nil, "", scannedObjects{})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v, want context canceled", err)
 	}
