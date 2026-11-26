@@ -1714,11 +1714,16 @@ export interface TrafficEndpoint {
 }
 
 // Traffic flow between two endpoints
+/** Set when a port was not observed but taken from the destination's Services:
+ *  `service` for their one port, `serviceMultiple` (port 0) for several. */
+export type TrafficPortSource = 'service' | 'serviceMultiple'
+
 export interface TrafficFlow {
   source: TrafficEndpoint
   destination: TrafficEndpoint
   protocol: string // tcp, udp, http, grpc
   port: number
+  portSource?: TrafficPortSource
   l7Protocol?: string // HTTP, gRPC, DNS
   httpMethod?: string
   httpPath?: string
@@ -1782,6 +1787,7 @@ export interface AggregatedFlow {
   destination: TrafficEndpoint
   protocol: string
   port: number
+  portSource?: TrafficPortSource
   flowCount: number
   bytesByProtocol?: Record<string, { bytesSent: number; bytesRecv: number }>
   /** Cross-protocol sums kept for compatibility; display the breakdown when present. */
