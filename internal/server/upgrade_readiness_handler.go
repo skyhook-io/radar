@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"log"
 	"net/http"
@@ -28,7 +29,9 @@ func (s *Server) handleUpgradeReadiness(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	refresh := r.URL.Query().Get("refresh") == "true"
-	outcome, err := upgrade.ScanMemoized(r.Context(), httpUpgradeAuthorizer{s: s, r: r}, r.URL.Query().Get("target"), refresh)
+	outcome, err := upgrade.ScanMemoized(r.Context(), func(ctx context.Context) upgrade.EvidenceAuthorizer {
+		return httpUpgradeAuthorizer{s: s, r: r.WithContext(ctx)}
+	}, r.URL.Query().Get("target"), refresh)
 	if err != nil {
 		if r.Context().Err() != nil {
 			return
@@ -65,7 +68,7 @@ func (s *Server) writeUpgradeReadinessError(w http.ResponseWriter, err error) {
 // and --namespace-scope remains an explicit hard boundary on cached evidence.
 func (s *Server) upgradeReadinessNamespaces(r *http.Request) []string {
 	if k8s.ForceNamespaceScope {
-		if namespace := k8s.GetNamespaceScopeTarget(); namespace != "" {
+		if namespace := k8s.BoundOrCurrent(r.Context()).NamespaceScopeTarget(); namespace != "" {
 			return s.getUserNamespaces(r, []string{namespace})
 		}
 		return []string{}
@@ -83,7 +86,7 @@ func (s *Server) canReadSubresourceDecision(r *http.Request, group, resource, su
 	if user == nil {
 		return true, true
 	}
-	client := k8s.GetClient()
+	client := k8s.BoundOrCurrent(r.Context()).Client()
 	if client == nil {
 		return false, false
 	}

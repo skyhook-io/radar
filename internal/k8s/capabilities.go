@@ -7,6 +7,7 @@ import (
 	"maps"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -395,6 +396,7 @@ type DeploymentInfo struct {
 }
 
 type permissionState struct {
+	readCaches          sync.Map // host permission cache -> cache for reads bound to this connection
 	resourcePermsMu     sync.RWMutex
 	cachedPermResult    *PermissionCheckResult
 	resourcePermsExpiry time.Time
@@ -424,6 +426,25 @@ func (c *Connection) permissions() *permissionState {
 	}
 	c.perms.CompareAndSwap(nil, &permissionState{})
 	return c.perms.Load()
+}
+
+// PermissionCacheFor returns the permission cache for ctx's bound connection.
+// Each connection has a separate cache per host cache. Without a bound
+// connection or when host is nil, it returns host.
+func PermissionCacheFor(ctx context.Context, host *pkgauth.PermissionCache) *pkgauth.PermissionCache {
+	conn := ConnectionFrom(ctx)
+	if conn == nil || host == nil {
+		return host
+	}
+	caches := &conn.permissions().readCaches
+	if found, ok := caches.Load(host); ok {
+		return found.(*pkgauth.PermissionCache)
+	}
+	// Keyed like the host's, so discovery and reviews on this connection's
+	// cache are accepted for it.
+	generation := strconv.FormatUint(conn.ClientGeneration(), 10)
+	found, _ := caches.LoadOrStore(host, pkgauth.NewPermissionCache().WithConnectionKey(func() string { return generation }))
+	return found.(*pkgauth.PermissionCache)
 }
 
 // ResetPermissions retires in-flight checks along with their cache. Each

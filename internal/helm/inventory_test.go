@@ -7,6 +7,8 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/skyhook-io/radar/internal/k8s"
+
 	"helm.sh/helm/v3/pkg/release"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -147,7 +149,7 @@ func TestUnreadStorage(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := unreadStorage(tc.req, tc.read, tc.denied); !reflect.DeepEqual(got, tc.want) {
+			if got := unreadStorage(k8s.Current(), tc.req, tc.read, tc.denied); !reflect.DeepEqual(got, tc.want) {
 				t.Fatalf("unreadStorage = %+v, want %+v", got, tc.want)
 			}
 		})

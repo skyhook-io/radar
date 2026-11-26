@@ -1815,7 +1815,7 @@ func (s *Server) parseNamespacesForUser(r *http.Request) []string {
 func (s *Server) parseNamespacesForUserWithStatus(r *http.Request) ([]string, bool) {
 	namespaces := parseNamespaces(r.URL.Query())
 	if k8s.ForceNamespaceScope {
-		target := k8s.GetNamespaceScopeTarget()
+		target := k8s.BoundOrCurrent(r.Context()).NamespaceScopeTarget()
 		if target == "" {
 			return []string{}, false
 		}
@@ -1871,7 +1871,7 @@ func (s *Server) resolveHelmStorageScope(r *http.Request) ([]string, bool, bool,
 		// explicit filter to the pinned namespace (empty when it's out of scope)
 		// instead of reading releases the cache doesn't cover.
 		if k8s.ForceNamespaceScope {
-			if target := k8s.GetNamespaceScopeTarget(); target != "" && slices.Contains(explicit, target) {
+			if target := k8s.BoundOrCurrent(r.Context()).NamespaceScopeTarget(); target != "" && slices.Contains(explicit, target) {
 				return []string{target}, true, true, nil
 			}
 			return []string{}, true, true, nil
@@ -1987,7 +1987,7 @@ func (s *Server) canReadDecision(r *http.Request, group, resource, namespace, ve
 	if user == nil || s.permCache == nil {
 		return true, true
 	}
-	if s.permCache.Get(user.Username, user.Groups) == nil {
+	if k8s.PermissionCacheFor(r.Context(), s.permCache).Get(user.Username, user.Groups) == nil {
 		// Trigger namespace discovery so SAR cache has a parent UserPermissions
 		// entry. parseNamespacesForUser is the canonical path that populates
 		// this; if it hasn't run yet, canReadUser falls through to a fresh SAR.
@@ -2016,11 +2016,11 @@ func (s *Server) canReadUserDecision(ctx context.Context, user *auth.User, group
 	if user == nil || s.permCache == nil {
 		return true, true
 	}
-	perms := s.permCache.Get(user.Username, user.Groups)
+	perms := k8s.PermissionCacheFor(ctx, s.permCache).Get(user.Username, user.Groups)
 	// Keyed by connection generation, not context name: a reconnect under the
 	// same name can reach a different cluster, and the review must run on the
 	// client its key names.
-	conn := k8s.Current()
+	conn := k8s.BoundOrCurrent(ctx)
 	client, generation := conn.Client(), conn.ClientGeneration()
 	question := pkgauth.AccessReviewQuestion{Verb: verb, Group: group, Resource: resource, Namespace: namespace}
 	return s.accessReviews.Decide(ctx, user, perms, strconv.FormatUint(generation, 10), question, func(ctx context.Context) (bool, bool) {
@@ -5614,21 +5614,21 @@ func (s *Server) getUserNamespacesWithStatus(r *http.Request, requested []string
 		return requested, false
 	}
 
-	perms := s.permCache.Get(user.Username, user.Groups)
+	perms := k8s.PermissionCacheFor(r.Context(), s.permCache).Get(user.Username, user.Groups)
 	if perms != nil {
 		log.Printf("[auth] Using cached permissions for %s: allowed=%v", user.Username, perms.AllowedNamespaces == nil)
 	}
 	if perms == nil {
 		log.Printf("[auth] No cached permissions for %s — discovering namespaces", user.Username)
 		// Discover namespaces synchronously on first request
-		conn := k8s.Current()
+		conn := k8s.BoundOrCurrent(r.Context())
 		client, generation := conn.Client(), conn.ClientGeneration()
 		if client == nil {
 			log.Printf("[auth] K8s client not available for namespace discovery (user=%s) — denying access", k8s.SanitizeForLog(user.Username))
 			return []string{}, true // fail-closed: cannot verify permissions
 		}
 		var ok bool
-		perms, ok = s.permCache.Resolve(r.Context(), user.Username, user.Groups, strconv.FormatUint(generation, 10), func(ctx context.Context) *auth.UserPermissions {
+		perms, ok = k8s.PermissionCacheFor(r.Context(), s.permCache).Resolve(r.Context(), user.Username, user.Groups, strconv.FormatUint(generation, 10), func(ctx context.Context) *auth.UserPermissions {
 			return discoverUserPermissions(ctx, client, user)
 		})
 		if !ok {
@@ -5643,7 +5643,7 @@ func (s *Server) getUserNamespacesWithStatus(r *http.Request, requested []string
 // returns nil when discovery fails.
 func discoverUserPermissions(ctx context.Context, client *kubernetes.Clientset, user *auth.User) *auth.UserPermissions {
 	var allNamespaces []string
-	if cache := k8s.GetResourceCache(); cache != nil {
+	if cache := k8s.BoundOrCurrent(ctx).ResourceCache(); cache != nil {
 		if nsLister := cache.Namespaces(); nsLister != nil {
 			nsList, _ := nsLister.List(labels.Everything())
 			for _, ns := range nsList {

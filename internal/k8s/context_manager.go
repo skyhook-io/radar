@@ -36,12 +36,6 @@ type NamespaceRescopeCallback func(namespace string)
 // ContextSwitchProgressCallback is called with progress updates during context switch
 type ContextSwitchProgressCallback func(message string)
 
-// HelmResetFunc is called to reset the Helm client
-type HelmResetFunc func()
-
-// HelmReinitFunc is called to reinitialize the Helm client
-type HelmReinitFunc func(kubeconfig string) error
-
 // TimelineResetFunc is called to reset the timeline store
 type TimelineResetFunc func()
 
@@ -70,8 +64,6 @@ var (
 	namespaceRescopeCallbacks      []NamespaceRescopeCallback
 	contextSwitchProgressCallbacks []ContextSwitchProgressCallback
 	contextSwitchMu                sync.RWMutex
-	helmResetFunc                  HelmResetFunc
-	helmReinitFunc                 HelmReinitFunc
 	timelineResetFunc              TimelineResetFunc
 	timelineReinitFunc             TimelineReinitFunc
 	trafficResetFunc               TrafficResetFunc
@@ -248,15 +240,6 @@ func reportProgress(message string) {
 	for _, callback := range callbacks {
 		callback(message)
 	}
-}
-
-// RegisterHelmFuncs registers the Helm reset/reinit functions
-// This breaks the import cycle by allowing helm package to register its functions
-func RegisterHelmFuncs(reset HelmResetFunc, reinit HelmReinitFunc) {
-	contextSwitchMu.Lock()
-	defer contextSwitchMu.Unlock()
-	helmResetFunc = reset
-	helmReinitFunc = reinit
 }
 
 // RegisterTimelineFuncs registers the timeline store reset/reinit functions

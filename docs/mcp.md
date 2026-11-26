@@ -398,9 +398,9 @@ directly. A completed rollback returns `revision`, `targetRevision` and
 
 Without `confirm`, uninstall returns a preview with `revision`, a `confirm` token
 and the release status. Pass the token back as `confirm` to execute. It expires
-after five minutes, is bound to the caller, cluster and release state, and is
-single-use: a retried confirm, such as after a client timeout, is refused. If the
-release changed, preview again.
+after five minutes and can be used once, by the same caller on the same serving
+connection. If the release changes or Radar reconnects, preview again, even if
+the kubeconfig context still has the same name.
 
 The preview follows Helm's own rules:
 

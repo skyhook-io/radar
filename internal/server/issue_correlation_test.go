@@ -654,11 +654,11 @@ func helmStorage(t *testing.T, refused, broken string) {
 		_, _ = w.Write(full)
 	}))
 	t.Cleanup(server.Close)
-	helm.ResetClient()
+	helm.ResetTestClient()
 	if err := helm.InitializeWithRESTConfig(&rest.Config{Host: server.URL}); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(helm.ResetClient)
+	t.Cleanup(helm.ResetTestClient)
 }
 
 // A native Helm release is composed and correlated from its storage, read as

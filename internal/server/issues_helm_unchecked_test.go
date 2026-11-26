@@ -58,12 +58,12 @@ func useHelmStorageAnswering(t *testing.T, status int, body string) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("empty CRD discovery did not complete")
 	}
-	helm.ResetClient()
-	if err := helm.InitializeWithRESTConfig(config); err != nil {
-		t.Fatal(err)
-	}
+	helm.ResetTestClient()
+	previousConfig := k8s.SetTestConfig(config)
+	t.Cleanup(func() { k8s.SetTestConfig(previousConfig) })
+	helm.Initialize()
 	t.Cleanup(func() {
-		helm.ResetClient()
+		helm.ResetTestClient()
 		k8s.SetTestClient(previousClient)
 	})
 }
@@ -251,12 +251,12 @@ func useHelmStorageFailingIn(t *testing.T, failing ...string) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("empty CRD discovery did not complete")
 	}
-	helm.ResetClient()
-	if err := helm.InitializeWithRESTConfig(config); err != nil {
-		t.Fatal(err)
-	}
+	helm.ResetTestClient()
+	previousConfig := k8s.SetTestConfig(config)
+	t.Cleanup(func() { k8s.SetTestConfig(previousConfig) })
+	helm.Initialize()
 	t.Cleanup(func() {
-		helm.ResetClient()
+		helm.ResetTestClient()
 		k8s.SetTestClient(previousClient)
 	})
 }

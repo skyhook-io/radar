@@ -15,7 +15,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/client-go/rest"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 )
@@ -104,7 +103,7 @@ func namespaceLimitedActionConfig(t *testing.T) (*action.Configuration, *[]strin
 		}
 	}))
 	t.Cleanup(srv.Close)
-	getter := newRESTConfigGetter(&rest.Config{Host: srv.URL}, "app", nil)
+	getter := boundWriteGetterAfterSwitch(t, srv.URL, "app")
 	mapper := meta.NewDefaultRESTMapper([]schema.GroupVersion{{Version: "v1"}})
 	mapper.Add(schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"}, meta.RESTScopeNamespace)
 	mapper.Add(schema.GroupVersionKind{Version: "v1", Kind: "Namespace"}, meta.RESTScopeRoot)

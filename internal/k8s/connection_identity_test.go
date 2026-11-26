@@ -2,8 +2,11 @@ package k8s
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
+
+	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 
 	"k8s.io/client-go/kubernetes/fake"
 )
@@ -136,6 +139,44 @@ func TestReadmissionKeepsTheConnectionsPermissionResult(t *testing.T) {
 	}
 	if Current().CachedPermissionResult() == nil {
 		t.Fatal("re-admission dropped the permission result its caches were built from")
+	}
+}
+
+func TestNamespaceScopeStaysWithCapturedBuild(t *testing.T) {
+	t.Cleanup(SnapshotTestConnection())
+	clearTestConnectionIdentity()
+	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "prod"})
+	clientMu.RLock()
+	previous := namespaceScopeOverride
+	clientMu.RUnlock()
+	t.Cleanup(func() { SetNamespaceScopeOverride(previous) })
+	SetNamespaceScopeOverride("team-a")
+	a := Current()
+	ResetResourceDiscovery()
+	SetNamespaceScopeOverride("team-b")
+	if got := a.NamespaceScopeTarget(); got != "team-a" {
+		t.Fatalf("previous build's namespace = %q", got)
+	}
+	if got := Current().NamespaceScopeTarget(); got != "team-b" {
+		t.Fatalf("new build's namespace = %q", got)
+	}
+}
+
+func TestReadmissionKeepsHelmReadPermissions(t *testing.T) {
+	t.Cleanup(SnapshotTestConnection())
+	clearTestConnectionIdentity()
+	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "prod"})
+	conn := Current()
+	host := pkgauth.NewPermissionCache()
+	perms := PermissionCacheFor(WithConnection(t.Context(), conn), host)
+	perms.Set("alice", nil, &pkgauth.UserPermissions{AllowedNamespaces: []string{"team-a"}})
+	RetireServingConnection()
+	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "prod"})
+	if got := PermissionCacheFor(CaptureConnection(t.Context()), host).Get("alice", nil); got == nil || !slices.Equal(got.AllowedNamespaces, []string{"team-a"}) {
+		t.Fatalf("lost permissions on readmission: %v", got)
+	}
+	if got := PermissionCacheFor(WithConnection(t.Context(), conn.fresh()), host).Get("alice", nil); got != nil {
+		t.Fatalf("fresh build inherited permissions: %v", got)
 	}
 }
 

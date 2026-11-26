@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/skyhook-io/radar/internal/k8s"
+
 	"helm.sh/helm/v3/pkg/action"
 	"helm.sh/helm/v3/pkg/chart"
 	"helm.sh/helm/v3/pkg/release"
@@ -183,7 +185,7 @@ func TestMCPRollbackLiveChecksAreBounded(t *testing.T) {
 	current.WriteString(configMapDoc("gone", nil, "x"))
 	calls := 0
 	read := func(renderedResource) liveRead { calls++; return liveRead{} }
-	got := checkRollbackLive(&release.Release{Name: "demo", Namespace: "default", Manifest: current.String()}, &release.Release{Name: "demo", Namespace: "default", Manifest: target.String()}, read)
+	got := checkRollbackLive(k8s.Current(), &release.Release{Name: "demo", Namespace: "default", Manifest: current.String()}, &release.Release{Name: "demo", Namespace: "default", Manifest: target.String()}, read)
 	if calls != maxRollbackLiveChecks || got.Checked != maxRollbackLiveChecks || len(got.Unknown) != 6 {
 		t.Fatalf("want %d reads and the rest unknown: calls=%d checked=%d unknown=%d", maxRollbackLiveChecks, calls, got.Checked, len(got.Unknown))
 	}
@@ -224,7 +226,7 @@ func TestMCPUninstallPreviewMatchesHelmResourcePolicy(t *testing.T) {
 			{Name: "notify", Kind: "Job", Events: []release.HookEvent{release.HookPostInstall, release.HookPostDelete}, DeletePolicies: []release.HookDeletePolicy{release.HookSucceeded}},
 			{Name: "migrate", Kind: "Job", Events: []release.HookEvent{release.HookPreUpgrade}},
 		}}
-	got, err := uninstallPreviewFor(rel)
+	got, err := uninstallPreviewFor(k8s.Current(), rel)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,7 +276,7 @@ func TestMCPUninstallPreviewMatchesHelmResourcePolicy(t *testing.T) {
 func TestMCPUninstallPreviewOfUninstalledReleaseIsHistoryOnly(t *testing.T) {
 	rel := &release.Release{Name: "demo", Namespace: "default", Version: 2, Manifest: configMapDoc("left", nil, "x"), Info: &release.Info{Status: release.StatusUninstalled},
 		Hooks: []*release.Hook{{Name: "drop-db", Events: []release.HookEvent{release.HookPreDelete}}}}
-	got, err := uninstallPreviewFor(rel)
+	got, err := uninstallPreviewFor(k8s.Current(), rel)
 	if err != nil {
 		t.Fatal(err)
 	}
