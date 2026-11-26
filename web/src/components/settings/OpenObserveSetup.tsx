@@ -14,7 +14,7 @@ import {
 } from '../../api/openobserveSetup'
 import { missingFamiliesNote } from './openobserveStatus'
 
-const SERVICE_ACCOUNT_DOCS = 'https://openobserve.ai/docs/user-guide/identity-and-access-management/service-accounts/'
+const SERVICE_ACCOUNT_DOCS = 'https://openobserve.ai/docs/user-guide/account-administration/identity-and-access-management/service-accounts/'
 const inputClass = 'block w-full min-w-0 px-3 py-2 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500'
 
 interface Draft {
