@@ -312,3 +312,9 @@ it('matches CRD aliases only for the definition API identity', () => {
   expect(resourceMatchesSidebarFilter(horizontalPodAutoscaler, 'crd')).toBe(false)
   expect(resourceMatchesSidebarFilter({ ...crd, group: 'other.io' }, 'crd')).toBe(false)
 })
+
+it('matches discovered kubectl short names in the kind filter', () => {
+  const pdb = { group: 'policy', kind: 'PodDisruptionBudget', name: 'poddisruptionbudgets', shortNames: ['pdb'] }
+  expect(resourceMatchesSidebarFilter(pdb, 'pdb')).toBe(true)
+  expect(resourceMatchesSidebarFilter({ ...pdb, shortNames: undefined }, 'pdb')).toBe(false)
+})

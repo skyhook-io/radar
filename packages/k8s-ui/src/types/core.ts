@@ -1079,6 +1079,8 @@ export interface APIResource {
   definitionName?: string
   featured?: boolean
   verbs: string[]
+  /** kubectl short names from API discovery (e.g. "pdb"). Absent on older Radar. */
+  shortNames?: string[]
   observation?: DynamicResourceObservation
 }
 
