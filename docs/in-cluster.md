@@ -775,3 +775,41 @@ helm uninstall radar -n radar
 
 If `radar` is a dedicated namespace and contains nothing you need to retain,
 delete it separately with `kubectl delete namespace radar`.
+
+### Reviewing a workload change through the HTTP API
+
+When `GET /api/capabilities` reports `features.reviewedWorkloadActions: true`,
+a client can preview and execute a specific change using the following endpoints.
+
+| Action | Target | Reviewed change |
+|---|---|---|
+| `scale` | Deployment, StatefulSet, Argo Rollout | Set `spec.replicas` to the supplied integer (0–10000). |
+| `pause` / `resume` | Deployment | Pause or resume the rollout. |
+| `suspend` / `resume` | CronJob | Suspend or resume scheduled Jobs. |
+| `restart` | Deployment, StatefulSet, DaemonSet, Argo Rollout | Set a fixed restart marker; a Rollout restarts pods older than its cutoff. |
+
+1. Send `POST /api/workloads/Deployment/shop/checkout/actions/preview` with
+   `{"action":"scale","replicas":5}`. Radar reads the live resource with the
+   caller's identity. It returns the target, field, before and after values,
+   UID, resource version, and a review token. A missing replicas field is
+   reported as null. Preview describes the requested change; admission and
+   write permission are evaluated when it executes.
+2. Show the proposal to the reviewer. When relevant, consult
+   `POST /api/gitops/write-evidence` for the target field. An autoscaler or
+   GitOps controller can overwrite a live change.
+3. On approval send the same target and arguments to `.../actions/execute`
+   with the returned `uid` and `reviewToken`. For a restart, also pass
+   `restartAt` equal to the preview’s `after`. Supply `expectedResourceVersion`
+   to require that exact version, including status updates. Otherwise, status
+   progress between requests is allowed. A changed target, spec, owner, or
+   proposal requires a fresh preview. The caller needs Kubernetes patch access.
+4. A successful response identifies the field and value Kubernetes returned.
+   Read rollout progress and relevant service signals to determine recovery.
+   A timeout or lost response leaves the write outcome unknown. Read the
+   target before taking further action.
+
+The review token binds the proposal to material resource state. It carries no
+permissions and is not a record of a person's approval. A client that manages
+approvals must retain the decision, its reviewer, the target cluster, and the
+exact proposal it dispatches. A cluster without this feature needs an updated
+Radar to execute a reviewed proposal.

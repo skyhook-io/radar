@@ -224,6 +224,8 @@ export interface FeatureCapabilities {
   resourceDeletePreconditions?: boolean
   /** POST /api/workloads/{kind}/{ns}/{name}/restart accepts {uid, resourceVersion}; an older Radar ignores the body and restarts unconditionally. */
   workloadRestartPreconditions?: boolean
+  /** POST workload actions/preview and actions/execute support reviewed scalar changes. */
+  reviewedWorkloadActions?: boolean
   gitopsWriteEvidence?: boolean
   agentSigninCheck?: boolean
   serviceEndpointSlices?: boolean

@@ -227,6 +227,7 @@ type FeatureCapabilities struct {
 	// POST /api/workloads/{kind}/{ns}/{name}/restart accepts {uid, resourceVersion};
 	// an older Radar ignores the body and restarts unconditionally.
 	WorkloadRestartPreconditions bool `json:"workloadRestartPreconditions"`
+	ReviewedWorkloadActions      bool `json:"reviewedWorkloadActions"`  // POST /api/workloads/{kind}/{ns}/{name}/actions/{preview|execute}
 	ServiceEndpointSlices        bool `json:"serviceEndpointSlices"`    // GET /api/services/{namespace}/{name}/endpointslices
 	TrafficRecords               bool `json:"trafficRecords"`           // GET /api/traffic/flows/records
 	GitOpsWriteEvidence          bool `json:"gitopsWriteEvidence"`      // POST /api/gitops/write-evidence
