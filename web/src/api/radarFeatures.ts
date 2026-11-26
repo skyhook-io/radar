@@ -32,17 +32,24 @@ export interface RadarFeatureSpec {
 export const RADAR_FEATURES = {
   datadogRightsizing: { label: 'Datadog-backed rightsizing', flag: 'datadogRightsizing', flagShippedWithEndpoint: true, requireAffirmativeSupport: true },
   datadogAgentPresence: { label: 'Datadog Agent setup hints', flag: 'datadogAgentPresence', flagShippedWithEndpoint: true },
+  gitopsActionCapabilities: { label: 'GitOps action permission checks', flag: 'gitopsActionCapabilities', flagShippedWithEndpoint: true },
+  openobserveCollectorPresence: { label: 'OpenObserve collector setup hints', flag: 'openobserveCollectorPresence', flagShippedWithEndpoint: true },
+  openobserveLocalSetup: { label: 'OpenObserve connections in Settings', flag: 'openobserveLocalSetup', flagShippedWithEndpoint: true },
   resourceReadCoverage: { label: 'Resource read coverage', flag: 'resourceReadCoverage', flagShippedWithEndpoint: true },
   searchCoverage: { label: 'Search coverage and object filters', flag: 'searchCoverage', flagShippedWithEndpoint: true },
   applicationEvidence: { label: 'Application evidence collection', flag: 'applicationEvidence', flagShippedWithEndpoint: true },
   searchEventContent: { label: 'Event reason and message searches', flag: 'searchEventContent', flagShippedWithEndpoint: true },
   resourceIssues: { label: 'Operational issues', minimumVersion: 'v1.8.0', flag: 'resourceIssues' },
   resourceIssueCoverage: { label: 'Resource-specific issue views', flag: 'resourceIssueCoverage', flagShippedWithEndpoint: true },
+  // An older Radar serves the route and ignores ?correlate=.
+  issueCorrelation: { label: 'Recent changes on an issue', flag: 'issueCorrelation', flagShippedWithEndpoint: true },
+  podDebugAccess: { label: 'Pod debug access', flag: 'podDebugAccess', flagShippedWithEndpoint: true, requireAffirmativeSupport: true },
   podEnvironment: { label: 'Values from ConfigMaps and Secrets', minimumVersion: 'v1.9.0', flag: 'podEnvironment' },
   policyResource: { label: 'Policy results', minimumVersion: 'v1.10.0', flag: 'policyResource' },
   capacity: { label: 'Capacity views', minimumVersion: 'v1.9.0' },
   // Radars from v1.15.0 serve the route without advertising the flag.
   rayClusterPods: { label: 'RayCluster runtime Pods', minimumVersion: 'v1.15.0', flag: 'rayClusterPods' },
+  replicaSetLogs: { label: 'Combined ReplicaSet logs', flag: 'replicaSetLogs', flagShippedWithEndpoint: true, requireAffirmativeSupport: true },
   upgradeReadiness: { label: 'Upgrade impact reports', minimumVersion: 'v1.9.0' },
   drainPlan: { label: 'Drain plans', minimumVersion: 'v1.14.0' },
   applications: { label: 'Applications', minimumVersion: 'v1.7.7' },
@@ -51,6 +58,9 @@ export const RADAR_FEATURES = {
   substrateHealthMetrics: { label: 'Agent Substrate charts', flag: 'substrateHealthMetrics', flagShippedWithEndpoint: true, requireAffirmativeSupport: true },
   cnpgWorkspace: { label: 'CloudNativePG views', flag: 'cnpgWorkspace', flagShippedWithEndpoint: true },
   sealedSecretsController: { label: 'Sealed Secrets controller status', flag: 'sealedSecretsController', flagShippedWithEndpoint: true },
+  sealedSecretsCert: { label: 'Sealed Secrets sealing certificate', flag: 'sealedSecretsCert', flagShippedWithEndpoint: true },
+  workflowStop: { label: 'Argo Workflow stop actions', flag: 'workflowStop', flagShippedWithEndpoint: true },
+  workflowTemplateSubmit: { label: 'Argo WorkflowTemplate submissions', flag: 'workflowTemplateSubmit', flagShippedWithEndpoint: true },
   cnpgProtectionSetup: { label: 'CloudNativePG backup setup', flag: 'cnpgProtectionSetup', flagShippedWithEndpoint: true },
   veleroWorkspace: { label: 'Velero views', flag: 'veleroWorkspace', flagShippedWithEndpoint: true },
   veleroBackupNow: { label: 'Back up now', flag: 'veleroBackupNow', flagShippedWithEndpoint: true },
@@ -59,6 +69,7 @@ export const RADAR_FEATURES = {
   veleroRunArtifacts: { label: 'Velero run contents and log', flag: 'veleroRunArtifacts', flagShippedWithEndpoint: true },
   veleroRuns: { label: 'Velero backup and restore lists', flag: 'veleroRuns', flagShippedWithEndpoint: true },
   veleroDeleteBackup: { label: 'Delete a Velero backup', flag: 'veleroDeleteBackup', flagShippedWithEndpoint: true },
+  workloadRestartPreconditions: { label: 'Reviewed workload restarts', flag: 'workloadRestartPreconditions', flagShippedWithEndpoint: true, requireAffirmativeSupport: true },
   resourceDeletePreconditions: { label: 'Delete only the object you reviewed', flag: 'resourceDeletePreconditions', flagShippedWithEndpoint: true },
   gitopsWriteEvidence: { label: 'GitOps revert warnings', flag: 'gitopsWriteEvidence', flagShippedWithEndpoint: true },
   serviceEndpointSlices: { label: 'Service EndpointSlice inventories', flag: 'serviceEndpointSlices', flagShippedWithEndpoint: true },
@@ -187,10 +198,9 @@ export function isRadarFeatureUnsupported(error: unknown, feature?: RadarFeature
 }
 
 /**
- * Runs `request` unless the connected Radar is known to predate `feature`.
- * When its version is unknown, chi's unknown-route 404 (ApiError.unknownRoute)
- * is read as the same answer; on a Radar known to serve the feature that 404
- * is a routing failure and stays an error.
+ * A request requiring affirmative support can run once support is confirmed.
+ * For features that allow probing, chi's unknown-route 404 on a probe means
+ * the feature is unsupported. With confirmed support it signals a routing error.
  */
 export async function guardRadarFeature<T>(
   feature: RadarFeature,
@@ -199,6 +209,10 @@ export async function guardRadarFeature<T>(
   request: () => Promise<T>,
 ): Promise<T> {
   if (support === 'unsupported') throw new RadarFeatureUnsupportedError(feature, versions)
+  const spec: RadarFeatureSpec = RADAR_FEATURES[feature]
+  if (support === 'unknown' && spec.requireAffirmativeSupport) {
+    throw new Error(`Radar support for ${spec.label} has not been confirmed`)
+  }
   try {
     return await request()
   } catch (error) {

@@ -197,7 +197,7 @@ func projectionAnswer(t testing.TB, s *projectionSession, obj runtime.Object, em
 	if !ok {
 		t.Fatal("capture failed")
 	}
-	rel, _ := RelationsAnswer(captured, emit, traverse, ownership.NewView(captured, emit), projectionRef(obj), obj, nil, nil)
+	rel, _ := answerWithCoverage(captured, emit, traverse, ownership.NewView(captured, emit), projectionRef(obj), obj, nil, nil)
 	return rel
 }
 func projectionCR(group, kind, ns, name string, fields map[string]any) *unstructured.Unstructured {
@@ -422,7 +422,7 @@ func TestRelationsAnswerIstioDomainFromIstiod(t *testing.T) {
 	if !ok {
 		t.Fatal("capture failed")
 	}
-	rel, _ := RelationsAnswer(captured, ownership.Unrestricted(), ownership.Unrestricted(), ownership.NewView(captured, ownership.Unrestricted()), projectionRef(vs), vs, &mockProvider{deployments: []*appsv1.Deployment{istiod}}, nil)
+	rel, _ := answerWithCoverage(captured, ownership.Unrestricted(), ownership.Unrestricted(), ownership.NewView(captured, ownership.Unrestricted()), projectionRef(vs), vs, &mockProvider{deployments: []*appsv1.Deployment{istiod}}, nil)
 	if rel.IstioServiceDomain != "corp.internal" {
 		t.Fatalf("Istio domain: %+v", rel)
 	}
@@ -632,7 +632,7 @@ func TestRelationsAnswerNetworkingHiddenHopsHaveNoOutputLimit(t *testing.T) {
 			if !ok {
 				t.Fatal("capture failed")
 			}
-			rel, coverage := RelationsAnswer(captured, emit, ownership.Unrestricted(), ownership.NewView(captured, emit), projectionRef(deployment), deployment, nil, nil)
+			rel, coverage := answerWithCoverage(captured, emit, ownership.Unrestricted(), ownership.NewView(captured, emit), projectionRef(deployment), deployment, nil, nil)
 			if !slices.Equal(rel.Gateways, []ResourceRef{refOf(projectionRef(gateway))}) || len(rel.Services)+len(rel.Routes) != 0 {
 				t.Fatalf("gateways %v, services %v, routes %v", rel.Gateways, rel.Services, rel.Routes)
 			}
@@ -659,7 +659,7 @@ func TestRelationsAnswerNetworkingHiddenStoreGaps(t *testing.T) {
 			if !ok {
 				t.Fatal("capture failed")
 			}
-			rel, coverage := RelationsAnswer(captured, emit, ownership.Unrestricted(), ownership.NewView(captured, emit), projectionRef(deployment), deployment, nil, nil)
+			rel, coverage := answerWithCoverage(captured, emit, ownership.Unrestricted(), ownership.NewView(captured, emit), projectionRef(deployment), deployment, nil, nil)
 			key := relations.GatewayParents.Name
 			if gk.Kind == "Service" {
 				key = relations.ServiceSelectors.Name
@@ -704,7 +704,7 @@ func TestRelationsAnswerStorageClassReverseLists(t *testing.T) {
 			if !ok {
 				t.Fatal("capture failed")
 			}
-			rel, coverage := RelationsAnswer(captured, tc.emit, ownership.Unrestricted(), ownership.NewView(captured, tc.emit), projectionRef(sc), sc, nil, nil)
+			rel, coverage := answerWithCoverage(captured, tc.emit, ownership.Unrestricted(), ownership.NewView(captured, tc.emit), projectionRef(sc), sc, nil, nil)
 			if len(rel.Consumers) != len(tc.want) {
 				t.Fatalf("consumers %v, want %v", rel.Consumers, tc.want)
 			}
@@ -802,7 +802,7 @@ func TestRelationsAnswerSpecialChecksKeepTheirOutcome(t *testing.T) {
 		if !ok {
 			t.Fatal("capture failed")
 		}
-		_, coverage := RelationsAnswer(captured, access, access, ownership.NewView(captured, access), projectionRef(subject), subject, nil, nil)
+		_, coverage := answerWithCoverage(captured, access, access, ownership.NewView(captured, access), projectionRef(subject), subject, nil, nil)
 		return coverage
 	}
 	coverage := answer(&undecidedAccess{undecided: []string{"NodePool"}, asked: map[string]int{}}, claim, claim, pool)
@@ -839,7 +839,7 @@ func TestRelationsAnswerEntrypointsSkipServiceSiblings(t *testing.T) {
 	access := &undecidedAccess{undecided: []string{"StatefulSet"}, asked: map[string]int{}}
 	s := newProjectionSession(t, deployment, sibling, svc, ingress)
 	captured, _ := relations.CaptureSubject(s, projectionRef(deployment), deployment)
-	rel, coverage := RelationsAnswer(captured, access, access, ownership.NewView(captured, access), projectionRef(deployment), deployment, nil, nil)
+	rel, coverage := answerWithCoverage(captured, access, access, ownership.NewView(captured, access), projectionRef(deployment), deployment, nil, nil)
 	if len(rel.Services) != 1 || len(rel.Ingresses) != 1 {
 		t.Fatalf("entrypoints: %+v", rel)
 	}
@@ -905,7 +905,7 @@ func TestRelationsAnswerFindsIstioDomainOnlyForIstioObjects(t *testing.T) {
 		if !ok {
 			t.Fatal("capture failed")
 		}
-		RelationsAnswer(captured, access, access, ownership.NewView(captured, access), projectionRef(tc.subject), tc.subject, provider, nil)
+		answerWithCoverage(captured, access, access, ownership.NewView(captured, access), projectionRef(tc.subject), tc.subject, provider, nil)
 		if listed != tc.want {
 			t.Errorf("%s with %d objects listed Deployments %d times, want %d", projectionRef(tc.subject).Kind, len(tc.objects), listed, tc.want)
 		}
@@ -1093,8 +1093,6 @@ func TestControllerChainToManager(t *testing.T) {
 	}
 }
 
-// Both climbs fall back to the object's own owner references when its
-// controller chain doesn't climb past it.
 func TestOwnerAboveFallsBackToOwnerReferences(t *testing.T) {
 	controller := true
 	set := projectionCR("argoproj.io", "ApplicationSet", "argocd", "apps", map[string]any{})
@@ -1107,20 +1105,16 @@ func TestOwnerAboveFallsBackToOwnerReferences(t *testing.T) {
 	owned := projectionObject(&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: "argocd", Name: "settings", UID: "settings", OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: "alone", UID: "alone"}}}}, "", "ConfigMap")
 	view := ownership.NewView(newProjectionSession(t, set, app, managed, ownerless, owned), ownership.Unrestricted())
 	for _, tc := range []struct {
-		name           string
-		subject        runtime.Object
-		top, toManager string
-		climbs         bool
+		name      string
+		subject   runtime.Object
+		toManager string
+		climbs    bool
 	}{
-		{"ownerless", ownerless, "", "", false},
-		{"sole owner reference", owned, "alone", "alone", true},
-		{"controller chain through a manager", managed, "apps", "web", true},
+		{"ownerless", ownerless, "", false},
+		{"sole owner reference", owned, "alone", true},
+		{"controller chain through a manager", managed, "web", true},
 	} {
 		r := projectionRef(tc.subject)
-		top, ok := OwnerAbove(view, r)
-		if ok != tc.climbs || top.Name != tc.top {
-			t.Errorf("%s: OwnerAbove = %v %v, want %q %v", tc.name, top, ok, tc.top, tc.climbs)
-		}
 		manager, ok := OwnerAboveToManager(view, r)
 		if ok != tc.climbs || manager.Name != tc.toManager {
 			t.Errorf("%s: OwnerAboveToManager = %v %v, want %q %v", tc.name, manager, ok, tc.toManager, tc.climbs)
@@ -1203,7 +1197,7 @@ func TestRelationsAnswerPlacesATrackedApplicationWithoutRevealingAHiddenOne(t *t
 			t.Fatal("capture failed")
 		}
 		ov := ownership.NewView(captured, caller)
-		rel, _ := RelationsAnswer(captured, caller, caller, ov, projectionRef(dep), dep, nil, nil)
+		rel, _ := answerWithCoverage(captured, caller, caller, ov, projectionRef(dep), dep, nil, nil)
 		m, _ := apimeta.Accessor(dep)
 		ApplyOwnership(rel, ov, ownership.Observe(projectionRef(dep), m))
 		if len(rel.ManagedBy) != 1 || rel.ManagedBy[0].Namespace != "argocd" {

@@ -1,50 +1,72 @@
-import { TerminalTab as SharedTerminalTab } from '@skyhook-io/k8s-ui'
-import { apiUrl, getWsUrl } from '../../api/config'
-import { apiFetch } from '../../api/client'
-import { connectionHeaders, useOpenedConnection, withConnectionParam } from '../../api/connectionBinding'
-import { readErrorBody } from '../../api/httpErrors'
+import { useState } from 'react'
+import { Link } from 'react-router-dom'
+import { relatedResourcePath } from '../../utils/navigation'
+import { getExecContainerNames, TerminalTab as SharedTerminalTab, type DockTab } from '@skyhook-io/k8s-ui'
+import { getApiBase, getWsUrl } from '../../api/config'
+import { useResource } from '../../api/client'
+import type { PodDebugTarget } from '../resources/PodDebugAction'
+import { MissingShellDebug } from './MissingShellDebug'
+import { PodDebugSession } from './PodDebugSession'
+import { useCurrentConnectionId, useOpenedConnection, withConnectionParam } from '../../api/connectionBinding'
 
 interface TerminalTabProps {
   namespace: string
   podName: string
+  podUID?: string
   containerName: string
+  onContainerChange?: (name: string) => void
   containers: string[]
   isActive?: boolean
   shell?: string
   note?: string
+  debugSession?: DockTab['debugSession']
+  onLeaveTerminal?: () => void
 }
 
-export function TerminalTab({ namespace, podName, containerName, containers, isActive, shell, note }: TerminalTabProps) {
-  const connection = useOpenedConnection()
-  const createSession = (container: string) =>
-    Promise.resolve({
-      wsUrl: withConnectionParam(getWsUrl(`/pods/${namespace}/${podName}/exec?container=${container}${shell ? `&shell=${encodeURIComponent(shell)}` : ''}`), connection),
-    })
-
-  const createDebugContainer = async (targetContainer: string) => {
-    const response = await apiFetch(apiUrl(`/pods/${namespace}/${podName}/debug`), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...connectionHeaders(connection) },
-      body: JSON.stringify({ targetContainer }),
-    })
-    if (!response.ok) {
-      const err = await readErrorBody(response)
-      throw new Error(err.error || `HTTP ${response.status}`)
+export function TerminalTab({ namespace, podName, podUID, containerName, containers, onContainerChange, isActive, shell, note, debugSession, onLeaveTerminal }: TerminalTabProps) {
+  const openedConnection = useOpenedConnection()
+  const [openedBase] = useState(getApiBase)
+  const connection = debugSession ? debugSession.connectionId : openedConnection
+  const base = debugSession?.apiBase ?? openedBase
+  const currentConnection = useCurrentConnectionId()
+  const sameConnection = currentConnection === connection && getApiBase() === base
+  const checkTargets = !!podUID && !shell && !debugSession && containers.length > 1
+  const pod = useResource<PodDebugTarget>('pods', namespace, podName, undefined, { enabled: checkTargets && sameConnection && isActive !== false })
+  const currentPod = sameConnection && !pod.error && pod.data?.metadata.uid === podUID ? pod.data : undefined
+  const pickerContainers = checkTargets ? getExecContainerNames(currentPod, { runningOnly: true }) : containers
+  const podDetailsLink = sameConnection && <Link
+    className="mb-2 inline-block text-xs text-accent underline underline-offset-2"
+    title="Close this terminal tab and open the current Pod"
+    onClick={event => { if (!event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey && event.button === 0) onLeaveTerminal?.() }}
+    to={relatedResourcePath({ kind: 'Pod', namespace, name: podName })}
+  >Open current Pod details</Link>
+  const createSession = async (container: string, failedPodUID?: string) => {
+    const uid = debugSession?.podUID ?? podUID ?? failedPodUID
+    if (getApiBase() !== base) throw new Error('The cluster connection changed. Reopen the Pod to start a terminal.')
+    return {
+      wsUrl: withConnectionParam(getWsUrl(`/pods/${namespace}/${podName}/exec?container=${encodeURIComponent(container)}${uid ? `&uid=${encodeURIComponent(uid)}` : ''}${shell ? `&shell=${encodeURIComponent(shell)}` : ''}`), connection),
     }
-    return response.json()
   }
 
-  return (
+  const terminal = (
     <SharedTerminalTab
       namespace={namespace}
       podName={podName}
       containerName={containerName}
-      containers={containers}
+      containers={pickerContainers}
+      onContainerChange={onContainerChange}
       isActive={isActive}
       createSession={createSession}
-      createDebugContainer={shell ? undefined : createDebugContainer}
+      podDetailsLink={podDetailsLink}
+      renderDebugAction={shell ? undefined : debugSession ? () => <p className="max-w-md text-xs text-theme-text-secondary">
+        This debug image has no usable shell. Open Pod details to choose another running container or start a debugger with a different image. {podDetailsLink}
+      </p> : (target, uid) =>
+        <MissingShellDebug key={JSON.stringify([uid,target])} namespace={namespace} name={podName} target={target} uid={uid} connection={connection} base={base} podDetailsLink={podDetailsLink} />}
       note={note}
       command={shell}
     />
   )
+  return debugSession ? <PodDebugSession namespace={namespace} podName={podName} containerName={containerName} session={debugSession} isActive={isActive} podDetailsLink={podDetailsLink}>
+    {terminal}
+  </PodDebugSession> : terminal
 }

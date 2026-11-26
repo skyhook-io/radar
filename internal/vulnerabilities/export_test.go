@@ -545,36 +545,39 @@ func TestExportStopsAtTheWorkloadBudget(t *testing.T) {
 			targets = append(targets, running(t, "sha256:"+img))
 		}
 	}
-	alloc := func(view View) (uint64, error) {
-		var before, after runtime.MemStats
-		runtime.ReadMemStats(&before)
-		_, err := build(context.Background(), items, targets, view, Filter{}, true)
-		runtime.ReadMemStats(&after)
-		return after.TotalAlloc - before.TotalAlloc, err
+	alloc := func(view View, wantErr error) int64 {
+		t.Helper()
+		// TotalAlloc includes other goroutines' allocations, so use the quietest sample.
+		var samples [3]int64
+		for i := range samples {
+			var before, after runtime.MemStats
+			runtime.ReadMemStats(&before)
+			_, err := build(context.Background(), items, targets, view, Filter{}, true)
+			runtime.ReadMemStats(&after)
+			samples[i] = int64(after.TotalAlloc - before.TotalAlloc)
+			if !errors.Is(err, wantErr) {
+				t.Fatalf("%s sample %d: budget=%d refs, allocated=%d bytes, got %v, want %v", view, i+1, maxExportRefs, samples[i], err, wantErr)
+			}
+		}
+		return slices.Min(samples[:])
 	}
-	full, err := alloc(ViewCVE)
-	if err != nil {
-		t.Fatalf("within the default budget: %v", err)
-	}
+	full := alloc(ViewCVE, nil)
 	// What reading the reports costs before any row is built.
-	base, err := alloc(ViewSummary)
-	if err != nil {
-		t.Fatal(err)
-	}
+	base := alloc(ViewSummary, nil)
 	// The lowered budget below still fits a smaller export of the same shape.
 	saved := maxExportRefs
+	t.Cleanup(func() { maxExportRefs = saved })
 	maxExportRefs = 5_000
 	if _, err := build(context.Background(), items[:1], targets[:200], ViewImage, Filter{}, true); err != nil {
-		t.Fatalf("a smaller export: %v", err)
+		t.Fatalf("smaller image export with 1 image and 200 targets: budget=%d refs, full=%d base=%d bytes: %v", maxExportRefs, full, base, err)
 	}
-	t.Cleanup(func() { maxExportRefs = saved })
 	for _, view := range []View{ViewCVE, ViewFix, ViewImage} {
-		used, err := alloc(view)
-		if !errors.Is(err, ErrExportTooLarge) {
-			t.Fatalf("%s: %v", view, err)
-		}
-		if view == ViewCVE && used-base > (full-base)/4 {
-			t.Fatalf("rows cost %d of a full build's %d", used-base, full-base)
+		used := alloc(view, ErrExportTooLarge)
+		if view == ViewCVE {
+			t.Logf("allocated bytes: full=%d base=%d used=%d", full, base, used)
+			if full <= base || used-base > (full-base)/4 {
+				t.Fatalf("aborted rows cost %d bytes, full rows cost %d bytes: full=%d base=%d used=%d", used-base, full-base, full, base, used)
+			}
 		}
 	}
 }

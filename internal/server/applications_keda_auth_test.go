@@ -11,7 +11,7 @@ import (
 )
 
 func TestApplicationAuthenticationReferencesAreFilteredWithoutChangingSharedRows(t *testing.T) {
-	s := &Server{permCache: auth.NewPermissionCache()}
+	s := &Server{permCache: auth.NewPermissionCache().WithConnectionKey(currentPermissionConnection)}
 	references := []topology.ResourceRef{
 		{Kind: "TriggerAuthentication", Group: "keda.sh", Namespace: "team", Name: "private-local"},
 		{Kind: "ClusterTriggerAuthentication", Group: "keda.sh", Name: "private-cluster"},

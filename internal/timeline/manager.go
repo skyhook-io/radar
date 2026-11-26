@@ -144,7 +144,7 @@ func NewDegradedMemoryStore(maxSize int, reason string) *pkgtimeline.MemoryStore
 
 var (
 	globalStoreInitMu sync.Mutex
-	globalStore       = &StoreBinding{}
+	globalStore       = newStoreBinding()
 	globalStoreOnce   sync.Once
 	globalStoreMu     sync.Mutex
 	globalConfig      StoreConfig
@@ -325,17 +325,27 @@ func HistoryEvictedThrough() time.Time {
 
 // StoreBinding belongs to one timeline initialization. PostgreSQL can become
 // available after the informers start, so they capture the binding and resolve
-// its store for each change. ResetStore leaves old bindings on their own store.
+// its store for each change. ResetStore leaves old bindings with their store and metrics.
 type StoreBinding struct {
+	retired                         atomic.Bool
 	store                           EventStore
+	metrics                         *EventMetrics
 	deletedWhileUnavailable         map[string]struct{}
 	deletedWhileUnavailableOverflow bool
+}
+
+func newStoreBinding() *StoreBinding {
+	return &StoreBinding{metrics: newEventMetrics()}
 }
 
 func CaptureStore() *StoreBinding {
 	globalStoreMu.Lock()
 	defer globalStoreMu.Unlock()
 	return globalStore
+}
+
+func (b *StoreBinding) Retired() bool {
+	return b.retired.Load()
 }
 
 func (b *StoreBinding) Store() EventStore {
@@ -357,7 +367,12 @@ func setGlobalStore(s EventStore) {
 	globalStoreMu.Unlock()
 }
 
-// ResetStore stops and clears the event store.
+// SetStoreForTest lets a test wrap the current store to control when an operation runs.
+func SetStoreForTest(s EventStore) {
+	setGlobalStore(s)
+}
+
+// ResetStore stops and clears the event store and replaces its metrics.
 // This must be called before reinitializing when switching contexts.
 func ResetStore() {
 	globalStoreInitMu.Lock()
@@ -366,8 +381,9 @@ func ResetStore() {
 	stopPostgresReconnect()
 
 	globalStoreMu.Lock()
+	globalStore.retired.Store(true)
 	store := globalStore.store
-	globalStore = &StoreBinding{}
+	globalStore = newStoreBinding()
 	observationStartNanos.Store(0)
 	globalStoreOnce = sync.Once{}
 	globalStoreErr = nil

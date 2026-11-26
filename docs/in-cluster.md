@@ -41,7 +41,7 @@ scaling workloads still follow their existing permissions.
 | Cost data | `cost.source`, `cost.kubecost.url`, `cost.kubecost.clusterId`, `cost.kubecost.existingSecret`, `cost.currency` |
 | Audit policy | `audit.ignoredNamespaces`, `audit.disabledChecks` |
 | Helm OCI chart sources | `helm.ociSources` |
-| Timeline / MCP | `timeline`, `persistence`, `mcp.enabled` |
+| Timeline / MCP | `timeline`, `persistence`, `mcp.enabled`, `mcp.oauth.enabled` |
 
 For example, add this to your existing values file:
 
@@ -431,9 +431,11 @@ Some features require additional permissions. Most are disabled by default for s
 | Helm Write | `rbac.helm: true` | `false` | Install/upgrade/rollback/uninstall Helm releases (grants broad write access; auto-enables secrets). When auth or cloud is on, also emits a split helm add-on: `radar-helm` (CRDs/storage/PDBs/namespaces, bound to owner+member) and `radar-helm-admin` (RBAC/webhooks/APIServices, owner-only) — see [authentication.md](authentication.md#cloud-mode-helm-bindings) |
 | RBAC view | `rbac.viewRBAC: true` | `false` | Show ClusterRoles, ClusterRoleBindings, Roles, RoleBindings in the resource browser. Off by default: cache-served reads bypass per-user RBAC, so granting this exposes the cluster's authorization graph to every authenticated Radar user |
 | Webhooks view | `rbac.viewWebhooks: true` | `false` | Show admission webhook configurations. Off by default because they expose the cluster's admission-control posture; auto-enabled when auth or cloud mode enforces each user's own RBAC |
-| Admission policies view | `rbac.viewAdmissionPolicies: true` | `false` | Show native ValidatingAdmissionPolicies and ValidatingAdmissionPolicyBindings. Off by default because they expose admission-control coverage and gaps; auto-enabled when auth or cloud mode enforces each user's own RBAC |
+| Admission policies view | `rbac.viewAdmissionPolicies: true` | `false` | Show native validating and mutating admission policies and bindings. Off by default because they expose admission-control coverage and gaps; auto-enabled when auth or cloud mode enforces each user's own RBAC |
 | Node runtime evidence | `rbac.viewNodeRuntime: true` | `false` | Let upgrade-impact checks inspect kubelet metrics and effective configuration through `nodes/proxy`. Enable only for a trusted no-auth audience; authenticated users need this permission on their own Kubernetes identity |
 | Traffic TLS | `rbac.traffic: true` | `true` | Read Hubble relay TLS certs for Cilium traffic observation |
+
+Mutating admission policies use the version served by the cluster (v1, v1beta1 or v1alpha1). The policy drawer shows each CEL patch in order and links to its bindings. The binding narrows the policy’s matching rules. Authenticated users need their own cluster-scoped permissions to read these resources. The default Radar Cloud user tiers require an explicit grant for these two kinds.
 
 > **Node management** (cordon, uncordon, drain) is available via the MCP server and API. These operations require `patch` on nodes, `list` on pods, and `create` on `pods/eviction`, which are not included in the default ClusterRole. The read-only drain plan (`POST /api/nodes/{name}/drain-plan`) needs `get` on nodes, `list` on pods and `list` on `poddisruptionbudgets`; without the last one the plan is still returned, marked as not having evaluated PodDisruptionBudgets. Note the defaults differ when `deleteEmptyDirData` is omitted from the request body: the drain plan assumes `false`, while the drain itself (and the MCP `manage_node` drain) assumes `true` — API callers should always send the field explicitly. Add the grants via `rbac.additionalRules` or use [per-user authentication](authentication.md) so each user's own RBAC governs node operations.
 
@@ -449,7 +451,13 @@ rbac:
   helm: false         # Enable Helm write operations (broad permissions)
 ```
 
-The terminal's **Debug** action launches a throwaway container (ephemeral container on a pod, or a privileged pod on a node) using `busybox:latest` by default. If the built-in restricted Pod Security Standard rejects the default pod debug container, Radar retries with a restricted-compatible Linux security context using the target/pod non-root UID, or UID `65532` by default, so custom images used in restricted namespaces must work as a non-root user. In air-gapped or private-registry clusters where the default image can't be pulled, point it at a reachable mirror:
+Pod **Debug** requires `get pods`, `create pods/exec`, and a separate `update pods/ephemeralcontainers` grant in the Pod’s namespace. The chart’s `rbac.podExec` grants exec only. Use a namespaced Role and RoleBinding for Radar’s ServiceAccount when authentication is off, or for the signed-in user or group when per-user authentication is enabled. Standalone and in-cluster Radar can start a new debug container from Pod details or missing-shell recovery. Radar Hub keeps debug-container creation disabled. A host that supports Pod exec can still open a shell in an existing running debugger.
+
+For a selected Pod, Radar checks named exec and ephemeral-container update permissions when the namespace-wide grant is insufficient. A Role with `resourceNames` can therefore grant debugging on one Pod. In a shell-less container, the terminal offers a running debugger targeting that container first. If access is denied it can copy a request for the specific Pod, namespace and permission.
+
+To open a fresh shell in an existing container, open the Pod and choose **Open terminal** under **Running debug containers**. This requires Pod read and exec access. Closing the tab and opening it again uses the same container.
+
+The **Debug** action launches a throwaway container (ephemeral container on a pod, or a privileged pod on a node) using `busybox:latest` by default. If the built-in restricted Pod Security Standard rejects the default pod debug container, Radar retries with a restricted-compatible Linux security context using the target/pod non-root UID, or UID `65532` by default, so custom images used in restricted namespaces must work as a non-root user. In air-gapped or private-registry clusters where the default image can't be pulled, point it at a reachable mirror:
 
 ```yaml
 # values.yaml
@@ -568,6 +576,8 @@ auth:
     redirectURL: https://radar.example.com/auth/callback
 ```
 
+To connect remote MCP clients through browser login, also set `mcp.oauth.enabled: true`. This requires standalone OIDC mode, an HTTPS callback URL, and `replicaCount: 1`. The chart uses `Recreate` rollouts because OAuth registrations and tokens are held in memory; clients must re-register and authorize after pod restarts. See [Remote MCP authentication](mcp.md#remote-authentication-with-oidc) for the full setup and discovery paths your ingress must expose.
+
 ## Security Considerations
 
 When deploying Radar in-cluster:
@@ -622,6 +632,7 @@ See [Helm Chart README](../deploy/helm/radar/README.md) for all available values
 | `service.port` | Service port | `9280` |
 | `basePath` | URL prefix Radar serves under, e.g. `/radar` for no-strip-prefix subpath ingress | `""` |
 | `mcp.enabled` | Enable MCP server for AI tools | `true` |
+| `mcp.oauth.enabled` | Enable MCP OAuth for single-replica standalone OIDC deployments | `false` |
 | `debug.image` | Image for ephemeral debug containers and node debug pods. In built-in restricted PodSecurity namespaces, pod debug containers may retry as the target/pod non-root UID, or UID `65532` by default; point at a compatible mirror for air-gapped / private-registry clusters. | `""` (busybox:latest) |
 | `listPageSize` | Paginate the initial LIST of high-cardinality kinds (Pods, ReplicaSets) on very large clusters that fail to sync; `0` = off, try `2000`. Only used when the apiserver lacks WatchList streaming. | `0` |
 | `timeline.storage` | Event storage (memory/sqlite/postgres) | `memory` |
@@ -646,7 +657,7 @@ See [Helm Chart README](../deploy/helm/radar/README.md) for all available values
 | `rbac.helm` | Enable Helm write operations | `false` |
 | `rbac.viewRBAC` | Show RBAC objects in resource browser | `false` |
 | `rbac.viewWebhooks` | Show admission webhook configurations | `false` |
-| `rbac.viewAdmissionPolicies` | Show native validating admission policies and bindings | `false` |
+| `rbac.viewAdmissionPolicies` | Show native validating and mutating admission policies and bindings | `false` |
 | `rbac.viewNodeRuntime` | Inspect kubelet metrics and effective configuration for upgrade impact | `false` |
 | `rbac.traffic` | Read Hubble TLS certs | `true` |
 | `rbac.crdGroups.all` | `get/list/watch` on every API group and resource, including core Secrets; overrides per-group flags | `false` |

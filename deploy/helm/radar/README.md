@@ -316,6 +316,70 @@ Radar binary (including Radar Cloud self-upgrade) does not update RBAC. Missing 
 on an older `--reuse-values` installation default to enabled; set explicit false
 before upgrading if the added visibility is unwanted.
 
+### Cloud Owner access to Argo CD
+
+The chart lets Cloud Owners refresh and sync Argo CD Applications on a standard
+install. The [grant](files/integration-write-baseline.yaml) fills the gap in
+the built-in `admin` role.
+
+```yaml
+cloud:
+  defaultRbac:
+    integrationWrite:
+      argocd:
+        owner: true  # Set false to opt out
+```
+
+The switch grants `get` and `patch` on Argo CD Applications
+(`argoproj.io/applications`) through a `*-integration-write` ClusterRole bound
+to `radar:owner` and `cloud:owner`.
+
+The grant is on by default for chart-managed Cloud owners, including owners
+with a custom base role. Set `owner: false` to disable the add-on. Kubernetes
+RBAC is additive, so other bindings and vendor aggregation can still grant
+access. An owner bound to `cluster-admin` already has Application patch access.
+
+The add-on also requires `cloud.enabled`, `rbac.create`,
+`cloud.defaultRbac.create`, `cloud.defaultRbac.owner`, and the `argo`
+collection (`rbac.crdGroups.argo` or `all`). If `rbac.namespaces` is set, the
+chart creates a RoleBinding in each listed namespace. Cloud actions use the
+caller’s Kubernetes identity, including MCP clients and confirmed actions in
+Radar Diagnose. `rbac.additionalRules` extends the collector ServiceAccount,
+which is the identity used for in-cluster actions without authentication.
+
+**Authority delegated.** Kubernetes grants access to the entire Application.
+The patch permission applies through any Kubernetes client and covers deployment
+configuration, project assignment, and sync operations. These requests use
+Kubernetes authorization. The Argo CD controller then uses its own deployment
+credentials, which can extend to cluster-scoped resources and to other clusters.
+Review the [controller credentials](https://argo-cd.readthedocs.io/en/stable/operator-manual/security/#cluster-rbac),
+eligible [AppProjects](https://argo-cd.readthedocs.io/en/stable/user-guide/projects/),
+and any Kubernetes admission controls before granting this access.
+
+The namespace setting scopes access to Application objects. Those Applications
+may deploy into different namespaces or clusters. To limit the grant to named
+Applications, leave the add-on off and manage RoleBindings with `resourceNames`.
+Each named Application still delegates controller authority.
+
+**Upgrades.** Upgrading the chart adds this permission to eligible Cloud owners.
+Older values files that omit the key inherit `true`, including with
+`helm upgrade --reuse-values`. A saved `false` continues to disable the grant
+when the upgrade reuses that value. To opt out, set
+`cloud.defaultRbac.integrationWrite.argocd.owner=false` in the release values
+before applying the chart:
+
+```bash
+helm upgrade radar skyhook/radar -n radar --reuse-values \
+  --set cloud.defaultRbac.integrationWrite.argocd.owner=false
+```
+
+For an installation managed by Argo CD or Flux, change the values in Git.
+If Argo CD manages the Radar release, [sync with pruning enabled](https://argo-cd.readthedocs.io/en/stable/user-guide/auto_sync/#automatic-pruning).
+Verify that the `*-cloud-owner-integration-write` ClusterRoleBinding, or the
+RoleBinding in each configured namespace, has been removed. Review other
+bindings, changes made to Applications while the grant was on, and pending
+operations the Argo CD controller can still run.
+
 ### Radar Cloud background services (`radar:system`)
 
 Radar Cloud's alerts worker and timeline puller read as `radar:system`.
@@ -413,6 +477,7 @@ trend charts remain unavailable for Kubecost.
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | `replicaCount` | Number of replicas | `1` |
+| `mcp.oauth.enabled` | Enable MCP OAuth for a single-replica standalone OIDC deployment | `false` |
 | `image.repository` | Image repository | `ghcr.io/skyhook-io/radar` |
 | `image.tag` | Image tag | Chart appVersion |
 | `service.type` | Service type | `ClusterIP` |
@@ -444,8 +509,8 @@ trend charts remain unavailable for Kubecost.
 | `traffic.prometheusUrl` | Manual Prometheus/VictoriaMetrics URL (skips auto-discovery) | `""` |
 | `traffic.prometheusHeaders` | HTTP headers sent with every Prometheus request (auth-protected backends). Requires `traffic.prometheusUrl` — credentials are never sent to auto-discovered endpoints | `{}` |
 | `traffic.prometheusHeadersFromEnv` | Prometheus headers sourced from environment variables, for secret-backed auth headers. Requires `traffic.prometheusUrl` | `{}` |
-| `traffic.prometheusSingleCluster` | Assert that the backend is dedicated to this cluster for workload metrics and PVC usage. Replaces automatic matching. [Scope limits](../../../docs/workload-metrics.md#optional-operator-override) | `false` |
-| `traffic.prometheusClusterLabels` | Exact cluster label/value constraints for workload metrics, PVC usage and, when `prometheusUrl` is set, the Caretta/Beyla/Istio traffic map, combined with AND. Labels must exist on each affected metric source. Alternative to `prometheusSingleCluster`; leave both unset for automatic matching | `{}` |
+| `traffic.prometheusSingleCluster` | Assert that the backend is dedicated to this cluster for workload metrics, rightsizing and PVC usage. Replaces automatic matching. [Scope limits](../../../docs/workload-metrics.md#optional-operator-override) | `false` |
+| `traffic.prometheusClusterLabels` | Exact cluster label/value constraints for workload metrics, rightsizing, PVC usage and, when `prometheusUrl` is set, the Caretta/Beyla/Istio traffic map, combined with AND. Labels must exist on each affected metric source. Alternative to `prometheusSingleCluster`; leave both unset for automatic matching | `{}` |
 | `traffic.beylaJobSelector` | Beyla Live Traffic matcher fragment. Workload charts use it only with an explicit scope override and accept one `job` equality or regex matcher; custom workload jobs are normally discovered automatically | `""` |
 | `argocd.existingSecret` | Name of a Secret holding the Argo CD API token (recommended — keeps it out of the release) | `""` |
 | `argocd.existingSecretKey` | Key within `argocd.existingSecret` holding the token | `token` |
@@ -588,13 +653,25 @@ Disabled by default for security:
 |---------|-------|-------------|
 | Secrets | `rbac.secrets: true` | View secrets in resource list. Also granted by `rbac.helm` (Helm stores releases in Secrets), by auth (`auth.mode` other than `none`), and in cloud mode, where every Secret read is re-checked against the requesting user's own RBAC. The grant is cluster-wide `get/list/watch` on all Secrets; `rbac.secrets: false` does not remove it in those modes. |
 | Terminal | `rbac.podExec: true` | Shell access to pods |
+| Pod Debug | A namespaced grant to `update` core `pods/ephemeralcontainers`, in addition to terminal access and `get pods` | Add an ephemeral toolbox container and open its terminal |
 | Port Forward | `rbac.portForward: true` | Port forwarding to pods. Also the fallback for traffic sources (Hubble/Caretta) — Radar dials the relay/metrics Service directly first, so in-cluster installs only need this when a NetworkPolicy or routing blocks Radar's namespace from reaching the service |
 | Logs | `rbac.podLogs: true` | View pod logs (**enabled by default**) |
 | Helm Write | `rbac.helm: true` | Install/upgrade/rollback/uninstall Helm releases. Installs with auth and Cloud off: grants Radar's ServiceAccount create/update/patch/delete on all resource types, since Helm runs as it. Under auth or cloud-mode Helm runs as the signed-in user, so the ServiceAccount gets no write grant; instead a split helm add-on ClusterRole is emitted — `radar-helm` (member-safe: CRDs, storage, namespaces) and `radar-helm-admin` (owner-only: RBAC, webhooks, ApiServices) |
 | RBAC view | `rbac.viewRBAC: true` | Show ClusterRoles, ClusterRoleBindings, Roles, RoleBindings and CertificateSigningRequests in the resource browser. Off by default — cache-served reads bypass per-user RBAC, so this exposes the cluster's authorization graph to every authenticated Radar user. Auto-enabled under auth or cloud mode (every read is re-checked per user there). |
 | Webhooks view | `rbac.viewWebhooks: true` | Show MutatingWebhookConfigurations and ValidatingWebhookConfigurations in the resource browser. Off by default — the configurations reveal which admission controls are enforced (Gatekeeper / Kyverno policies, image scanners, DLP) and where the gaps are, which is recon value for a low-trust viewer. Auto-enabled under auth or cloud mode. |
-| Admission policies view | `rbac.viewAdmissionPolicies: true` | Show native ValidatingAdmissionPolicies and ValidatingAdmissionPolicyBindings in the resource browser. Off by default for no-auth installs because the declarations expose admission-control coverage and gaps. Auto-enabled under auth or cloud mode, where reads are re-checked per user. |
+| Admission policies view | `rbac.viewAdmissionPolicies: true` | Show native validating and mutating admission policies and bindings in the resource browser. Off by default for no-auth installs because the declarations expose admission-control coverage and gaps. Auto-enabled under auth or cloud mode, where reads are re-checked per user. |
 | Node runtime evidence | `rbac.viewNodeRuntime: true` | Let upgrade-impact checks inspect kubelet metrics and effective configuration through `nodes/proxy`. Off by default because this exposes node-level runtime and configuration details to anyone who can reach a no-auth Radar install. Under auth, grant `get` on `nodes/proxy` to each Kubernetes identity that should inspect this evidence. |
+
+For Pod Debug, bind the extra `pods/ephemeralcontainers` permission in the target namespace. With authentication off, bind Radar’s ServiceAccount. With per-user authentication, grant the signed-in user or their group. Pod Debug is available in standalone and in-cluster Radar. The Radar Hub UI omits both the Pod action and the missing-shell recovery action.
+
+For example, add the separate grant for an existing per-user group in one namespace:
+
+```sh
+kubectl -n payments create role pod-debugger --verb=update --resource=pods/ephemeralcontainers
+kubectl -n payments create rolebinding pod-debugger --role=pod-debugger --group=payments-oncall
+```
+
+With authentication off, use `--serviceaccount=<radar-namespace>:<radar-serviceaccount>` in place of `--group`. These commands add only the ephemeral-container permission.
 
 ### MCP container commands
 
@@ -708,7 +785,7 @@ It creates a namespace-scoped Role (not a ClusterRole) with `get` + `patch` on t
 
 ### CRD Access
 
-Radar discovers CRDs in your cluster. Common CRD groups are enabled by default; Flagger and system-upgrade-controller are explicitly opt-in. Granting RBAC for CRDs that don't exist has no effect.
+Radar discovers CRDs in your cluster. Common CRD groups are enabled by default; Flagger, the k3s Helm controller and system-upgrade-controller are explicitly opt-in. Granting RBAC for CRDs that don't exist has no effect.
 
 **Wildcard option:** Grant the collector service account read access to every API group and resource:
 ```bash
@@ -741,8 +818,9 @@ retain their finite grants.
 | `externalDns` | `externaldns.k8s.io` |
 | `externalSecrets` | `external-secrets.io` |
 | `flagger` | `flagger.app` (`canaries`, `metrictemplates` only); **off by default**. Enable `rbac.crdGroups.flagger=true` for native browsing and failed-rollout Issues. |
-| `flux` | `*.toolkit.fluxcd.io` |
+| `flux` | `*.toolkit.fluxcd.io`, `source.extensions.fluxcd.io` (ArtifactGenerator) |
 | `fluxOperator` | `fluxcd.controlplane.io` (FluxInstance, FluxReport, ResourceSet, ResourceSetInputProvider) |
+| `k3sHelm` | `helm.cattle.io` (`helmcharts`, `helmchartconfigs` only); **off by default**, because `spec.valuesContent` and `spec.set` can carry credentials. Enable `rbac.crdGroups.k3sHelm=true` on k3s/RKE2 for the HelmChart drawers and the `k3s` badge on the releases they manage. |
 | `gatewayApi` | `gateway.networking.k8s.io` |
 | `gcpMonitoring` | `monitoring.googleapis.com` |
 | `grafana` | `monitoring.grafana.com`, `tempo.grafana.com`, `loki.grafana.com`, `grafana.integreatly.org` |

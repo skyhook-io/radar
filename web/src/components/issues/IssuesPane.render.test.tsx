@@ -8,7 +8,7 @@ const state = vi.hoisted(() => ({
   fleet: { data: undefined as IssuesResponse | undefined, isLoading: false, error: null as Error | null, dataUpdatedAt: 0, refetch: vi.fn() },
   subject: { data: undefined as SubjectIssuesResponse | undefined, isLoading: false, error: null as Error | null, dataUpdatedAt: 0, refetch: vi.fn() },
 }))
-vi.mock('../../api/client', () => ({ useIssues: () => state.fleet, useSubjectIssues: () => state.subject }))
+vi.mock('../../api/client', () => ({ useIssues: () => state.fleet, useSubjectIssues: () => state.subject, useIssueCorrelation: () => ({ data: undefined, error: null, isFetching: false, dataUpdatedAt: 0, refetch: vi.fn() }), useIssueRowChanges: () => undefined }))
 vi.mock('../../api/apiResources', () => ({ useAPIResources: () => ({ data: undefined }), karpenterCapacityAvailable: () => false }))
 vi.mock('../../contexts/CapabilitiesContext', () => ({ useCapabilitiesContext: () => ({}) }))
 vi.mock('../../context/ConnectionContext', () => ({ useConnection: () => ({ connection: { state: 'connected' } }) }))

@@ -126,19 +126,17 @@ type integrationRBACDocument struct {
 	RoleRef           rbacv1.RoleRef      `json:"roleRef"`
 }
 
-func renderIntegrationReadChart(t *testing.T, overrides string, removeMap, removeKey bool) (map[string]string, []integrationRBACDocument) {
+// renderCloudChart renders the chart in Cloud mode. editDefaults edits the
+// chart's own cloud.defaultRbac defaults first: an older
+// `helm upgrade --reuse-values` value tree lacks newer keys entirely.
+func renderCloudChart(t *testing.T, overrides string, editDefaults func(defaultRbac map[string]interface{})) map[string]string {
 	t.Helper()
 	chart, err := loader.Load(filepath.Join("..", "..", "deploy", "helm", "radar"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if removeMap || removeKey {
-		rbac := chart.Values["cloud"].(map[string]interface{})["defaultRbac"].(map[string]interface{})
-		if removeMap {
-			delete(rbac, "integrationRead")
-		} else {
-			delete(rbac["integrationRead"].(map[string]interface{}), "viewer")
-		}
+	if editDefaults != nil {
+		editDefaults(chart.Values["cloud"].(map[string]interface{})["defaultRbac"].(map[string]interface{}))
 	}
 	values := map[string]interface{}{}
 	if err := strvals.ParseInto("cloud.enabled=true,cloud.token=dummy,cloud.url=wss://cloud.example,cloud.clusterName=test,"+overrides, values); err != nil {
@@ -152,7 +150,12 @@ func renderIntegrationReadChart(t *testing.T, overrides string, removeMap, remov
 	if err != nil {
 		t.Fatal(err)
 	}
-	decoder := yamlutil.NewYAMLOrJSONDecoder(strings.NewReader(rendered["radar/templates/cloud-rbac-integration-read.yaml"]), 4096)
+	return rendered
+}
+
+func decodeRBACDocuments(t *testing.T, manifest string) []integrationRBACDocument {
+	t.Helper()
+	decoder := yamlutil.NewYAMLOrJSONDecoder(strings.NewReader(manifest), 4096)
 	var docs []integrationRBACDocument
 	for {
 		var doc integrationRBACDocument
@@ -165,7 +168,19 @@ func renderIntegrationReadChart(t *testing.T, overrides string, removeMap, remov
 			docs = append(docs, doc)
 		}
 	}
-	return rendered, docs
+	return docs
+}
+
+func renderIntegrationReadChart(t *testing.T, overrides string, removeMap, removeKey bool) (map[string]string, []integrationRBACDocument) {
+	t.Helper()
+	rendered := renderCloudChart(t, overrides, func(rbac map[string]interface{}) {
+		if removeMap {
+			delete(rbac, "integrationRead")
+		} else if removeKey {
+			delete(rbac["integrationRead"].(map[string]interface{}), "viewer")
+		}
+	})
+	return rendered, decodeRBACDocuments(t, rendered["radar/templates/cloud-rbac-integration-read.yaml"])
 }
 
 func TestIntegrationReadBindings(t *testing.T) {

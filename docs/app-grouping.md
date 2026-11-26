@@ -335,7 +335,7 @@ workload rows. After that, the normal portable fold (§6) takes over.
 
 | Concern | File |
 |---------|------|
-| **Composition: the boundary** — `applicationStructuralRoot`, `rootOf`, the request attachment batch | `internal/server/applications_relations.go`; shared climb in `pkg/topology/relations_answer.go` (`OwnerAbove`) |
+| **Composition: the boundary** — `applicationStructuralRoot`, `rootOf`, the request attachment batch | `internal/server/applications_relations.go`; shared climb in `pkg/topology/relations_answer.go` (`OwnerAboveToManager`) |
 | Composition: `groupApplications`, `inputAtoms`, the union-find over atoms | `internal/server/applications.go` |
 | Composition: the overlay signal cascade (the 9 tiers, `ResolveOverlay`) | `pkg/subject/overlay.go` |
 | Identity within a cluster: env grouping + `source`/`portable`/`pathKey` | `internal/server/applications_identity.go` |

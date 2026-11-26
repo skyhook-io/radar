@@ -1,7 +1,8 @@
+import { hasPrometheusCharts, metricsSourceUnavailable } from '../../api/prometheusCharts'
 import { clsx } from "clsx";
 import { useMemo, type ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Loader2, Wifi, WifiOff } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { Disclosure } from "@skyhook-io/k8s-ui/components/ui/Disclosure";
 import { ClusterScopeNote } from "@skyhook-io/k8s-ui/components/ui/ClusterScopeNote";
 import { isClusterScopeWithheld } from "@skyhook-io/k8s-ui/types/cluster-scope";
@@ -20,7 +21,6 @@ import {
 } from "@skyhook-io/k8s-ui/utils/badge-colors";
 import {
   usePrometheusStatus,
-  usePrometheusConnect,
   usePrometheusResourceMetrics,
   useAutoPromConnect,
   type PrometheusMetricCategory,
@@ -38,9 +38,8 @@ import { RestartEventLane } from "./RestartChart";
 import { Tooltip } from "../ui/Tooltip";
 import { WorkloadMetricsSection } from "./WorkloadMetricsSection";
 import { RightsizingStrip } from "./RightsizingStrip";
-import { useNavCustomization } from "../../context/NavCustomization";
 import { leastCertainScope, NAME_MATCHED_CLUSTER_NOTE, NAME_MATCHED_SUMMARY } from "./nameMatchedScope";
-import { previousSettingsNote, usePreviousIntegrationSettings } from '../../hooks/usePreviousIntegrationSettings';
+import { MetricsNotConnected, OpenObserveUnavailable } from "./MetricsNotConnected";
 
 // Used when MetricsTabContent is in expanded (full-screen) mode. Drawer mode
 // uses the single-chart tabbed `PrometheusCharts` instead — drawer width
@@ -79,15 +78,11 @@ export function PrometheusChartsGrid({
 }: PrometheusChartsGridProps) {
   useAutoPromConnect();
   const { data: status, isLoading: statusLoading } = usePrometheusStatus();
-  const connectMutation = usePrometheusConnect();
-  const isConnected = status?.connected === true;
+  const isConnected = hasPrometheusCharts(status);
   const isSupported = SUPPORTED_KINDS.has(kind);
   const isWorkload = ["Deployment", "StatefulSet", "DaemonSet"].includes(kind);
   const showRestartLane = isSupported && kind !== "Node";
 
-  const settingsAvailable = !useNavCustomization().embedded;
-  const offers = usePreviousIntegrationSettings(isSupported && !statusLoading && !!status && !isConnected && !status.discovering);
-  const previousNote = offers.metrics ? previousSettingsNote('metrics', offers.metrics) : undefined;
   const [searchParams, setSearchParams] = useSearchParams();
   const timeRange = TIME_RANGES.find((range) => range.value === searchParams.get("metricsRange"))?.value ?? "1h";
 
@@ -110,7 +105,8 @@ export function PrometheusChartsGrid({
   const rxScope = usePrometheusResourceMetrics(kind, namespace, name, "network_rx", timeRange, false).data?.clusterScope;
   const txScope = usePrometheusResourceMetrics(kind, namespace, name, "network_tx", timeRange, false).data?.clusterScope;
   const diskScope = usePrometheusResourceMetrics(kind, namespace, name, "filesystem", timeRange, false).data?.clusterScope;
-  const nameMatchedScope = leastCertainScope(categories.some((c) => c.key === "filesystem") ? [rxScope, txScope, diskScope] : [rxScope, txScope]);
+  const hasDisk = kind === "Node" || !status?.gkeSystemMetrics || status.connected;
+  const nameMatchedScope = leastCertainScope(hasDisk ? [rxScope, txScope, diskScope] : [rxScope, txScope]);
   const nameMatchedNote = NAME_MATCHED_CLUSTER_NOTE[nameMatchedScope];
 
   if (!isSupported) return null;
@@ -131,6 +127,23 @@ export function PrometheusChartsGrid({
             </option>
           ))}
         </select>;
+
+  // OpenObserve down takes only its own charts: workload totals from another
+  // source and the restart lane stay, as they do when Prometheus isn't set up.
+  if (status && metricsSourceUnavailable(status)) {
+    const notice = (
+      <OpenObserveUnavailable status={status} compact={!!workloadTotals} />
+    );
+    if (!workloadTotals && !showRestartLane) return notice;
+    return (
+      <div className={clsx("space-y-4 p-4", fill && "h-full overflow-auto")}>
+        {workloadTotals && <div className="flex">{rangeControl}</div>}
+        {notice}
+        {workloadTotals}
+        {showRestartLane && <RestartEventLane kind={kind} namespace={namespace} name={name} range={timeRange} />}
+      </div>
+    );
+  }
 
   if (workloadTotals && !isConnected) {
     return (
@@ -160,44 +173,7 @@ export function PrometheusChartsGrid({
     );
   }
 
-  if (!isConnected) {
-    return (
-      <div className="flex flex-col items-center justify-center py-12 gap-4">
-        <WifiOff className="w-10 h-10 text-theme-text-quaternary" />
-        <div className="text-center">
-          <p className="text-sm text-theme-text-secondary mb-1">
-            Prometheus not connected
-          </p>
-          <p className="text-xs text-theme-text-tertiary mb-4">
-            {status?.error ||
-              "Connect to view historical CPU, memory, and network metrics"}
-          </p>
-          <div className="flex flex-wrap items-center justify-center gap-3">
-          <button
-            onClick={() => connectMutation.mutate()}
-            disabled={connectMutation.isPending}
-            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg btn-brand"
-          >
-            {connectMutation.isPending ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
-            ) : (
-              <Wifi className="w-4 h-4" />
-            )}
-            Discover Prometheus
-          </button>
-          {settingsAvailable && <button
-            type="button"
-            className="text-sm text-accent hover:underline"
-            onClick={() => window.dispatchEvent(new CustomEvent('radar:open-settings', { detail: { section: 'prometheus' } }))}
-          >Configure metrics</button>}
-          </div>
-          {previousNote && <p className="mt-3 text-xs text-theme-text-secondary">{previousNote}</p>}
-          {!settingsAvailable && <p className="mt-3 text-xs text-theme-text-tertiary">Ask your operator to configure the metrics connection for this cluster.</p>}
-          {isWorkload && <a className="mt-3 inline-block text-xs text-accent hover:underline" href="https://github.com/skyhook-io/radar/blob/main/docs/workload-metrics.md#what-each-chart-needs" target="_blank" rel="noopener noreferrer">What each chart needs</a>}
-        </div>
-      </div>
-    );
-  }
+  if (!isConnected) return <MetricsNotConnected status={status} isWorkload={isWorkload} />;
 
   const findCategory = (
     key: PrometheusMetricCategory,
@@ -214,7 +190,7 @@ export function PrometheusChartsGrid({
     const tx = findCategory("network_tx");
     if (tx) primaryCats.push({ def: tx });
   }
-  const disk = findCategory("filesystem");
+  const disk = hasDisk ? findCategory("filesystem") : undefined;
   const chartPanels = disk ? [...primaryCats, { def: disk }] : primaryCats;
   const renderPanel = ({ def, refLines }: { def: CategoryDef; refLines?: ReferenceLine[] }) => (
     <MetricsPanel key={def.key} category={def} kind={kind} namespace={namespace} name={name} timeRange={timeRange} referenceLines={refLines} />
@@ -246,7 +222,7 @@ export function PrometheusChartsGrid({
       )}
 
       <div className="metrics-layout min-w-0 px-4 pt-4">
-        {isWorkload && <h3 className="mb-2 text-sm font-semibold text-theme-text-primary">Network and storage</h3>}
+        {isWorkload && <h3 className="mb-2 text-sm font-semibold text-theme-text-primary">{disk ? "Network and storage" : "Network"}</h3>}
         {isWorkload && <Disclosure className="mb-2 text-xs text-theme-text-secondary" summary={`Pod-name matched · ${NAME_MATCHED_SUMMARY[nameMatchedScope]}`}>
           <p className="mt-2 max-w-2xl text-sm leading-relaxed">These charts match current Pod names, independently of the identity-checked charts above. {nameMatchedNote ?? "Matching names in a shared backend may include another cluster."}</p>
         </Disclosure>}
@@ -262,7 +238,7 @@ export function PrometheusChartsGrid({
         timeRange={timeRange}
         category={isWorkload ? "network_rx" : "cpu"}
       />
-      {showRightsizing && isWorkload && (
+      {showRightsizing && status?.connected && isWorkload && (
         <div className="px-4 pb-4"><RightsizingStrip kind={kind} namespace={namespace} name={name} /></div>
       )}
     </div>
@@ -341,7 +317,7 @@ function MetricsPanel({
       <header className="flex flex-wrap items-center justify-between mb-2 gap-3">
         <div className="flex flex-wrap items-center gap-2">
           <h3 className="text-xs font-medium text-theme-text-secondary uppercase tracking-wide">
-            {category.label}
+            {metrics?.source === "gke" && category.key === "memory" ? "Non-evictable memory" : metrics?.source === "gke" && category.key === "filesystem" && kind === "Node" ? "Ephemeral storage used" : category.label}
           </h3>
           {saturation && <SaturationChip {...saturation} />}
         </div>

@@ -76,3 +76,32 @@ func TestGatewayRouteEdgesHonorExplicitReferenceIdentity(t *testing.T) {
 		})
 	}
 }
+
+func TestGatewayUsesCanonicalClassWhenNodePoolDrawsItToo(t *testing.T) {
+	f := charCluster()
+	group := "gateway.networking.k8s.io"
+	pool := charUnstructured("karpenter.sh/v1", "NodePool", "", "alias", nil,
+		map[string]any{"template": map[string]any{"spec": map[string]any{"nodeClassRef": map[string]any{
+			"kind": "GatewayClass", "group": group, "name": "envoy",
+		}}}}, nil)
+	f.dynamic.add("karpenter.sh", "v1", "NodePool", "nodepools", false, pool)
+	topo := charBuild(t, f, DefaultBuildOptions())
+	const canonical = "gatewayclass//envoy"
+	const alias = "nodeclass//envoy/gateway.networking.k8s.io/gatewayclass"
+	const gateway = "gateway/shop/public"
+	if nodeByID(topo.Nodes, alias) == nil || nodeByID(topo.Nodes, canonical) == nil {
+		t.Fatal("expected both display nodes for GatewayClass envoy")
+	}
+	var count int
+	for _, e := range topo.Edges {
+		if e.Target == gateway && (e.Source == canonical || e.Source == alias) {
+			count++
+			if e.Source != canonical || e.Type != EdgeManages || e.ID != canonical+"-to-"+gateway {
+				t.Errorf("class binding = %+v", e)
+			}
+		}
+	}
+	if count != 1 {
+		t.Errorf("got %d class bindings, want one", count)
+	}
+}

@@ -14,6 +14,7 @@ export interface DockTab {
   // Terminal / logs props
   namespace?: string
   podName?: string
+  podUID?: string
   containerName?: string
   containers?: string[]
   /** Logs: open on History, read from the log store (Loki). */
@@ -24,6 +25,8 @@ export interface DockTab {
   shell?: string
   /** Terminal: a short line shown in the toolbar, e.g. what the session is connected to. */
   sessionNote?: string
+  /** An already-created debug container. Reconnects use the reviewed connection. */
+  debugSession?: { connectionId?: string; apiBase: string; podUID: string; image: string }
   // Workload logs props
   workloadKind?: string
   workloadName?: string
@@ -44,6 +47,7 @@ export interface DockContextValue {
   isResizing: boolean
   addTab: (tab: Omit<DockTab, 'id'>) => string
   setTabTitle: (id: string, title: string, titleTooltip?: string) => void
+  setTerminalContainer: (id: string, name: string) => void
   removeTab: (id: string) => void
   setActiveTab: (id: string) => void
   toggleExpanded: () => void
@@ -62,6 +66,34 @@ let tabIdCounter = 0
 const DOCK_DEFAULT_HEIGHT = 400
 const DOCK_COLLAPSED_HEIGHT = 36
 
+function matchesDockTab(t: DockTab, tabData: Omit<DockTab, 'id'>): boolean {
+  if (t.type !== tabData.type) return false
+  // Include orgId + clusterId so same-named pods/workloads on different clusters don't deduplicate
+  if (t.orgId !== tabData.orgId || t.clusterId !== tabData.clusterId) return false
+  if (t.type === 'workload-logs') {
+    return t.namespace === tabData.namespace &&
+           t.workloadKind === tabData.workloadKind &&
+           t.workloadName === tabData.workloadName
+  }
+  if (t.type === 'node-terminal') {
+    return t.nodeName === tabData.nodeName
+  }
+  if (t.type === 'local-terminal') {
+    return false // Allow multiple local terminals
+  }
+  if (t.type === 'traffic-flows') {
+    return true // Singleton — always reuse existing tab
+  }
+  if (t.podUID !== tabData.podUID || t.debugSession?.podUID !== tabData.debugSession?.podUID ||
+      t.debugSession?.connectionId !== tabData.debugSession?.connectionId ||
+      t.debugSession?.apiBase !== tabData.debugSession?.apiBase) return false
+  return t.namespace === tabData.namespace &&
+         t.podName === tabData.podName &&
+         t.containerName === tabData.containerName &&
+         t.shell === tabData.shell &&
+         !!t.history === !!tabData.history
+}
+
 export function DockProvider({ children }: { children: ReactNode }) {
   const [tabs, setTabs] = useState<DockTab[]>([])
   const [activeTabId, setActiveTabId] = useState<string | null>(null)
@@ -75,30 +107,7 @@ export function DockProvider({ children }: { children: ReactNode }) {
   useEffect(() => { tabsRef.current = tabs }, [tabs])
 
   const addTab = useCallback((tabData: Omit<DockTab, 'id'>) => {
-    const existingTab = tabsRef.current.find(t => {
-      if (t.type !== tabData.type) return false
-      // Include orgId + clusterId so same-named pods/workloads on different clusters don't deduplicate
-      if (t.orgId !== tabData.orgId || t.clusterId !== tabData.clusterId) return false
-      if (t.type === 'workload-logs') {
-        return t.namespace === tabData.namespace &&
-               t.workloadKind === tabData.workloadKind &&
-               t.workloadName === tabData.workloadName
-      }
-      if (t.type === 'node-terminal') {
-        return t.nodeName === tabData.nodeName
-      }
-      if (t.type === 'local-terminal') {
-        return false // Allow multiple local terminals
-      }
-      if (t.type === 'traffic-flows') {
-        return true // Singleton — always reuse existing tab
-      }
-      return t.namespace === tabData.namespace &&
-             t.podName === tabData.podName &&
-             t.containerName === tabData.containerName &&
-             t.shell === tabData.shell &&
-             !!t.history === !!tabData.history
-    })
+    const existingTab = tabsRef.current.find(tab => matchesDockTab(tab, tabData))
 
     if (existingTab) {
       if (tabData.type === 'terminal' && tabData.sessionNote !== undefined) {
@@ -138,6 +147,22 @@ export function DockProvider({ children }: { children: ReactNode }) {
     setTabs(prev => prev.map(tab => tab.id === id ? { ...tab, title, titleTooltip } : tab))
   }, [])
 
+  const setTerminalContainer = useCallback((id: string, name: string) => {
+    const tab = tabsRef.current.find(item => item.id === id)
+    if (!tab || tab.type !== 'terminal' || tab.shell || tab.debugSession || tab.containerName === name) return
+    const target = { ...tab, containerName: name }
+    const existing = tabsRef.current.find(item => matchesDockTab(item, target))
+    if (existing) {
+      setActiveTabId(existing.id)
+      return
+    }
+    setTabs(prev => prev.map(item => {
+      if (item.id !== id) return item
+      const title = item.title === `${item.podName}/${item.containerName}` ? `${item.podName}/${name}` : item.title
+      return { ...item, containerName: name, title }
+    }))
+  }, [])
+
   const setActiveTab = useCallback((id: string) => {
     setActiveTabId(id)
   }, [])
@@ -163,6 +188,7 @@ export function DockProvider({ children }: { children: ReactNode }) {
       isResizing,
       addTab,
       setTabTitle,
+      setTerminalContainer,
       removeTab,
       setActiveTab,
       toggleExpanded,
@@ -224,6 +250,7 @@ export function useOpenTerminal() {
   return (opts: {
     namespace: string
     podName: string
+    podUID?: string
     containerName: string
     containers: string[]
     orgId?: string
@@ -231,6 +258,7 @@ export function useOpenTerminal() {
     clusterName?: string
     shell?: string
     sessionNote?: string
+    debugSession?: DockTab['debugSession']
     title?: string
   }) => {
     const id = addTab({
@@ -240,8 +268,10 @@ export function useOpenTerminal() {
       podName: opts.podName,
       containerName: opts.containerName,
       containers: opts.containers,
+      podUID: opts.podUID,
       shell: opts.shell,
       sessionNote: opts.sessionNote,
+      debugSession: opts.debugSession,
       orgId: opts.orgId,
       clusterId: opts.clusterId,
       clusterName: opts.clusterName,

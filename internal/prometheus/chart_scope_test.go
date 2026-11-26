@@ -73,7 +73,7 @@ func (s *twoClusterStore) QueryRange(_ context.Context, query string, _, _ time.
 		return s.answer(query)
 	}
 	value := 3.0
-	if allSelectorsCarry(query, clusterAFilter) {
+	if allSelectorsCarry(query, checkedClusterAFilter) {
 		value = 1
 	}
 	return &prom.QueryResult{ResultType: "matrix", Series: []prom.Series{vec(map[string]string{}, value)}}, nil
@@ -173,7 +173,7 @@ func TestChartsTwoClustersKeepToThisCluster(t *testing.T) {
 				t.Fatalf("queries = %v", store.queries)
 			}
 			for _, q := range store.queries {
-				if !allSelectorsCarry(q, clusterAFilter) {
+				if !allSelectorsCarry(q, checkedClusterAFilter) {
 					t.Errorf("selector without this cluster's filter: %s", q)
 				}
 			}
@@ -279,7 +279,7 @@ func TestChartsContainerFilterFallbackIsFiltered(t *testing.T) {
 				t.Fatalf("no fallback without the container filter: %v", store.queries)
 			}
 			for _, q := range store.queries {
-				if !allSelectorsCarry(q, clusterAFilter) {
+				if !allSelectorsCarry(q, checkedClusterAFilter) {
 					t.Errorf("unfiltered selector: %s", q)
 				}
 			}

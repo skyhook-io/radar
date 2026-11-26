@@ -1,3 +1,4 @@
+import { hasPrometheusCharts, metricsSourceUnavailable } from '../../api/prometheusCharts'
 import { useState, useMemo } from 'react'
 import {
   PrometheusChartsView,
@@ -14,6 +15,7 @@ import {
   type PrometheusTimeRange,
 } from '../../api/client'
 import { parseQuantity } from '@skyhook-io/k8s-ui/utils/format'
+import { MetricsNotConnected, OpenObserveUnavailable } from './MetricsNotConnected'
 
 // ============================================================================
 // Radar-specific category config (lives here, not in k8s-ui, so consumers
@@ -93,10 +95,12 @@ export function PrometheusCharts({ kind, namespace, name, showEmptyState = false
   const { data: status, isLoading: statusLoading } = usePrometheusStatus()
   const connectMutation = usePrometheusConnect()
 
-  const [activeCategory, setActiveCategory] = useState<PrometheusMetricCategory>('cpu')
+  const [selectedCategory, setActiveCategory] = useState<PrometheusMetricCategory>('cpu')
   const [timeRange, setTimeRange] = useState<PrometheusTimeRange>('1h')
 
-  const isConnected = status?.connected === true
+  const isConnected = hasPrometheusCharts(status)
+  const gkeOnly = status?.gkeSystemMetrics && !status.connected
+  const activeCategory = gkeOnly && kind !== 'Node' && selectedCategory === 'filesystem' ? 'cpu' : selectedCategory
   const isSupported = SUPPORTED_KINDS.has(kind)
 
   // Fetch metrics when connected
@@ -113,12 +117,20 @@ export function PrometheusCharts({ kind, namespace, name, showEmptyState = false
     return computeRequestLimitLines(resource, kind, activeCategory)
   }, [resource, kind, activeCategory])
 
+  if (showEmptyState && isSupported && status) {
+    if (metricsSourceUnavailable(status)) return <OpenObserveUnavailable status={status} />
+    if (status.openobserve && !isConnected && !status.discovering) {
+      return <MetricsNotConnected status={status} isWorkload={['Deployment', 'StatefulSet', 'DaemonSet'].includes(kind)} />
+    }
+  }
+
   return (
     <PrometheusChartsView
       kind={kind}
       showEmptyState={showEmptyState}
       statusLoading={statusLoading}
       isConnected={isConnected}
+      gkeOnly={gkeOnly}
       statusError={status?.error}
       onConnect={() => connectMutation.mutate()}
       connecting={connectMutation.isPending}

@@ -4,15 +4,19 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/skyhook-io/radar/pkg/workloadrestart"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic/fake"
 	clienttesting "k8s.io/client-go/testing"
 )
@@ -482,6 +486,62 @@ func TestRestartUsesRestartAtNotTemplateAnnotation(t *testing.T) {
 	}
 	if _, touched := spec["template"]; touched {
 		t.Errorf("Restart patched spec.template, which would re-run every canary step: %v", spec)
+	}
+}
+
+func TestReviewedRolloutRestart(t *testing.T) {
+	at := time.Date(2026, 6, 10, 12, 0, 0, 987654321, time.UTC)
+	second := at.Format(time.RFC3339)
+	for _, tc := range []struct {
+		name        string
+		uid         string
+		terminating bool
+		stored      string
+		wantErr     error
+		wantChanged bool
+	}{
+		{name: "whole-second patch", uid: "rollout-uid", wantChanged: true},
+		{name: "later restart already covers request", uid: "rollout-uid", stored: "2026-06-10T12:00:02Z"},
+		{name: "earlier restart needs a new cutoff", uid: "rollout-uid", stored: "2026-06-10T11:59:59Z", wantChanged: true},
+		{name: "same second", uid: "rollout-uid", stored: second},
+		{name: "same controller second with fraction and offset", uid: "rollout-uid", stored: "2026-06-10T14:00:00.123+02:00"},
+		{name: "terminating even in same second", uid: "rollout-uid", stored: second, terminating: true, wantErr: ErrResourceTerminating},
+		{name: "replacement before terminating check", uid: "old-uid", terminating: true, wantErr: workloadrestart.ErrChanged},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ro := rolloutForTest("prod", "web", nil)
+			ro.SetResourceVersion("12")
+			if tc.terminating {
+				ts := metav1.NewTime(at)
+				ro.SetDeletionTimestamp(&ts)
+			}
+			if tc.stored != "" {
+				ro.Object["spec"].(map[string]any)[RestartAtField] = tc.stored
+			}
+			client := newFakeRollouts(ro)
+			got, err := restartReviewed(t.Context(), client, "prod", "web", workloadrestart.Preconditions{UID: types.UID(tc.uid)}, at)
+			wantMarker := tc.stored
+			if tc.wantChanged {
+				wantMarker = second
+			}
+			if !errors.Is(err, tc.wantErr) || got.Changed != tc.wantChanged || (err == nil && got.RestartedAt != wantMarker) {
+				t.Fatalf("result = %+v, error = %v", got, err)
+			}
+			patches := mainPatchBodies(t, client)
+			if !tc.wantChanged {
+				if len(patches) != 0 {
+					t.Fatalf("unexpected patches: %v", patches)
+				}
+				return
+			}
+			want := map[string]any{
+				"metadata": map[string]any{"uid": "rollout-uid", "resourceVersion": "12"},
+				"spec":     map[string]any{RestartAtField: second},
+			}
+			if len(patches) != 1 || !reflect.DeepEqual(patches[0], want) {
+				t.Errorf("patches = %v, want %v", patches, want)
+			}
+		})
 	}
 }
 

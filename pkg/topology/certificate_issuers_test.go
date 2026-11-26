@@ -67,7 +67,7 @@ func TestCertificateIssuerEdgesDefaultsScopeAndCachedResolution(t *testing.T) {
 		t.Fatalf("lookup fan-out: gets=%d lists=%v", p.getCalls, p.listCalls)
 	}
 	topo := &Topology{Nodes: nodes, Edges: edges}
-	rel := GetRelationships("Certificate", "team", "cert-0", topo, nil, p)
+	rel := graphRelationships("Certificate", "team", "cert-0", topo, nil, p)
 	if rel == nil || len(rel.Dependencies) != 1 || rel.Dependencies[0] != (ResourceRef{Kind: "Issuer", Group: "cert-manager.io", Namespace: "team", Name: "ca"}) || rel.ScaleTarget != nil {
 		t.Fatalf("default issuer relationship = %+v", rel)
 	}
@@ -114,7 +114,7 @@ func TestReferencedIssuerRetainsGenericOwnerWithoutDuplicateNodesOrEdges(t *test
 	}
 	builder := &Builder{dynamic: p}
 	for i := 0; i < 2; i++ {
-		nodes, edges = builder.addGenericCRDNodes(nodes, edges, DefaultBuildOptions())
+		nodes, edges, _ = builder.enrollGenericCRDNodes(nodes, edges, DefaultBuildOptions(), nil)
 		if len(nodes) != 3 || len(edges) != 2 {
 			t.Fatalf("generic pass %d nodes=%d edges=%+v, want seeded issuer and unique dependency/owner", i, len(nodes), edges)
 		}
@@ -198,11 +198,11 @@ func TestIssuanceIssuerJoinsEnrolledStagesFromEnrollmentReads(t *testing.T) {
 		t.Fatalf("issuer join fetched objects: %d", provider.getCalls)
 	}
 	topo := &Topology{Nodes: nodes, Edges: edges}
-	request := GetRelationships("CertificateRequest", "team", "child-0", topo, nil, provider)
+	request := graphRelationships("CertificateRequest", "team", "child-0", topo, nil, provider)
 	if request == nil || len(request.Dependencies) != 1 || request.Dependencies[0].Kind != "Issuer" || request.Dependencies[0].Group != "cert-manager.io" {
 		t.Fatalf("request dependencies = %+v", request)
 	}
-	issuerRel := GetRelationships("Issuer", "team", "ca", topo, nil, provider)
+	issuerRel := graphRelationships("Issuer", "team", "ca", topo, nil, provider)
 	if issuerRel == nil || len(issuerRel.Dependents) != 90 {
 		t.Fatalf("issuer context = %+v", issuerRel)
 	}
@@ -246,7 +246,7 @@ func TestLateIssuanceIssuerJoinDoesNotReopenGenericEnrollment(t *testing.T) {
 	if provider.getCalls != 0 || provider.listCalls[issuerGVR] != 3 || provider.listCalls[requestGVR] != 2 {
 		t.Fatalf("cache fanout: gets=%d lists=%v", provider.getCalls, provider.listCalls)
 	}
-	issuerRel := GetRelationships("Issuer", "team", "ca", topo, nil, provider)
+	issuerRel := graphRelationships("Issuer", "team", "ca", topo, nil, provider)
 	if issuerRel == nil || len(issuerRel.Dependents) != 1 || issuerRel.Dependents[0].Kind != "CertificateRequest" {
 		t.Fatalf("late issuer lost its reverse dependency: %+v", issuerRel)
 	}

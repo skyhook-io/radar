@@ -915,3 +915,15 @@ func TestIsCandidateService(t *testing.T) {
 		}
 	}
 }
+
+func TestReservedGMPFrontendExcludedFromGenericDiscovery(t *testing.T) {
+	for _, ns := range []string{"gmp-system", "gmp-public", "gke-gmp-system", "monitoring"} {
+		for _, name := range []string{"frontend", "gmp-frontend", "ordinary-prometheus"} {
+			svc := corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name, Labels: map[string]string{"app.kubernetes.io/name": "prometheus"}}, Spec: corev1.ServiceSpec{Ports: []corev1.ServicePort{{Name: "prometheus", Port: 9090}}}}
+			reserved := ns != "monitoring" && name != "ordinary-prometheus"
+			if IsCandidateService(&svc) == reserved {
+				t.Errorf("generic candidate %s/%s despite reserved=%v", ns, name, reserved)
+			}
+		}
+	}
+}

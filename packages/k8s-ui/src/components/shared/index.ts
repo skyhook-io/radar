@@ -1,6 +1,7 @@
 export { ResourceRendererDispatch, getResourceStatus, type RendererOverrides } from './ResourceRendererDispatch'
 export { EditableYamlView, SaveSuccessAnimation } from './EditableYamlView'
 export { ResourceActionsBar, RevisionHistoryDialog, isRolloutKind } from './ResourceActionsBar'
+export { RevisionDiffView } from './RevisionDiffView'
 export {
   DrainPlanDialog, DrainPlanContent, canConfirmDrain, planMatches, emptyDirPodsAtRisk, DEFAULT_DRAIN_DIALOG_OPTIONS,
   type DrainPlan, type DrainPlanPod, type DrainOutcome, type DrainDialogOptions,
@@ -13,3 +14,5 @@ export { DetailShell, type DetailShellProps, type DetailShellTab } from './Detai
 export { classifyDiffLine, hasDiffBodyChange, DiffLine } from './UnifiedDiff'
 
 export { ActionConfirmDialog, type ActionConfirmDialogProps, type ActionConfirmResult, type ActionWrite } from './ActionConfirmDialog'
+export { WorkflowShutdownBadge, WorkflowStopAction, type WorkflowStopActionProps, type WorkflowStopStrategy } from './WorkflowStopDialog'
+export { WorkflowTemplateSubmitDialog, type WorkflowTemplateSubmitDialogProps } from './WorkflowTemplateSubmitDialog'

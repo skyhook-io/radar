@@ -2,7 +2,6 @@ package k8s
 
 import (
 	"context"
-	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
@@ -27,9 +26,4 @@ func CreateEphemeralContainerWithClient(ctx context.Context, opts EphemeralConta
 		client = GetClient()
 	}
 	return k8score.CreateEphemeralContainer(ctx, client, opts)
-}
-
-// WaitForEphemeralContainer polls until an ephemeral container reaches Running state or timeout.
-func WaitForEphemeralContainer(ctx context.Context, namespace, podName, containerName string, timeout time.Duration) error {
-	return k8score.WaitForEphemeralContainer(ctx, GetClient(), namespace, podName, containerName, timeout)
 }

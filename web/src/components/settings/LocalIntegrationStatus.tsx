@@ -1,6 +1,7 @@
 import { useOpenCostSummary, usePrometheusStatus, type useArgoStatus } from '../../api/client'
 import { costIntegrationUnavailableMessage, costSourceLabel } from '../cost/source'
 import { describeLokiLabels, useLokiStatus } from '../../api/loki'
+import { metricsSourceLine, sourceNote } from './openobserveStatus'
 import type { IntegrationKind, IntegrationProfile } from './LocalConnectionSettings'
 import { Badge, Collapse } from '@skyhook-io/k8s-ui'
 import { useRef } from 'react'
@@ -22,11 +23,21 @@ export function LocalIntegrationStatus({ kind, profile, argo, busy, changedAt }:
     Math.max(query.dataUpdatedAt, query.errorUpdatedAt) < changedAt
   let status = 'Checking…'
   let detail: string | undefined
+  let sourceTone: 'success' | 'warning' | 'neutral' | undefined
   if (!checking) {
     if (query.isError) status = 'Status unavailable'
     else if (kind === 'metrics' && prom.data) {
-      status = prom.data.connected ? 'Connected' : prom.data.discovering ? 'Discovering…' : 'Not connected'
-      detail = prom.data.connected ? !profile.url ? `Discovered: ${prom.data.address}` : undefined : prom.data.error
+      const line = metricsSourceLine(prom.data.source)
+      if (line) {
+        status = line.status
+        detail = line.detail
+        sourceTone = line.tone
+      } else {
+        status = prom.data.connected ? 'Connected' : prom.data.gkeSystemMetrics ? 'GKE system metrics' : prom.data.discovering ? 'Discovering…' : 'Not connected'
+        detail = prom.data.connected ? !profile.url ? `Discovered: ${prom.data.address}` : undefined : prom.data.gkeSystemMetrics ? undefined : prom.data.error
+        const note = sourceNote(prom.data.source)
+        if (note) detail = detail ? `${detail} · ${note}` : note
+      }
     } else if (kind === 'argocd' && argo.data) {
       status = argo.data.connected ? argo.data.anonymous ? 'Connected · no token needed' : 'Connected' : argo.data.connecting ? 'Connecting…' : 'Not connected'
       detail = argo.data.reason ?? (argo.data.connected && !profile.url ? `Discovered: ${argo.data.address}` : undefined)
@@ -48,7 +59,7 @@ export function LocalIntegrationStatus({ kind, profile, argo, busy, changedAt }:
   const failed = !checking && (query.isError || configured && ['Not connected', 'Unavailable', 'No cost data'].includes(status))
   return (
     <div role="group" className="contents text-xs text-theme-text-secondary" aria-label="Current connection">
-      <Badge severity={status.startsWith('Connected') || status.startsWith('Available') ? 'success' : failed ? 'warning' : 'neutral'}>{status}</Badge>
+      <Badge severity={sourceTone ?? (status.startsWith('Connected') || status.startsWith('Available') ? 'success' : failed ? 'warning' : 'neutral')}>{status}</Badge>
       <Collapse open={lastDetail.current.visible} className="basis-full min-w-0">
         <p className={`break-words text-theme-text-tertiary ${checking ? 'invisible' : ''}`}>{lastDetail.current.text}</p>
       </Collapse>

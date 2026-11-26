@@ -251,35 +251,78 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 			return !member || release != identity(rootRef)
 		})
 	}
-	// A referenced chart's source is local to that observed chart. Follow only
-	// the already-prefetched chart, never every chart in the cluster.
-	var chartSources []relatedResource
-	var chartRefs []ResourceRef
-	for _, related := range fluxRelated {
-		if related.Ref.Group != "source.toolkit.fluxcd.io" || related.Ref.Kind != "HelmChart" {
-			continue
-		}
-		chart := objects[refKey(related.Ref)]
-		if chart == nil {
-			continue
-		}
-		for _, source := range gitops.FluxSourceReferences(chart) {
-			ref := ResourceRef{Group: source.Group, Kind: source.Kind, Namespace: source.Namespace, Name: source.Name}
-			if !b.canEmit(ref) {
-				omittedDependencies = true
+	// Follow the source chain upstream from what the root references: a
+	// HelmChart to its source, an ExternalArtifact to its ArtifactGenerator,
+	// a generator to its sources. Only objects already reached are followed,
+	// so a generator's other artifacts never join a release's tree, and the
+	// walk stops after a few levels whatever the objects say.
+	seenUpstream := map[string]bool{}
+	frontier := fluxRelated
+	for level := 0; level < gitops.MaxFluxSourceLevels && len(frontier) > 0; level++ {
+		var next []relatedResource
+		var refs []ResourceRef
+		// A generator can list one source under several aliases; keep them all
+		// on the one node.
+		position := map[string]int{}
+		for _, related := range frontier {
+			if !gitops.IsUpstreamFluxSource(related.Ref.Group, related.Ref.Kind) || seenUpstream[refKey(related.Ref)] {
 				continue
 			}
-			chartSources = append(chartSources, relatedResource{Parent: related.Ref, Ref: ref, Type: EdgeSource, Data: map[string]any{"relationship": source.Role}})
-			chartRefs = append(chartRefs, ref)
+			seenUpstream[refKey(related.Ref)] = true
+			obj := objects[refKey(related.Ref)]
+			if obj == nil {
+				continue
+			}
+			for _, source := range gitops.FluxSourceReferences(obj) {
+				ref := ResourceRef{Group: source.Group, Kind: source.Kind, Namespace: source.Namespace, Name: source.Name}
+				if !b.canEmit(ref) {
+					omittedDependencies = true
+					continue
+				}
+				key := refKey(related.Ref) + "\x00" + refKey(ref)
+				if i, seen := position[key]; seen {
+					if source.Alias != "" {
+						if prior, _ := next[i].Data["alias"].(string); prior != "" {
+							next[i].Data["alias"] = prior + ", " + source.Alias
+						} else {
+							next[i].Data["alias"] = source.Alias
+						}
+					}
+					continue
+				}
+				data := map[string]any{"relationship": source.Role}
+				if source.Alias != "" {
+					data["alias"] = source.Alias
+				}
+				position[key] = len(next)
+				next = append(next, relatedResource{Parent: related.Ref, Ref: ref, Type: EdgeSource, Data: data})
+				refs = append(refs, ref)
+			}
 		}
-	}
-	if len(chartRefs) > 0 {
-		chartObjects, unavailable, _ := b.prefetchObjects(ctx, chartRefs)
-		for key, object := range chartObjects {
+		if len(refs) == 0 {
+			break
+		}
+		fetched, unavailable, _ := b.prefetchObjects(ctx, refs)
+		for key, object := range fetched {
 			objects[key] = object
 		}
 		unknownKinds = append(unknownKinds, unavailable...)
-		fluxRelated = append(fluxRelated, chartSources...)
+		fluxRelated = append(fluxRelated, next...)
+		frontier = next
+	}
+	// The walk stopped at its bound with sources still naming further
+	// sources: mark where the chain is cut so the tree never looks complete.
+	var chainCut []ResourceRef
+	for _, related := range frontier {
+		key := refKey(related.Ref)
+		if !gitops.IsUpstreamFluxSource(related.Ref.Group, related.Ref.Kind) || seenUpstream[key] || objects[key] == nil {
+			continue
+		}
+		if len(gitops.FluxSourceReferences(objects[key])) == 0 {
+			continue
+		}
+		related.Data["chainContinues"] = true
+		chainCut = append(chainCut, related.Ref)
 	}
 
 	view := ownership.NewView(b.ownership, traversalScope{namespaces: b.allowedNamespaces})
@@ -337,6 +380,8 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 			// for HelmRepository, producing inconsistent badges. Computing
 			// from conditions here makes every Flux CR with Ready=True
 			// render Healthy uniformly.
+			// One source can feed several generators under different aliases.
+			priorAlias, _ := nodes[id].Data["alias"].(string)
 			sync, health := "", ""
 			if obj != nil {
 				s := rootStatus(obj, ToolFluxCD)
@@ -354,6 +399,12 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 					node.TopologyStatus = healthToTopology(health)
 				}
 				nodes[id] = mergeData(enrichNodeFromObject(node, obj), res.Data)
+			}
+			if priorAlias != "" {
+				node := nodes[id]
+				next, _ := node.Data["alias"].(string)
+				node.Data["alias"] = mergeAliases(priorAlias, next)
+				nodes[id] = node
 			}
 			node := nodes[id]
 			node.Dependency = !declaredIDs[id]
@@ -412,6 +463,9 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 	}
 	if omittedDependencies || omittedByReadCheck {
 		warnings = append(warnings, "Some managed resources are hidden by RBAC.")
+	}
+	if len(chainCut) > 0 {
+		warnings = append(warnings, fluxChainCutWarning(chainCut))
 	}
 	if w := unknownKindsWarning(unknownKinds); w != "" {
 		warnings = append(append([]string{}, warnings...), w)
@@ -675,4 +729,21 @@ func materialize(nodes map[string]Node, edges map[string]Edge) ([]Node, []Edge) 
 		return edgeList[i].Target < edgeList[j].Target
 	})
 	return nodeList, edgeList
+}
+
+func fluxChainCutWarning(cut []ResourceRef) string {
+	slices.SortFunc(cut, func(a, b ResourceRef) int { return strings.Compare(refKey(a), refKey(b)) })
+	first := cut[0]
+	return fmt.Sprintf("The source chain continues beyond what this tree shows. Open %s %s/%s to follow it further.", first.Kind, first.Namespace, first.Name)
+}
+
+// mergeAliases joins two ", "-separated alias lists, keeping first-seen order.
+func mergeAliases(a, b string) string {
+	out := strings.Split(a, ", ")
+	for _, alias := range strings.Split(b, ", ") {
+		if alias != "" && !slices.Contains(out, alias) {
+			out = append(out, alias)
+		}
+	}
+	return strings.Join(out, ", ")
 }
