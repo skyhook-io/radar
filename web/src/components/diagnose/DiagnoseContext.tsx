@@ -959,9 +959,19 @@ function RoutedDiagnoseProvider({
       });
       return;
     }
-    const { fromComposer: _fromComposer, context: _context, ...target } = t;
     createRun(
-      { ...target, kind: knownKindForPluralWithGroup(t.kind, t.group) ?? t.kind },
+      {
+        kind: knownKindForPluralWithGroup(t.kind, t.group) ?? t.kind,
+        group: t.group,
+        namespace: t.namespace,
+        name: t.name,
+        issueId: t.issueId,
+        fresh: t.fresh,
+        question: t.question,
+        namespaces: t.namespaces,
+        lookBack: t.lookBack,
+        askedAt: t.askedAt,
+      },
       {
         agent: selectedAgent || undefined,
         profile: hosted ? undefined : effectiveProfile,
