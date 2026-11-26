@@ -831,7 +831,7 @@ retain their finite grants.
 | `kubeshark` | `kubeshark.io` |
 | `kured` | `kured.io` |
 | `kyverno` | `kyverno.io`, `policies.kyverno.io`, `wgpolicyk8s.io`, `reports.kyverno.io`, `openreports.io` |
-| `longhorn` | `longhorn.io` (`volumes`, `engines`, `replicas`), read-only volume health; on by default. |
+| `longhorn` | `longhorn.io` (`volumes`, `engines`, `replicas`, `nodes`, `backuptargets`, `backupvolumes`, `backups`, `recurringjobs`), read-only volume, node and backup state; on by default. |
 | `mariadb` | `mariadb.mmontes.io` |
 | `metallb` | `metallb.io` (`ipaddresspools`, `l2advertisements`, `bgpadvertisements`, `configurationstates` only; `bgppeers` only when Secrets are granted, see below) |
 | `multus` | `k8s.cni.cncf.io` (`network-attachment-definitions`) |

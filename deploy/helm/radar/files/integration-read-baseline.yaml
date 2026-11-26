@@ -10,6 +10,13 @@ entries:
     decision: grant
     reason: "Volume, engine and replica state: sizes, nodes, replica modes, rebuild progress and backup times. No credentials (spec.fromBackup is a backup URL, not a secret). They live in the Longhorn namespace, so a namespace-scoped caller usually can't read them."
     source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "longhorn.io"
+    resources: ["nodes","backuptargets","backupvolumes","backups","recurringjobs"]
+    scope: Namespaced
+    collection: "longhorn"
+    decision: grant
+    reason: "Longhorn node and disk capacity, scheduling flags and tags; backup target URL, availability and the name of its credential Secret (never the Secret itself); backup volume and backup sizes, states, times and labels; recurring job cron, task, retain and groups. No credentials. They live in the Longhorn namespace, so a namespace-scoped caller usually can't read them."
+    source: "https://github.com/longhorn/longhorn-manager/tree/v1.12.1/k8s/pkg/apis/longhorn/v1beta2"
   - group: ""
     resources: ["podtemplates"]
     scope: Namespaced

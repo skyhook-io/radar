@@ -67,3 +67,26 @@ func TestLonghornVolumeIssues(t *testing.T) {
 		t.Errorf("degraded category = %s, want %s", got, issuesapi.CategoryVolumeDegraded)
 	}
 }
+
+// A Longhorn Node shares the Kind "Node" with the core Node; its condition
+// Issue must not read as a node problem anywhere the Kind alone is checked.
+func TestLonghornNodeIsNotACoreNode(t *testing.T) {
+	longhornNode := Issue{Source: SourceCondition, Kind: "Node", Group: "longhorn.io", Namespace: "longhorn-system", Name: "worker-1", Reason: "Ready: KubernetesNodeNotReady"}
+	classifyIssue(&longhornNode)
+	enrichIdentity(&longhornNode)
+	if longhornNode.Category != issuesapi.CategoryOperatorConditionFail {
+		t.Errorf("category = %s, want %s", longhornNode.Category, issuesapi.CategoryOperatorConditionFail)
+	}
+	if longhornNode.GroupingScope == issuesapi.ScopeNode {
+		t.Error("a Longhorn Node got the node grouping scope")
+	}
+	coreNode := Issue{Source: SourceProblem, Kind: "Node", Name: "worker-1", Reason: "NotReady"}
+	classifyIssue(&coreNode)
+	enrichIdentity(&coreNode)
+	if coreNode.Category != issuesapi.CategoryNodeNotReady || coreNode.GroupingScope != issuesapi.ScopeNode {
+		t.Errorf("core Node = %s/%s, want %s/%s", coreNode.Category, coreNode.GroupingScope, issuesapi.CategoryNodeNotReady, issuesapi.ScopeNode)
+	}
+	if got := affectedOf([]Ref{{Kind: "Node", Name: "worker-1"}, {Group: "longhorn.io", Kind: "Node", Namespace: "longhorn-system", Name: "worker-1"}}); got.Nodes != 1 {
+		t.Errorf("affected nodes = %d, want 1 (the core Node only)", got.Nodes)
+	}
+}

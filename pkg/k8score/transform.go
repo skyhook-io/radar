@@ -151,7 +151,8 @@ func isHelmReleaseValueDigest(value []byte) bool {
 //     per-page diagnostic.
 //
 // For Longhorn Engines, also strips the status maps in
-// longhornEngineUnreadStatus.
+// longhornEngineUnreadStatus; for Longhorn Nodes, each disk's
+// longhornDiskUnreadStatus maps.
 //
 // For CustomResourceDefinitions specifically, also strips:
 //   - spec.versions[].schema — the OpenAPI v3 schema. On operator-heavy
@@ -171,6 +172,11 @@ func isHelmReleaseValueDigest(value []byte) bool {
 // them. Replica modes and addresses and rebuild progress stay.
 var longhornEngineUnreadStatus = []string{"snapshots", "backupStatus", "restoreStatus", "purgeStatus", "cloneStatus", "replicaTransitionTimeMap"}
 
+// longhornDiskUnreadStatus are the per-disk maps of a Longhorn Node with one
+// entry per replica or backing image scheduled on the disk, so they grow with
+// the cluster; Replica objects already say which disk each replica is on.
+var longhornDiskUnreadStatus = []string{"scheduledReplica", "scheduledBackingImage"}
+
 func DropUnstructuredManagedFields(obj any) (any, error) {
 	u, ok := obj.(*unstructured.Unstructured)
 	if !ok {
@@ -186,6 +192,18 @@ func DropUnstructuredManagedFields(obj any) (any, error) {
 	if u.GetKind() == "Engine" && strings.HasPrefix(u.GetAPIVersion(), "longhorn.io/") {
 		for _, field := range longhornEngineUnreadStatus {
 			unstructured.RemoveNestedField(u.Object, "status", field)
+		}
+	}
+	if u.GetKind() == "Node" && strings.HasPrefix(u.GetAPIVersion(), "longhorn.io/") {
+		if disks, found, _ := unstructured.NestedFieldNoCopy(u.Object, "status", "diskStatus"); found {
+			disks, _ := disks.(map[string]any)
+			for _, disk := range disks {
+				if d, ok := disk.(map[string]any); ok {
+					for _, field := range longhornDiskUnreadStatus {
+						delete(d, field)
+					}
+				}
+			}
 		}
 	}
 

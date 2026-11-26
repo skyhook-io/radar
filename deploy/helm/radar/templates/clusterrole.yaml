@@ -501,7 +501,7 @@ rules:
   {{- end }}
   {{- if .Values.rbac.crdGroups.longhorn }}
   - apiGroups: ["longhorn.io"]
-    resources: ["volumes", "engines", "replicas"]
+    resources: ["volumes", "engines", "replicas", "nodes", "backuptargets", "backupvolumes", "backups", "recurringjobs"]
     verbs: ["get", "list", "watch"]
   {{- end }}
   {{- if .Values.rbac.crdGroups.nvidia }}

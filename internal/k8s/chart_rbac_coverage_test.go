@@ -234,3 +234,22 @@ func TestRelationshipChartGrantsPodTemplatesAndKnativeSinks(t *testing.T) {
 		}
 	}
 }
+
+// The Longhorn rule lists resources by name, so the group-level check above
+// can't see a collected Longhorn kind the chart forgot.
+func TestLonghornChartRuleNamesEveryCollectedResource(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "deploy", "helm", "radar", "templates", "clusterrole.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, rule, ok := strings.Cut(string(raw), `apiGroups: ["longhorn.io"]`)
+	if !ok {
+		t.Fatal("no longhorn.io rule in the chart ClusterRole")
+	}
+	resources, _, _ := strings.Cut(strings.TrimSpace(rule), "\n")
+	for _, c := range supportedCRDFallbacks {
+		if c.Group == "longhorn.io" && !strings.Contains(resources, `"`+c.Resource+`"`) {
+			t.Errorf("chart longhorn.io rule %q does not name collected resource %q", resources, c.Resource)
+		}
+	}
+}

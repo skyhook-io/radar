@@ -478,3 +478,47 @@ func TestDropUnstructuredManagedFields_LonghornEngine(t *testing.T) {
 		t.Error("an Engine of another group lost its status")
 	}
 }
+
+// A Longhorn Node keeps its disks' capacity and conditions but not the
+// per-replica scheduling maps; a core Node with the same fields is untouched.
+func TestDropUnstructuredManagedFields_LonghornNode(t *testing.T) {
+	node := func(apiVersion string) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": apiVersion, "kind": "Node",
+			"metadata": map[string]any{"name": "worker-1", "namespace": "longhorn-system"},
+			"status": map[string]any{
+				"diskStatus": map[string]any{
+					"disk-1": map[string]any{
+						"storageMaximum":        int64(100),
+						"storageAvailable":      int64(60),
+						"scheduledReplica":      map[string]any{"pvc-1-r-0": int64(10)},
+						"scheduledBackingImage": map[string]any{"img": int64(5)},
+					},
+					"broken": "not-a-map",
+				},
+			},
+		}}
+	}
+	out, err := DropUnstructuredManagedFields(node("longhorn.io/v1beta2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	disk := out.(*unstructured.Unstructured).Object["status"].(map[string]any)["diskStatus"].(map[string]any)["disk-1"].(map[string]any)
+	for _, kept := range []string{"storageMaximum", "storageAvailable"} {
+		if _, ok := disk[kept]; !ok {
+			t.Errorf("diskStatus.disk-1.%s was dropped", kept)
+		}
+	}
+	for _, dropped := range longhornDiskUnreadStatus {
+		if _, ok := disk[dropped]; ok {
+			t.Errorf("diskStatus.disk-1.%s was kept", dropped)
+		}
+	}
+	core, _ := DropUnstructuredManagedFields(node("v1"))
+	if _, ok := core.(*unstructured.Unstructured).Object["status"].(map[string]any)["diskStatus"].(map[string]any)["disk-1"].(map[string]any)["scheduledReplica"]; !ok {
+		t.Error("a core Node lost a status field")
+	}
+	if _, err := DropUnstructuredManagedFields(&unstructured.Unstructured{Object: map[string]any{"apiVersion": "longhorn.io/v1beta2", "kind": "Node"}}); err != nil {
+		t.Fatal(err)
+	}
+}
