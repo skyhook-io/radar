@@ -57,9 +57,12 @@ func TestStoreRevisionAndValidation(t *testing.T) {
 			t.Errorf("overwrote invalid %q", invalid)
 		}
 	}
-	os.WriteFile(s.Path, []byte(strings.Repeat(" ", 1<<20+1)), 0600)
-	if _, _, _, err := s.GetRevision("binding"); err == nil {
-		t.Error("oversized file accepted")
+	if err := os.WriteFile(s.Path, []byte(strings.Repeat(" ", 1<<20+1)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	want := s.Path + " exceeds 1 MiB. Rename the file to start over without saved Substrate connection settings"
+	if _, _, _, err := s.GetRevision("binding"); err == nil || err.Error() != want {
+		t.Fatalf("oversized file error = %v, want %q", err, want)
 	}
 }
 

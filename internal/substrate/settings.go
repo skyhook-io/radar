@@ -189,7 +189,20 @@ var ErrConflict = errors.New("Substrate settings changed; reload Settings and tr
 var ErrBusy = errors.New("Substrate settings are busy; try again")
 
 func (s *Store) file() config.RevisionFile {
-	return config.RevisionFile{Path: s.Path, MaxBytes: 1 << 20, Label: "Substrate settings", TempPattern: ".substrate-*.json", Conflict: ErrConflict, Busy: ErrBusy}
+	return config.RevisionFile{
+		Path:        s.Path,
+		MaxBytes:    1 << 20,
+		Label:       "Substrate settings",
+		TempPattern: ".substrate-*.json",
+		Conflict:    ErrConflict,
+		Busy:        ErrBusy,
+		TooLarge: func(writing bool) string {
+			if writing {
+				return "Substrate settings exceed 1 MiB"
+			}
+			return fmt.Sprintf("%s exceeds 1 MiB. Rename the file to start over without saved Substrate connection settings", s.Path)
+		},
+	}
 }
 
 func (s *Store) decode(data []byte) (storeFile, error) {
