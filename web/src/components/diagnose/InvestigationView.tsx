@@ -88,6 +88,7 @@ import {
   type RunSummary,
 } from "../../api/diagnose";
 import { useDiagnose } from "./DiagnoseContext";
+import { useDiagnoseCustomization } from "../../context/DiagnoseCustomization";
 import {
   ExampleInvestigationProvider,
   replayExampleInvestigation,
@@ -267,6 +268,22 @@ export function InvestigationStatusCheckNotice({
   );
 }
 
+function focusFindingsSection(
+  scroller: HTMLElement,
+  section: HTMLElement,
+  behavior: ScrollBehavior,
+) {
+  section.focus({ preventScroll: true });
+  scroller.scrollTo({
+    top:
+      scroller.scrollTop +
+      section.getBoundingClientRect().top -
+      scroller.getBoundingClientRect().top -
+      12,
+    behavior,
+  });
+}
+
 function captureEvidenceCardLayout(container: HTMLElement) {
   const containerTop = container.getBoundingClientRect().top;
   return new Map(
@@ -357,6 +374,7 @@ export function InvestigationView({
   onHandoffAllowedChange?: (allowed: boolean) => void;
 }) {
   const { kind, namespace, name } = run;
+  const { renderFindingsFooter } = useDiagnoseCustomization();
   const {
     refreshRuns,
     openInvestigation,
@@ -453,6 +471,9 @@ export function InvestigationView({
   const evidenceScrollTopRef = useRef(0);
   const evidenceContentRef = useRef<HTMLDivElement>(null);
   const nextStepsRef = useRef<HTMLElement>(null);
+  const assessmentRef = useRef<HTMLElement>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+  const [focusTarget, setFocusTarget] = useState<HTMLElement | null>(null);
   const evidenceCardLayoutRef = useRef(
     new Map<string, { top: number; height: number }>(),
   );
@@ -924,6 +945,10 @@ export function InvestigationView({
   const readOnly = unavailable || !canContinue;
   const endedEarly = investigationEndedBeforeConclusion(run.status, lastTurn);
   const rebuildingReplay = !streamReady && turns.length === 0;
+  // Mount a host footer after replay so inserting the restored Findings above
+  // it cannot move a deep-link landing. A permanent history error is settled.
+  const findingsSettled =
+    !rebuildingReplay || (historyUnavailable && !historyUnavailable.retryable);
   const historyUnavailablePresentation = historyUnavailable
     ? investigationHistoryUnavailablePresentation(historyUnavailable)
     : null;
@@ -934,6 +959,8 @@ export function InvestigationView({
     readOnly,
     verificationPending,
   });
+
+  const canAskQuestion = !example && !canStop && !interactionsBlocked;
 
   const submitFollowup = () => {
     const q = input.trim();
@@ -1551,6 +1578,24 @@ export function InvestigationView({
     [focusAfterPaneSwitch],
   );
 
+  const evidenceLink = useCallback(
+    (ref: string) => {
+      // A proposed change can cite an earlier turn. Resolve exactly one
+      // complete read across this run, even after a newer assessment arrives.
+      const [link] = resolveInvestigationRootCauseEvidence(
+        projection,
+        { status: "linked", refs: [ref] },
+        turns.length - 1,
+      ).links;
+      if (!link) return undefined;
+      const source = link.source;
+      return evidenceStepIdsByTurn.get(source.turnIndex)?.has(source.stepId)
+        ? () => viewEvidenceSource(source.id)
+        : () => viewActivitySource(source.id);
+    },
+    [projection, turns.length, evidenceStepIdsByTurn, viewEvidenceSource, viewActivitySource],
+  );
+
   const verificationRunning = turns.some(
     (turn) => turn.verify && turn.status === "running",
   );
@@ -1798,6 +1843,33 @@ export function InvestigationView({
       setUnreadEvidence(false);
     }
   };
+  // An external link can resolve its card while Findings is hidden. Select
+  // the pane first, then position and focus in its post-commit layout.
+  const revealInFindings = useCallback((element: HTMLElement) => {
+    paneSelectionTouchedRef.current = true;
+    setNarrowPane("evidence");
+    setUnreadEvidence(false);
+    setFocusTarget(element);
+  }, []);
+  const viewAssessment = useCallback(() => {
+    if (assessmentRef.current) revealInFindings(assessmentRef.current);
+  }, [revealInFindings]);
+  const askQuestion = useCallback(() => {
+    if (!composerRef.current || composerRef.current.disabled) return;
+    paneSelectionTouchedRef.current = true;
+    setNarrowPane("activity");
+    setFocusTarget(composerRef.current);
+  }, []);
+  useLayoutEffect(() => {
+    if (!focusTarget) return;
+    const scroller = evidenceScrollRef.current;
+    if (scroller?.contains(focusTarget)) {
+      focusFindingsSection(scroller, focusTarget, "instant");
+    } else if (focusTarget === composerRef.current) {
+      focusTarget.focus({ preventScroll: true });
+    }
+    setFocusTarget(null);
+  }, [focusTarget]);
   const viewActivity = () => {
     paneSelectionTouchedRef.current = true;
     setNarrowPane("activity");
@@ -1888,6 +1960,7 @@ export function InvestigationView({
       ) : (
         <div className="flex items-end gap-2">
           <textarea
+            ref={composerRef}
             value={input}
             onChange={(event) => setInput(event.target.value)}
             onKeyDown={(event) => {
@@ -1897,13 +1970,7 @@ export function InvestigationView({
               }
             }}
             rows={1}
-            disabled={
-              !streamReady ||
-              readOnly ||
-              busy ||
-              requestPending ||
-              verificationPending
-            }
+            disabled={!canAskQuestion}
             placeholder={
               !streamReady
                 ? historyUnavailablePresentation?.loading
@@ -2498,6 +2565,9 @@ export function InvestigationView({
           <div
             ref={evidenceScrollRef}
             data-investigation-findings-scroll
+            // A linked footer can reserve one visible pane of scroll room so a
+            // short card's heading also lands at the top, above its controls.
+            style={renderFindingsFooter ? { containerType: "size" } : undefined}
             onScroll={(event) => {
               if (event.currentTarget.offsetParent === null) return;
               evidenceScrollTopRef.current = event.currentTarget.scrollTop;
@@ -2539,8 +2609,10 @@ export function InvestigationView({
                       not a fifth, and it fills the pane it is given. */}
                   <div className="space-y-3">
                     <section
+                      ref={assessmentRef}
+                      tabIndex={-1}
                       aria-labelledby={`${viewId}-assessment-heading`}
-                      className="investigation-assessment rounded-xl border p-3"
+                      className="investigation-assessment rounded-xl border p-3 outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
                     >
                       <div className="flex flex-wrap items-center gap-1.5">
                         {/* A label for the block, not its headline: the
@@ -2625,17 +2697,11 @@ export function InvestigationView({
                                   const section = nextStepsRef.current;
                                   const scroller = evidenceScrollRef.current;
                                   if (!section || !scroller) return;
-                                  section.focus({ preventScroll: true });
-                                  scroller.scrollTo({
-                                    top:
-                                      scroller.scrollTop +
-                                      section.getBoundingClientRect().top -
-                                      scroller.getBoundingClientRect().top -
-                                      12,
-                                    behavior: prefersReducedMotion()
-                                      ? "auto"
-                                      : "smooth",
-                                  });
+                                  focusFindingsSection(
+                                    scroller,
+                                    section,
+                                    prefersReducedMotion() ? "auto" : "smooth",
+                                  );
                                 }}
                               />
                             ) : null
@@ -2797,6 +2863,16 @@ export function InvestigationView({
                   />
                 </div>
               )}
+              {!example && !gone && findingsSettled &&
+                renderFindingsFooter?.({
+                  run,
+                  revealInFindings,
+                  evidenceLink,
+                  viewAssessment: currentAssessment?.diagnosis
+                    ? viewAssessment
+                    : undefined,
+                  askQuestion: canAskQuestion ? askQuestion : undefined,
+                })}
             </div>
           </div>
         </section>
