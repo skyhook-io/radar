@@ -478,8 +478,8 @@ export function IssueRow({
       ].filter(Boolean).join(' ')}
     >
       {!inAppPanel && <SeverityRail open={open} className={ISSUE_SEVERITY_RAIL_CLASS[severity]} />}
-      {/* Clips the header band and body to the rounded corners, inside the border the rail paints over. */}
-      <div className={inAppPanel ? 'overflow-hidden' : 'overflow-hidden rounded-[11px]'} style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 70px' }}>
+      {/* A panel reveals rows at their measured height. An offscreen size estimate would shift the rows as the clip passes them. */}
+      <div className={inAppPanel ? 'overflow-hidden' : 'overflow-hidden rounded-[11px]'} style={inAppPanel ? undefined : { contentVisibility: 'auto', containIntrinsicSize: 'auto 70px' }}>
         {/* The whole header is the single toggle target. The leading severity
             icon is the at-a-glance cue; a trailing chevron shows open/closed.
             Deep-links live in the expanded body (a link nested in a button would

@@ -113,8 +113,6 @@ export function AppIssueRows<T extends DisplayIssue>({ layout, issueKey, renderI
     target?.scrollIntoView?.({ block: 'nearest' });
   });
   const rows: ReactNode[] = [];
-  // Draw the panel as adjoining list items. Keeping each issue in the same
-  // key space preserves its DOM, keyboard focus and controls across regrouping.
   for (const { app, issues, preview, overflow, open } of layout.groups) {
     const panel = !!app && issues.length > 1;
     const headerId = panel ? disclosurePanelId('app-heading-' + id, app.key) : undefined;
@@ -134,29 +132,34 @@ export function AppIssueRows<T extends DisplayIssue>({ layout, issueKey, renderI
         </li>
       );
     }
-    for (const [index, issue] of issues.entries()) {
+    const row = (issue: T, shown: boolean) => {
       const key = issueKey(issue);
-      const shown = open || index < preview.length;
-      const last = index === issues.length - 1 && !overflow.length;
-      rows.push(
+      const last = !overflow.length && issue === preview[preview.length - 1];
+      return (
         <li key={`issue:${key}`} id={disclosurePanelId(id, key)} data-app-issue-row={shown ? key : undefined}
-          tabIndex={shown ? -1 : undefined} aria-hidden={!shown || undefined} aria-describedby={headerId}>
-          <Collapse open={shown} unmountOnExit>
-            <div className={panel ? `border-x border-b border-theme-border bg-theme-surface ${last ? 'mb-2 overflow-clip rounded-b-xl' : ''}` : 'mb-2'}>
-              <IssueContent panel={panel} issue={issue} renderIssue={renderIssue} />
-            </div>
-          </Collapse>
+          tabIndex={shown ? -1 : undefined} aria-describedby={headerId}
+          className={panel ? `border-x border-b border-theme-border bg-theme-surface ${last ? 'mb-2 overflow-clip rounded-b-xl' : ''}` : 'mb-2'}>
+          <IssueContent panel={panel} issue={issue} renderIssue={renderIssue} />
         </li>
       );
-    }
+    };
+    rows.push(...preview.map(issue => row(issue, true)));
     if (!app || !overflow.length) continue;
+    const overflowId = disclosurePanelId('app-overflow-' + id, app.key);
+    rows.push(
+      <li key={`overflow:${app.key}`} role="presentation">
+        <Collapse id={overflowId} open={open} unmountOnExit>
+          <ol role="presentation">{overflow.map(issue => row(issue, open))}</ol>
+        </Collapse>
+      </li>
+    );
     const critical = overflow.filter(issue => issue.severity === 'critical');
     const buttonId = disclosurePanelId('app-disclosure-' + id, app.key);
     rows.push(
       <li key={`disclosure:${app.key}`} role="presentation"
         className="mb-2 overflow-clip rounded-b-xl border-x border-b border-theme-border bg-theme-surface">
         <button type="button" id={buttonId} aria-expanded={open}
-          aria-controls={overflow.map(issue => disclosurePanelId(id, issueKey(issue))).join(' ')}
+          aria-controls={overflowId}
           onClick={() => {
             focusAfterToggle.current = open ? buttonId : disclosurePanelId(id, issueKey(overflow[0]));
             if (open) onCollapse?.(app.key, overflow);

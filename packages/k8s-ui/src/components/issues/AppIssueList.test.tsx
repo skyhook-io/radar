@@ -117,13 +117,16 @@ it('shows small groups in full and gives only related issues a panel heading', a
   }
 });
 
-it('keeps overflow content mounted and inert until the closing animation finishes', async () => {
+it('reveals all overflow rows in one panel and keeps them inert until its exit finishes', async () => {
   const { render, toggle, displayed } = await mount();
   await render();
   const button = toggle()!;
-  const firstOverflow = document.getElementById(button.getAttribute('aria-controls')!.split(' ')[0])!;
+  const panel = document.getElementById(button.getAttribute('aria-controls')!)!;
   await act(async () => button.click());
-  const summary = firstOverflow.querySelector('[aria-expanded]')!;
+  const overflow = [...panel.querySelectorAll<HTMLElement>('[data-app-issue-row]')];
+  expect(overflow.map(row => row.dataset.appIssueRow)).toEqual([':worker', ':web', ':batch']);
+  expect(overflow.every(row => row.parentElement === overflow[0].parentElement)).toBe(true);
+  const summary = overflow[0].querySelector('[aria-expanded]')!;
   expect(summary).toBeTruthy();
 
   await act(async () => button.click());
@@ -131,8 +134,8 @@ it('keeps overflow content mounted and inert until the closing animation finishe
   expect(summary.closest('[inert]')).toBeTruthy();
   const transition = new Event('transitionend', { bubbles: true });
   Object.defineProperty(transition, 'propertyName', { value: 'grid-template-rows' });
-  await act(async () => { firstOverflow.firstElementChild!.dispatchEvent(transition); });
-  expect(firstOverflow.contains(summary)).toBe(false);
+  await act(async () => { panel.dispatchEvent(transition); });
+  expect(panel.contains(summary)).toBe(false);
 });
 
 it('opens a preview row independently and focuses the newly revealed issue on expansion', async () => {
