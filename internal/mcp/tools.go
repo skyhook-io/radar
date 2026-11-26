@@ -794,7 +794,7 @@ type getResourceInput struct {
 	Group        string `json:"group,omitempty" jsonschema:"API group when the kind is ambiguous (e.g. cluster.x-k8s.io for CAPI Cluster vs CNPG Cluster)"`
 	Namespace    string `json:"namespace,omitempty" jsonschema:"namespace for namespaced kinds. Leave empty for cluster-scoped kinds (Node, ClusterRole, ClusterRoleBinding, IngressClass, PriorityClass, StorageClass, etc.)."`
 	Name         string `json:"name" jsonschema:"resource name"`
-	Include      string `json:"include,omitempty" jsonschema:"optional extras, comma-separated: events, metrics, changes, revisions, issues, drain-plan. revisions lists rollback targets for Deployment/StatefulSet/DaemonSet/Rollout (Rollouts mark isStable, the revision an abort reverts to); fetch it before manage_workload rollback. issues adds up to 3 relatedIssues; pod/template differences in them are context, not proof of admission mutation. drain-plan (Node only) is a read-only estimate for a drain with force, DaemonSets ignored and emptyDir data deleted (see its options), not eviction history; a default manage_node drain doesn't force, so unmanaged pods it lists as evicted would stay behind and leave that drain incomplete. Separate from context. For logs use get_pod_logs / get_workload_logs or diagnose."`
+	Include      string `json:"include,omitempty" jsonschema:"comma-separated: events, metrics, changes, revisions, issues, drain-plan, identity (observed uid + resourceVersion). Before manage_workload rollback, get revisions for Deployment/StatefulSet/DaemonSet/Rollout; isStable is the Rollout abort target. issues adds up to 3 relatedIssues; pod/template differences in them are context, not proof of admission mutation. drain-plan (Node only) is a read-only estimate for a drain with force, DaemonSets ignored and emptyDir data deleted (see its options), not eviction history; a default manage_node drain doesn't force, so unmanaged pods it lists as evicted would stay behind and leave that drain incomplete. Independent of context. Logs: get_pod_logs, get_workload_logs or diagnose."`
 	Relationship string `json:"relationship,omitempty" jsonschema:"a field a partial-preview warning named, e.g. dependents: returns up to 200 of it"`
 	Context      string `json:"context,omitempty" jsonschema:"resourceContext tier: 'basic' (default; attaches relationships and available resource-specific summaries) or 'none' (bare minified resource, wrapped as {resource, ...} when warnings note Pod/template divergence or staleEnv lists env holding a pre-write Secret/ConfigMap value). For full diagnostic tier with logs + events bundled, use the diagnose tool for supported kinds."`
 }
@@ -1399,6 +1399,17 @@ func readMCPResource(ctx context.Context, input getResourceInput, tier resourcec
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to read resource metadata: %w", err)
 		}
+		if includes["identity"] {
+			if objectMeta.GetUID() == "" || objectMeta.GetResourceVersion() == "" {
+				result["identityError"] = "This observation has no complete UID and resourceVersion pair. It cannot guard a change."
+			} else {
+				identity := map[string]any{"uid": string(objectMeta.GetUID()), "resourceVersion": objectMeta.GetResourceVersion()}
+				if generation := objectMeta.GetGeneration(); generation > 0 {
+					identity["generation"] = generation
+				}
+				result["identity"] = identity
+			}
+		}
 		attachResourceExtras(ctx, cache, result, includes, canonicalKind, canonicalGroup, namespace, name, objectMeta.GetUID(), types.UID(objectMeta.GetAnnotations()[corev1.MirrorPodAnnotationKey]))
 		// The drain plan, metrics and revisions resolve the cluster client when
 		// they run, so a switch during them would pair this cluster's resource
@@ -1637,14 +1648,14 @@ func attachResourceExtras(ctx context.Context, cache *k8s.ResourceCache, result 
 	var unknown []string
 	for tok := range includes {
 		switch tok {
-		case "events", "metrics", "logs", "changes", "revisions", "issues", "drain-plan":
+		case "events", "metrics", "logs", "changes", "revisions", "issues", "drain-plan", "identity":
 		default:
 			unknown = append(unknown, tok)
 		}
 	}
 	if len(unknown) > 0 {
 		sort.Strings(unknown)
-		result["includeError"] = fmt.Sprintf("unknown include value(s): %s (valid: events, metrics, changes, revisions, issues, drain-plan)", strings.Join(unknown, ", "))
+		result["includeError"] = fmt.Sprintf("unknown include value(s): %s (valid: events, metrics, changes, revisions, issues, drain-plan, identity)", strings.Join(unknown, ", "))
 	}
 
 }
