@@ -2878,6 +2878,12 @@ export function useTopology(
   });
 }
 
+interface ApplicationsResponse {
+  applications: AppRow[];
+  /** Absent when Radar could not establish inventory coverage. */
+  access?: { restricted: boolean };
+}
+
 export function useApplications(
   namespaces: string[],
   options?: { enabled?: boolean },
@@ -2888,11 +2894,11 @@ export function useApplications(
 
   const enabled = options?.enabled !== false;
   const { guard, gatedKey } = useRadarFeature("applications");
-  return useQuery<{ applications: AppRow[] }>({
+  return useQuery<ApplicationsResponse>({
     queryKey: ["applications", namespaces, ...gatedKey],
     queryFn: () =>
       guard(() =>
-        fetchJSON<{ applications: AppRow[] }>(
+        fetchJSON<ApplicationsResponse>(
           `/applications${queryString ? `?${queryString}` : ""}`,
         ),
       ),

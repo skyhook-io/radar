@@ -117,6 +117,18 @@ export interface AppRelationships {
   networkPolicyRefs?: ResourceRef[]
 }
 
+/** Exact ref list and its corresponding count or display-name list in the application inventory. */
+export const appRelationshipFields = [
+  ['serviceRefs', 'services'],
+  ['ingressRefs', 'ingresses'],
+  ['routeRefs', 'routes'],
+  ['configRefs', 'configs'],
+  ['scalerRefs', 'scalers'],
+  ['storageRefs', 'storage'],
+  ['pdbRefs', 'pdbs'],
+  ['networkPolicyRefs', 'networkPolicies'],
+] as const;
+
 export interface AppEvent {
   type: string;
   reason: string;
@@ -724,23 +736,9 @@ export function buildAppMembershipIndex(rows: AppRow[]): AppMembershipIndex {
         }
       }
     }
-    if (row.relationships) {
-      const explicitRefs = [
-        row.relationships.serviceRefs,
-        row.relationships.ingressRefs,
-        row.relationships.routeRefs,
-        row.relationships.configRefs,
-        row.relationships.scalerRefs,
-        row.relationships.storageRefs,
-        row.relationships.pdbRefs,
-        row.relationships.networkPolicyRefs,
-      ];
-      for (const refs of explicitRefs) {
-        for (const ref of refs ?? []) {
-          if (ref.kind && ref.name)
-            setFirst(byResource, laneId(ref.kind, ref.group, ref.namespace, ref.name), membership);
-        }
-      }
+    for (const ref of appRelationshipFields.flatMap(([refs]) => row.relationships?.[refs] ?? [])) {
+      if (ref.kind && ref.name)
+        setFirst(byResource, laneId(ref.kind, ref.group, ref.namespace, ref.name), membership);
     }
     if (row.sourceRef?.kind && row.sourceRef.name) {
       setFirst(

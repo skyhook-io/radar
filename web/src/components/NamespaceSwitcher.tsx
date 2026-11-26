@@ -10,6 +10,7 @@ interface NamespaceSwitcherProps {
   className?: string
   disabled?: boolean
   disabledTooltip?: string
+  onApply?: () => void
   variant?: 'chip' | 'segment'
   label?: string
 }
@@ -20,7 +21,7 @@ interface NamespaceSwitcherProps {
  * hooks; Radar Hub supplies its own container over the per-cluster apiBase.
  */
 export const NamespaceSwitcher = forwardRef<NamespaceSwitcherHandle, NamespaceSwitcherProps>(function NamespaceSwitcher(
-  { className, disabled, disabledTooltip, variant, label },
+  { className, disabled, disabledTooltip, onApply, variant, label },
   ref,
 ) {
   const { data: scope, isLoading } = useNamespaceScope()
@@ -47,7 +48,10 @@ export const NamespaceSwitcher = forwardRef<NamespaceSwitcherHandle, NamespaceSw
       scope={scope}
       loading={isLoading}
       pending={setActive.isPending}
-      onApply={namespaces => setActive.mutate({ namespaces })}
+      onApply={namespaces => {
+        onApply?.()
+        setActive.mutate({ namespaces })
+      }}
       disabled={disabled}
       disabledTooltip={disabledTooltip}
       className={className}

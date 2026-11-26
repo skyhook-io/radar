@@ -1,18 +1,24 @@
+// @vitest-environment jsdom
+import { act } from 'react'
+import { createRoot } from 'react-dom/client'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { renderToString } from 'react-dom/server'
-import { MemoryRouter } from 'react-router-dom'
+import { createMemoryRouter, MemoryRouter, RouterProvider } from 'react-router-dom'
 import type { IssuesResponse, SubjectIssuesResponse } from '../../api/client'
 import { IssuesPane } from './IssuesPane'
 
 const state = vi.hoisted(() => ({
+  applications: vi.fn(() => ({ data: undefined })),
   fleet: { data: undefined as IssuesResponse | undefined, isLoading: false, error: null as Error | null, dataUpdatedAt: 0, refetch: vi.fn() },
   subject: { data: undefined as SubjectIssuesResponse | undefined, isLoading: false, error: null as Error | null, dataUpdatedAt: 0, refetch: vi.fn() },
 }))
-vi.mock('../../api/client', () => ({ useIssues: () => state.fleet, useSubjectIssues: () => state.subject, useIssueCorrelation: () => ({ data: undefined, error: null, isFetching: false, dataUpdatedAt: 0, refetch: vi.fn() }), useIssueRowChanges: () => undefined }))
+vi.mock('../../api/client', () => ({ useApplications: state.applications, useIssues: () => state.fleet, useSubjectIssues: () => state.subject, useIssueCorrelation: () => ({ data: undefined, error: null, isFetching: false, dataUpdatedAt: 0, refetch: vi.fn() }), useIssueRowChanges: () => undefined }))
 vi.mock('../../api/apiResources', () => ({ useAPIResources: () => ({ data: undefined }), karpenterCapacityAvailable: () => false }))
 vi.mock('../../contexts/CapabilitiesContext', () => ({ useCapabilitiesContext: () => ({}) }))
 vi.mock('../../context/ConnectionContext', () => ({ useConnection: () => ({ connection: { state: 'connected' } }) }))
 vi.mock('../diagnose/LocalDiagnoseAction', () => ({ IssueDiagnoseButton: () => null }))
+
+Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 
 const subjectUrl = '/issues?kind=Pod&resource=db%2Fpg-1'
 const issue = {
@@ -25,11 +31,64 @@ function render(url = subjectUrl, namespaces: string[] = []) {
 }
 
 beforeEach(() => {
+  state.applications.mockClear()
   state.fleet = { data: undefined, isLoading: false, error: null, dataUpdatedAt: 0, refetch: vi.fn() }
   state.subject = { data: { issues: [issue], coverage: 'ok' }, isLoading: false, error: null, dataUpdatedAt: 0, refetch: vi.fn() }
 })
 
 describe('Issues page query ownership', () => {
+  it('only requests scoped application inventory for lists that can group', () => {
+    state.fleet.data = { issues: [issue] }
+    render('/issues', ['db'])
+    expect(state.applications).toHaveBeenLastCalledWith(['db'], { enabled: false })
+    state.fleet.data.issues.push({ ...issue, id: 'other' })
+    render('/issues', ['db'])
+    expect(state.applications).toHaveBeenLastCalledWith(['db'], { enabled: true })
+    render(subjectUrl, ['db'])
+    expect(state.applications).toHaveBeenLastCalledWith(['db'], { enabled: false })
+  })
+
+  it('replaces a link when triaging and reveals the next linked issue through an active filter', async () => {
+    state.fleet.data = { issues: [issue, { ...issue, id: 'replicas', severity: 'warning', reason: 'Unavailable' }] }
+    const router = createMemoryRouter([
+      { path: '/', element: <div>Home</div> },
+      { path: '/issues', element: <IssuesPane namespaces={['db']} onNavigateToResource={() => {}} /> },
+    ], { initialEntries: ['/', '/issues?namespaces=db&issue=pod-failed'], initialIndex: 1 })
+    const container = document.createElement('div')
+    const root = createRoot(container)
+    const row = (id: string) => container.querySelector(`[data-app-issue-row=":${id}"]`)
+    const toggle = (id: string) => row(id)!.querySelector<HTMLElement>('[role=button][aria-expanded]')!
+    try {
+      await act(async () => { root.render(<RouterProvider router={router} />) })
+      expect(toggle('pod-failed').getAttribute('aria-expanded')).toBe('true')
+      await act(async () => { toggle('replicas').click() })
+      expect(router.state.location.search).toBe('?namespaces=db')
+      expect(toggle('replicas').getAttribute('aria-expanded')).toBe('true')
+      await act(async () => { await router.navigate(-1) })
+      expect(router.state.location.pathname).toBe('/')
+
+      await act(async () => { await router.navigate('/issues?namespaces=db&issue=replicas') })
+      const critical = [...container.querySelectorAll('button')].find(button => button.textContent === '1Critical')!
+      await act(async () => { critical.click() })
+      expect(row('replicas')).toBeNull()
+      expect(router.state.location.search).toBe('?namespaces=db')
+      await act(async () => { await router.navigate('/issues?namespaces=db&issue=replicas') })
+      expect(toggle('replicas').getAttribute('aria-expanded')).toBe('true')
+      expect(row('pod-failed')).toBeTruthy()
+    } finally {
+      await act(async () => { root.unmount() })
+      router.dispose()
+    }
+  })
+
+  it('explains a missing issue link while keeping the current issues visible', () => {
+    state.fleet.data = { issues: [issue] }
+    const html = render('/issues?issue=absent')
+    expect(html).toContain('The linked issue is outside the current results.')
+    expect(html).toContain(issue.message)
+    expect(render('/issues?issue=pod-failed')).not.toContain('outside the current results')
+  })
+
   it.each(['loading', 'failed'] as const)('renders subject results while the fleet query is %s', (fleetState) => {
     state.fleet.isLoading = fleetState === 'loading'
     state.fleet.error = fleetState === 'failed' ? new Error('Fleet unavailable') : null
