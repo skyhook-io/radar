@@ -148,17 +148,20 @@ export function InvestigationHome({
   onBrowseIssues,
   onOpenExample,
   questions = false,
+  requireResource = false,
 }: {
   agentLabel: string;
   onBrowseIssues?: () => void;
   onOpenExample?: () => void;
   /** The backend opens a run from a question; offer the composer. */
   questions?: boolean;
+  requireResource?: boolean;
 }) {
   if (questions) {
     return (
       <div className="flex min-h-full w-full items-start justify-center px-4 py-10 sm:px-6">
         <QuestionComposer
+          requireResource={requireResource}
           onBrowseIssues={onBrowseIssues}
           onOpenExample={onOpenExample}
         />

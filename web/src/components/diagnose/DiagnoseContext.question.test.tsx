@@ -13,6 +13,8 @@ import { runTargetKey } from "./target";
 
 const api = vi.hoisted(() => ({
   createRun: vi.fn(),
+  fullQuestions: true,
+  targetedQuestions: false,
   recordConsent: vi.fn(),
   consented: {} as Record<string, boolean>,
   runs: [] as unknown[],
@@ -34,7 +36,8 @@ vi.mock("../../api/diagnose", async (importOriginal) => ({
         supported: true,
         profiles: ["safeguarded"],
         consentSurfaces: { safeguarded: "claude:safeguarded" },
-        questions: true,
+        questions: api.fullQuestions,
+        targetQuestions: api.targetedQuestions,
       },
     ],
   }),
@@ -85,6 +88,8 @@ const question = {
 
 beforeEach(async () => {
   api.createRun.mockReset();
+  api.fullQuestions = true;
+  api.targetedQuestions = false;
   api.recordConsent.mockReset();
   api.consented = {};
   api.runs = [];
@@ -241,5 +246,33 @@ describe("starting from a question", () => {
     await flush();
     expect(diagnose.needsConsent).toBe(false);
     expect(diagnose.questionDraft?.context).toBe("cluster-a");
+  });
+});
+
+it("requires one selected resource on target-only agents, including starts replayed after consent", async () => {
+  api.fullQuestions = false;
+  api.targetedQuestions = true;
+  api.recordConsent.mockResolvedValue(undefined);
+  await act(async () => diagnose.recheckAgents());
+  await act(async () => diagnose.openInvestigation(question));
+  await act(async () => diagnose.approveConsent());
+  await flush();
+  expect(api.createRun).not.toHaveBeenCalled();
+  expect(diagnose.startError).toContain("Choose a resource");
+  expect(diagnose.questionDraft?.text).toBe(question.question);
+});
+
+it("sends the exact pinned resource and question, without the composer's local state", async () => {
+  api.fullQuestions = false;
+  api.targetedQuestions = true;
+  api.consented = { "claude:safeguarded": true };
+  await act(async () => diagnose.recheckAgents());
+  expect(diagnose.questions).toBe(false);
+  expect(diagnose.targetQuestions).toBe(true);
+  api.createRun.mockResolvedValue({ id: "run-resource" });
+  await act(async () => diagnose.openInvestigation({ ...question, kind: "Deployment", group: "apps", namespace: "shop", name: "checkout" }));
+  expect(api.createRun.mock.calls[0][0]).toEqual({
+    kind: "Deployment", group: "apps", namespace: "shop", name: "checkout",
+    question: question.question, namespaces: question.namespaces, lookBack: "1h",
   });
 });

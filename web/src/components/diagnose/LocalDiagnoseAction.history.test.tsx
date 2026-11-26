@@ -37,7 +37,7 @@ vi.mock("../../api/diagnose", async (importOriginal) => ({
         present: true,
         supported: true,
         hosted: api.hosted,
-        questions: true,
+        targetQuestions: true,
         profiles: ["safeguarded"],
         consentSurfaces: { safeguarded: "claude:safeguarded" },
       },

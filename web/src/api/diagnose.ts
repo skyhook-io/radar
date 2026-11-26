@@ -20,8 +20,10 @@ export interface AgentInfo {
   /** The backend re-checks the resource after an Apply. Absent means it does not. */
   verification?: boolean;
   /** The backend opens a run from a question, with or without a resource.
-   *  Absent means it accepts only a resource. */
+   *  Also enables resource-pinned questions. */
   questions?: boolean;
+  /** The backend accepts an opening question about one selected resource. */
+  targetQuestions?: boolean;
 }
 
 export interface AgentsResponse {

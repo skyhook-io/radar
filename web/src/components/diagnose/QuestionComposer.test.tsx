@@ -75,8 +75,8 @@ afterEach(async () => {
   document.body.replaceChildren();
 });
 
-async function render() {
-  await act(async () => root.render(<QuestionComposer />));
+async function render(requireResource = false) {
+  await act(async () => root.render(<QuestionComposer requireResource={requireResource} />));
 }
 
 function textarea() {
@@ -550,4 +550,18 @@ describe("QuestionComposer", () => {
     });
     expect(document.body.textContent).toContain("Still loading");
   });
+});
+
+it("requires a resource before starting a target-only question, including Enter after unpinning", async () => {
+  state.questionDraft = { seq: 1, pin: { kind: "Deployment", group: "apps", namespace: "shop", name: "checkout" } };
+  await render(true);
+  await type("Can we scale checkout to five replicas?");
+  const submit = document.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+  expect(submit.disabled).toBe(false);
+  await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Unpin resource"]')!.click());
+  expect(submit.disabled).toBe(true);
+  expect(document.body.textContent).toContain("Choose a resource");
+  expect(document.body.textContent).not.toContain("Start in");
+  await press("Enter");
+  expect(state.openInvestigation).not.toHaveBeenCalled();
 });
