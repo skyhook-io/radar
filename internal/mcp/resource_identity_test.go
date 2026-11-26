@@ -18,7 +18,7 @@ import (
 
 func TestGetResourceObservedIdentity(t *testing.T) {
 	const secretValue = "private-example-secret"
-	m := metav1.ObjectMeta{Name: "web", Namespace: "alpha", UID: "web-deployment", ResourceVersion: "v-42"}
+	m := metav1.ObjectMeta{Name: "web", Namespace: "alpha", UID: "web-deployment", ResourceVersion: "v-42", Generation: 12}
 	replicas := int32(2)
 	deployment := &appsv1.Deployment{ObjectMeta: m, Spec: appsv1.DeploymentSpec{Replicas: &replicas, Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "web"}}}}
 	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "settings", Namespace: "alpha", UID: "web-secret", ResourceVersion: "v-41"}, Data: map[string][]byte{"token": []byte(secretValue)}}
@@ -53,7 +53,10 @@ func TestGetResourceObservedIdentity(t *testing.T) {
 		}
 		body := extractText(t, result)
 		var row struct {
-			Identity      *struct{ UID, ResourceVersion string }
+			Identity *struct {
+				UID, ResourceVersion string
+				Generation           *int64
+			}
 			IncludeError  string
 			IdentityError string
 		}
@@ -65,6 +68,15 @@ func TestGetResourceObservedIdentity(t *testing.T) {
 		}
 		if (row.IdentityError != "") != (tc.name == "unversioned") {
 			t.Fatalf("expected an explanation only for the unversioned observation: %s", body)
+		}
+		if row.Identity != nil {
+			if tc.kind == "Deployment" {
+				if row.Identity.Generation == nil || *row.Identity.Generation != 12 {
+					t.Fatalf("wrong observed generation: %s", body)
+				}
+			} else if row.Identity.Generation != nil {
+				t.Fatalf("zero generation must be omitted: %s", body)
+			}
 		}
 		if tc.uid == "" {
 			if row.Identity != nil || strings.Contains(body, `"resourceVersion"`) {

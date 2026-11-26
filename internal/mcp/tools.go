@@ -1403,7 +1403,11 @@ func readMCPResource(ctx context.Context, input getResourceInput, tier resourcec
 			if objectMeta.GetUID() == "" || objectMeta.GetResourceVersion() == "" {
 				result["identityError"] = "This observation has no complete UID and resourceVersion pair. It cannot guard a change."
 			} else {
-				result["identity"] = map[string]string{"uid": string(objectMeta.GetUID()), "resourceVersion": objectMeta.GetResourceVersion()}
+				identity := map[string]any{"uid": string(objectMeta.GetUID()), "resourceVersion": objectMeta.GetResourceVersion()}
+				if generation := objectMeta.GetGeneration(); generation > 0 {
+					identity["generation"] = generation
+				}
+				result["identity"] = identity
 			}
 		}
 		attachResourceExtras(ctx, cache, result, includes, canonicalKind, canonicalGroup, namespace, name, objectMeta.GetUID(), types.UID(objectMeta.GetAnnotations()[corev1.MirrorPodAnnotationKey]))
