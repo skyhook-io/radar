@@ -279,6 +279,21 @@ describe('OpenObserve setup', () => {
     expect(posts()[0].body).toEqual({ useSaved: true, clusterUid: 'uid-123' })
   })
 
+  it('drops the Saved note once this cluster switches back to Prometheus', async () => {
+    await mount({ connection: connection(), cluster: { uid: 'uid-123' } })
+    await click(radio('OpenObserve'))
+    reply('POST /integrations/openobserve/setup', { body: { outcome: 'saved', notes: { collector: true } } })
+    replies['GET /integrations/openobserve'] = [{ body: matched() }]
+    await click(button('Use for this cluster'))
+    expect(container.textContent).toContain('Data comes from the OpenObserve collector.')
+    await click(radio('Prometheus-compatible'))
+    reply('DELETE /integrations/openobserve/cluster?clusterUid=uid-123', { body: { connection: connection(), cluster: { uid: 'uid-123' } } })
+    await click(button('Use Prometheus for this cluster'))
+    await click(radio('OpenObserve'))
+    expect(container.textContent).not.toContain('Data comes from the OpenObserve collector.')
+    expect(Array.from(container.querySelectorAll('[role="status"]')).some((el) => el.textContent?.trim() === 'Saved')).toBe(false)
+  })
+
   it('asks before removing the saved connection, listing the clusters that use it', async () => {
     await mount(matched({ clusters: [{ context: 'kind-oo-b', by: 'id' }, { context: 'kind-oo-c', by: 'name' }] }))
     await click(button('Remove OpenObserve connection'))

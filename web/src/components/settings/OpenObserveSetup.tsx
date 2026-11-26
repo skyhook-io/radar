@@ -98,6 +98,16 @@ export function OpenObserveSetup({
     onBusyChange?.(false)
   }, [onDirtyChange, onBusyChange])
 
+  // Switching this cluster back to Prometheus happens outside this form.
+  useEffect(() => {
+    if (!match) setResult((current) => current?.kind === 'saved' ? null : current)
+  }, [match])
+
+  // Switching this cluster back to Prometheus happens outside this form.
+  useEffect(() => {
+    if (!match) setResult((current) => current?.kind === 'saved' ? null : current)
+  }, [match])
+
   const update = (changes: Partial<Draft>) => {
     setDraft((value) => ({ ...value, ...changes }))
     if (result?.kind === 'confirm') setResult(null)
