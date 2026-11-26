@@ -208,6 +208,7 @@ The roles and the agent admission list must come from the same chart gates.
 {{- end -}}
 {{- if $writeEnabled -}}
 {{- $policy := .Files.Get "files/integration-write-baseline.yaml" | fromYaml -}}
+{{- $builtInOwner := has $rbac.ownerClusterRole (list "admin" "cluster-admin") -}}
 {{- $switches := $rbac.integrationWrite -}}
 {{- $enabled := dict -}}
 {{- if or (kindIs "invalid" $switches) (kindIs "map" $switches) -}}
@@ -216,7 +217,7 @@ The roles and the agent admission list must come from the same chart gates.
 {{- if or (kindIs "invalid" $switch) (kindIs "map" $switch) -}}
 {{- $owner := index ($switch | default dict) "owner" -}}
 {{- if kindIs "invalid" $owner -}}
-{{- $owner = $spec.default -}}
+{{- $owner = and $spec.default (or (ne $capability "cnpg") $builtInOwner) -}}
 {{- end -}}
 {{- $_ := set $enabled $capability (and (kindIs "bool" $owner) $owner) -}}
 {{- end -}}
@@ -228,7 +229,7 @@ The roles and the agent admission list must come from the same chart gates.
 {{- range $entry := $policy.entries -}}
 {{- $collection := index $collections $entry.collection -}}
 {{- $collect := or $all (and (kindIs "bool" $collection) $collection) -}}
-{{- $veleroScope := and (empty $.Values.rbac.namespaces) (has $rbac.ownerClusterRole (list "admin" "cluster-admin")) -}}
+{{- $veleroScope := and (empty $.Values.rbac.namespaces) $builtInOwner -}}
 {{- if and (index $enabled $entry.capability) $collect (or (ne $entry.collection "velero") $veleroScope) -}}
 {{- $rule := dict "apiGroups" (list $entry.group) "resources" $entry.resources "verbs" $entry.verbs -}}
 {{- $_ := set $grants $entry.capability (append (index $grants $entry.capability | default list) $rule) -}}

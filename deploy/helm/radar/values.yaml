@@ -632,8 +632,9 @@ cloud:
         owner: true
       velero:
         owner: true
-      cnpg:
-        owner: true
+      # CNPG defaults on for built-in admin and cluster-admin Owner roles.
+      # Set cnpg.owner: true to approve it for a custom Owner role.
+      cnpg: {}
       velero-download:
         owner: false
       velero-delete:

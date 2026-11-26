@@ -326,7 +326,7 @@ Kubernetes role bindings in place.
 | Grant | Active by default | What it allows |
 |---|---|---|
 | Argo CD (`argocd`) | On | Refresh, sync and edit Argo CD Applications |
-| CloudNativePG (`cnpg`) | On | Administer existing clusters, backups, schedules and poolers. Creating a cluster for a restore requires separate permission |
+| CloudNativePG (`cnpg`) | On for built-in Owners | Administer existing clusters, backups, schedules and poolers. Creating a cluster for a restore requires separate permission |
 | Velero backups and schedules (`velero`) | On for cluster-wide built-in Owners | Start backups and manage schedules |
 | Velero backup data (`velero-download`) | Off | Read logs and full backup contents, which can include Secrets |
 | Velero backup deletion (`velero-delete`) | Off | Request permanent deletion of stored backup data |
@@ -339,9 +339,11 @@ that chart-managed Owner RBAC and the matching collection
 (`rbac.crdGroups.argo`, `rbac.crdGroups.cloudnativePg` or
 `rbac.crdGroups.velero`) are enabled. `rbac.crdGroups.all=true` also enables them.
 
-**Check the scope.** Argo CD and CloudNativePG defaults apply even with a
-custom `cloud.defaultRbac.ownerClusterRole`. `rbac.namespaces` limits the
-objects these grants can change. The grants apply to whole Kubernetes objects,
+**Check the scope.** Argo CD defaults on for chart-managed Owner roles,
+including custom roles. CloudNativePG defaults on for the built-in `admin` and
+`cluster-admin` Owner roles. For a custom Owner role, approve CloudNativePG with
+`cloud.defaultRbac.integrationWrite.cnpg.owner=true`. `rbac.namespaces` limits
+the objects these grants can change. The grants apply to whole Kubernetes objects,
 including writes through the resource editor and direct MCP. Argo CD deploys
 with its controller’s credentials and can reach other namespaces or clusters. See
 [how Argo CD actions are authorized](../../../docs/gitops.md#how-radar-performs-argo-actions).

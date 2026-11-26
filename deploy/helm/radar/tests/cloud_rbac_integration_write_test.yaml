@@ -127,14 +127,18 @@ tests:
           path: subjects[0].name
           value: radar:owner-access:cnpg
         documentIndex: 4
-  - it: custom owner role omits all Velero grants
+  - it: custom owner roles get Argo CD by default and omit all Velero grants
     set:
       cloud.defaultRbac.ownerClusterRole: custom-operator
       cloud.defaultRbac.integrationWrite.velero-download.owner: true
       cloud.defaultRbac.integrationWrite.velero-delete.owner: true
     asserts:
       - hasDocuments:
-          count: 4
+          count: 2
+      - equal:
+          path: subjects[0].name
+          value: radar:owner-access:argocd
+        documentIndex: 1
   - it: each approval can be disabled explicitly
     set:
       cloud.defaultRbac.integrationWrite.argocd.owner: false
