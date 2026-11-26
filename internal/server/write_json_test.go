@@ -2,12 +2,18 @@ package server
 
 import (
 	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"io"
+	"log"
+	"maps"
 	"math"
+	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -34,6 +40,8 @@ func (*pointerTextMarshaler) MarshalText() ([]byte, error) {
 }
 
 func TestWriteJSONMatchesStock(t *testing.T) {
+	t.Setenv("RADAR_COMPRESS_LEVEL", "1")
+	var server Server
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:              "test",
@@ -58,11 +66,16 @@ func TestWriteJSONMatchesStock(t *testing.T) {
 		Text pointerTextMarshaler
 	}{JSON: 1, Text: 2}
 
+	largePods := slices.Repeat([]*corev1.Pod{pod}, 256)
+	if size := len(stockJSONResponse(t, largePods)); size <= 64<<10 {
+		t.Fatalf("large pod list is %d bytes, want more than 64 KiB", size)
+	}
 	tests := []struct {
 		name  string
 		value any
 	}{
 		{"pods", []corev1.Pod{*pod, {}}},
+		{"large pod list", largePods},
 		{"unstructured", &unstructured.Unstructured{Object: map[string]any{
 			"apiVersion": "example.io/v1", "kind": "Widget",
 			"spec": map[string]any{"z": []any{int64(1), false, nil}, "a": "<>&"},
@@ -80,11 +93,37 @@ func TestWriteJSONMatchesStock(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rec := httptest.NewRecorder()
-			(&Server{}).writeJSON(rec, tt.value)
-			want := stockJSONResponse(t, tt.value)
-			if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "application/json" || !bytes.Equal(rec.Body.Bytes(), want) {
-				t.Fatalf("response = %d %v %q, want 200 application/json %q", rec.Code, rec.Header(), rec.Body, want)
+			mux := http.NewServeMux()
+			mux.HandleFunc("/stock", func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				if err := json.NewEncoder(w).Encode(tt.value); err != nil {
+					t.Errorf("stock encoder: %v", err)
+				}
+			})
+			mux.HandleFunc("/streamed", func(w http.ResponseWriter, _ *http.Request) {
+				server.writeJSON(w, tt.value)
+			})
+			ts := httptest.NewServer(compressMiddleware()(mux))
+			t.Cleanup(ts.Close)
+			for _, encoding := range []string{"identity", "gzip"} {
+				t.Run(encoding, func(t *testing.T) {
+					stock, want := readWriteJSONResponse(t, ts, "/stock", encoding)
+					streamed, got := readWriteJSONResponse(t, ts, "/streamed", encoding)
+					checkWriteJSONResponse(t, stock, encoding)
+					checkWriteJSONResponse(t, streamed, encoding)
+					if !bytes.Equal(got, want) {
+						t.Fatalf("response differs from stock: got %d bytes, want %d matching bytes", len(got), len(want))
+					}
+					stock.Header.Del("Date")
+					streamed.Header.Del("Date")
+					if !maps.EqualFunc(streamed.Header, stock.Header, slices.Equal[[]string]) ||
+						streamed.ContentLength != stock.ContentLength ||
+						!slices.Equal(streamed.TransferEncoding, stock.TransferEncoding) {
+						t.Fatalf("headers or framing differ: streamed %v length=%d transfer=%v, stock %v length=%d transfer=%v",
+							streamed.Header, streamed.ContentLength, streamed.TransferEncoding,
+							stock.Header, stock.ContentLength, stock.TransferEncoding)
+					}
+				})
 			}
 		})
 	}
@@ -109,6 +148,47 @@ func TestWriteJSONNilSlice(t *testing.T) {
 	}
 }
 
+func readWriteJSONResponse(t *testing.T, ts *httptest.Server, path, encoding string) (*http.Response, []byte) {
+	t.Helper()
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Accept-Encoding", encoding)
+	resp, err := ts.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var reader io.Reader = resp.Body
+	if resp.Header.Get("Content-Encoding") == "gzip" {
+		zr, err := gzip.NewReader(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer zr.Close()
+		reader = zr
+	}
+	body, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp, body
+}
+
+func checkWriteJSONResponse(t *testing.T, resp *http.Response, encoding string) {
+	t.Helper()
+	if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Type") != "application/json" {
+		t.Fatalf("%s: got %s and headers %v, want 200 application/json", resp.Request.URL.Path, resp.Status, resp.Header)
+	}
+	if encoding == "identity" {
+		encoding = ""
+	}
+	if got := resp.Header.Get("Content-Encoding"); got != encoding {
+		t.Fatalf("%s: Content-Encoding = %q, want %q", resp.Request.URL.Path, got, encoding)
+	}
+}
+
 func stockJSONResponse(t *testing.T, value any) []byte {
 	t.Helper()
 	var want bytes.Buffer
@@ -119,13 +199,43 @@ func stockJSONResponse(t *testing.T, value any) []byte {
 }
 
 func TestWriteJSONEncodeError(t *testing.T) {
-	value := []any{strings.Repeat("prefix", 1<<16), math.NaN()}
-	var stock bytes.Buffer
-	if err := json.NewEncoder(&stock).Encode(value); err == nil || stock.Len() != 0 {
-		t.Fatalf("stock encode error = %v, wrote %d bytes", err, stock.Len())
+	t.Setenv("RADAR_COMPRESS_LEVEL", "1")
+	// The prefix exceeds the HTTP/1.1 buffering threshold even with gzip.
+	prefix := make([]byte, 256<<10)
+	_, _ = rand.NewChaCha8([32]byte{1}).Read(prefix)
+	value := []any{prefix, math.NaN()}
+	want := stockJSONResponse(t, []any{prefix, nil})
+	var server Server
+	ts := httptest.NewServer(compressMiddleware()(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		server.writeJSON(w, value)
+	})))
+	t.Cleanup(ts.Close)
+	for _, encoding := range []string{"identity", "gzip"} {
+		t.Run(encoding, func(t *testing.T) {
+			var logs bytes.Buffer
+			previous := log.Writer()
+			log.SetOutput(&logs)
+			t.Cleanup(func() { log.SetOutput(previous) })
+
+			resp, body := readWriteJSONResponse(t, ts, "/", encoding)
+			checkWriteJSONResponse(t, resp, encoding)
+			if !slices.Equal(resp.TransferEncoding, []string{"chunked"}) {
+				t.Fatalf("Transfer-Encoding = %v, want chunked", resp.TransferEncoding)
+			}
+			if len(body) < 64<<10 || !bytes.HasPrefix(want, body) || json.Valid(body) {
+				t.Fatalf("got %d bytes, want a truncated JSON prefix", len(body))
+			}
+			log.SetOutput(previous)
+			if !strings.Contains(logs.String(), "Failed to encode JSON response:") || !strings.Contains(logs.String(), "NaN") {
+				t.Fatalf("missing encode error in log: %q", logs.String())
+			}
+		})
 	}
+}
+
+func TestWriteJSONEarlyEncodeError(t *testing.T) {
 	rec := httptest.NewRecorder()
-	(&Server{}).writeJSON(rec, value)
+	(&Server{}).writeJSON(rec, []any{"prefix", math.NaN()})
 	result := rec.Result()
 	defer result.Body.Close()
 	body, err := io.ReadAll(result.Body)
@@ -133,15 +243,32 @@ func TestWriteJSONEncodeError(t *testing.T) {
 		t.Fatal(err)
 	}
 	if result.StatusCode != http.StatusOK || result.Header.Get("Content-Type") != "application/json" || len(body) != 0 {
-		t.Fatalf("encode error response = %d %v, %d body bytes", result.StatusCode, result.Header, len(body))
+		t.Fatalf("got %s, headers %v, and %d body bytes, want 200 application/json with an empty body", result.Status, result.Header, len(body))
+	}
+}
+
+func TestWriteJSONEarlyEncodeErrorAfterWriteHeader(t *testing.T) {
+	t.Setenv("RADAR_COMPRESS_LEVEL", "1")
+	var server Server
+	ts := httptest.NewServer(compressMiddleware()(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+		server.writeJSON(w, []any{"prefix", math.NaN()})
+	})))
+	t.Cleanup(ts.Close)
+	for _, encoding := range []string{"identity", "gzip"} {
+		t.Run(encoding, func(t *testing.T) {
+			resp, body := readWriteJSONResponse(t, ts, "/", encoding)
+			if resp.StatusCode != http.StatusAccepted || resp.ContentLength != 0 || len(body) != 0 || resp.Header.Get("Content-Encoding") != "" {
+				t.Fatalf("got %s, headers %v, and %d body bytes, want 202 with an empty identity body", resp.Status, resp.Header, len(body))
+			}
+		})
 	}
 }
 
 type writeJSONFailingWriter struct {
 	*httptest.ResponseRecorder
-	writes            int
-	writeHeaders      int
-	pooledDuringWrite int
+	writes       int
+	writeHeaders int
 }
 
 func (w *writeJSONFailingWriter) WriteHeader(int) {
@@ -150,30 +277,25 @@ func (w *writeJSONFailingWriter) WriteHeader(int) {
 
 func (w *writeJSONFailingWriter) Write([]byte) (int, error) {
 	w.writes++
-	w.pooledDuringWrite = len(jsonResponseBuffers)
 	return 0, io.ErrShortWrite
 }
 
 func TestWriteJSONWriteError(t *testing.T) {
-	drainJSONResponseBuffers()
-	buf := new(bytes.Buffer)
-	jsonResponseBuffers <- buf
-
-	w := &writeJSONFailingWriter{ResponseRecorder: httptest.NewRecorder()}
-	(&Server{}).writeJSON(w, []string{"value"})
-	if w.writes != 1 || w.writeHeaders != 0 {
-		t.Errorf("got %d Write calls and %d WriteHeader calls, want 1 Write and 0 WriteHeader", w.writes, w.writeHeaders)
-	}
-	if w.pooledDuringWrite != 0 {
-		t.Errorf("pool had %d buffers during Write, want 0", w.pooledDuringWrite)
-	}
-	select {
-	case got := <-jsonResponseBuffers:
-		if got != buf {
-			t.Error("writeJSON returned a different buffer to the pool")
-		}
-	default:
-		t.Error("writeJSON did not return its buffer to the pool")
+	for _, tt := range []struct {
+		name  string
+		value []string
+	}{
+		{"final flush", []string{"value"}},
+		// This response fills the buffer while MarshalWrite is still encoding.
+		{"during encoding", slices.Repeat([]string{strings.Repeat("x", 1<<10)}, 256)},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			w := &writeJSONFailingWriter{ResponseRecorder: httptest.NewRecorder()}
+			(&Server{}).writeJSON(w, tt.value)
+			if w.writes != 1 || w.writeHeaders != 0 {
+				t.Errorf("got %d Write calls and %d WriteHeader calls, want 1 Write and 0 WriteHeader", w.writes, w.writeHeaders)
+			}
+		})
 	}
 }
 
@@ -182,9 +304,9 @@ func TestWriteJSONConcurrent(t *testing.T) {
 	var wg sync.WaitGroup
 	start := make(chan struct{})
 	for worker := range 12 {
-		large := []any{worker, strings.Repeat("payload<", 1<<16)}
+		large := slices.Repeat([]string{strings.Repeat("payload<", 128) + string(rune('a'+worker))}, 256)
 		small := map[string]int{"worker": worker}
-		bad := []any{large, math.Inf(1)}
+		bad := []any{"prefix", math.Inf(1)}
 		values := []any{large, small, bad}
 		want := [][]byte{stockJSONResponse(t, large), stockJSONResponse(t, small), nil}
 		wg.Go(func() {
@@ -211,55 +333,35 @@ type writeJSONSink struct {
 func (w *writeJSONSink) Header() http.Header { return w.header }
 func (w *writeJSONSink) WriteHeader(int)     {}
 func (w *writeJSONSink) Write(p []byte) (int, error) {
-	w.size = len(p)
+	w.size += len(p)
 	return len(p), nil
 }
 
-func drainJSONResponseBuffers() []*bytes.Buffer {
-	var buffers []*bytes.Buffer
-	for {
-		select {
-		case buf := <-jsonResponseBuffers:
-			buffers = append(buffers, buf)
-		default:
-			return buffers
-		}
-	}
-}
-
-func TestWriteJSONRetainedMemory(t *testing.T) {
-	const slots, retainedCap = 4, 16 << 20
-	if cap(jsonResponseBuffers) != slots {
-		t.Fatalf("pool holds up to %d buffers, want %d", cap(jsonResponseBuffers), slots)
-	}
-	drainJSONResponseBuffers()
+func TestWriteJSONColdHeap(t *testing.T) {
 	var server Server
-	sink := &writeJSONSink{header: make(http.Header)}
-	server.writeJSON(sink, strings.Repeat("x", retainedCap))
-	if sink.size != retainedCap+3 || len(jsonResponseBuffers) != 0 {
-		t.Fatalf("oversized payload wrote %d bytes and retained %d buffers", sink.size, len(jsonResponseBuffers))
-	}
-
-	var wg sync.WaitGroup
-	start := make(chan struct{})
-	payload := []string{strings.Repeat("x", 1<<20)}
-	for range 2 * slots {
-		wg.Go(func() {
-			<-start
-			server.writeJSON(&writeJSONSink{header: make(http.Header)}, payload)
-		})
-	}
-	close(start)
-	wg.Wait()
-	buffers := drainJSONResponseBuffers()
-	retained := len(buffers)
-	if retained == 0 || retained > slots {
-		t.Fatalf("pool retained %d buffers after concurrent responses", retained)
-	}
-	for _, buf := range buffers {
-		if capacity := buf.Cap(); capacity > retainedCap {
-			t.Errorf("pool retained a %d-byte buffer, want at most %d", capacity, retainedCap)
+	values := slices.Repeat([]string{strings.Repeat("x", 1021)}, 8<<10)
+	measure := func(count int) uint64 {
+		data := any(values[:count])
+		sink := &writeJSONSink{header: make(http.Header)}
+		// Two collections also clear the victim cache of the encoder's sync.Pool.
+		runtime.GC()
+		runtime.GC()
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		server.writeJSON(sink, data)
+		runtime.ReadMemStats(&after)
+		if want := count*1024 + 2; sink.size != want {
+			t.Fatalf("wrote %d bytes, want %d", sink.size, want)
 		}
+		// TotalAlloc bounds the incremental heap even if a collection occurs
+		// during encoding. The sink counts bytes without storing the response.
+		return after.TotalAlloc - before.TotalAlloc
+	}
+	small, large := measure(1<<10), measure(8<<10)
+	t.Logf("cold allocations: 1 MiB response %d bytes, 8 MiB response %d bytes", small, large)
+	const maxColdBytes, maxGrowth = 512 << 10, 256 << 10
+	if max(small, large) > maxColdBytes || large > small+maxGrowth {
+		t.Fatalf("cold allocations exceeded %d bytes per response or grew by more than %d bytes", maxColdBytes, maxGrowth)
 	}
 }
 
@@ -280,7 +382,7 @@ func TestWriteJSONAllocations(t *testing.T) {
 	sink := &writeJSONSink{header: make(http.Header)}
 	server.writeJSON(sink, rows)
 	if sink.size < 3<<20 {
-		t.Fatalf("eviction fixture wrote only %d bytes", sink.size)
+		t.Fatalf("allocation fixture wrote only %d bytes", sink.size)
 	}
 	result := testing.Benchmark(func(b *testing.B) {
 		for b.Loop() {

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"embed"
@@ -5225,37 +5226,18 @@ func normalizeNilSlice(data any) any {
 	return data
 }
 
-// Four slots bound idle retention to 64 MiB. A full pod list can grow the
-// buffer to 16 MiB even though the encoded response is about half that size.
-const jsonResponseRetainedCap = 16 << 20
-
-var jsonResponseBuffers = make(chan *bytes.Buffer, 4)
-
 func (s *Server) writeJSON(w http.ResponseWriter, data any) {
 	w.Header().Set("Content-Type", "application/json")
-
-	var buf *bytes.Buffer
-	select {
-	case buf = <-jsonResponseBuffers:
-		buf.Reset()
-	default:
-		buf = new(bytes.Buffer)
+	bw := bufio.NewWriterSize(w, 64<<10)
+	err := jsonv2.MarshalWrite(bw, normalizeNilSlice(data), json.DefaultOptionsV1())
+	if err == nil {
+		err = bw.WriteByte('\n')
 	}
-	defer func() {
-		if buf.Cap() <= jsonResponseRetainedCap {
-			select {
-			case jsonResponseBuffers <- buf:
-			default:
-			}
-		}
-	}()
-
-	if err := jsonv2.MarshalWrite(buf, normalizeNilSlice(data), json.DefaultOptionsV1()); err != nil {
-		log.Printf("Failed to encode JSON response: %v", err)
-		return
+	if err == nil {
+		err = bw.Flush()
 	}
-	buf.WriteByte('\n')
-	if _, err := w.Write(buf.Bytes()); err != nil {
+	if err != nil {
+		// A failed encode can leave a prefix on the wire. Discard pending bytes.
 		log.Printf("Failed to encode JSON response: %v", err)
 	}
 }
