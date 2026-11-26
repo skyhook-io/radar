@@ -73,6 +73,7 @@ export const RADAR_FEATURES = {
   reviewedWorkloadActions: { label: 'Reviewed workload actions', flag: 'reviewedWorkloadActions', flagShippedWithEndpoint: true, requireAffirmativeSupport: true },
   reviewedRoutingActions: { label: 'Reviewed routing changes', flag: 'reviewedRoutingActions', flagShippedWithEndpoint: true, requireAffirmativeSupport: true },
   reviewedContainerResources: { label: 'Reviewed container resources', flag: 'reviewedContainerResources', flagShippedWithEndpoint: true, requireAffirmativeSupport: true },
+  reviewedActionAccess: { label: 'Reviewed action access', flag: 'reviewedActionAccess', flagShippedWithEndpoint: true, requireAffirmativeSupport: true },
   resourceDeletePreconditions: { label: 'Delete only the object you reviewed', flag: 'resourceDeletePreconditions', flagShippedWithEndpoint: true },
   gitopsWriteEvidence: { label: 'GitOps revert warnings', flag: 'gitopsWriteEvidence', flagShippedWithEndpoint: true },
   serviceEndpointSlices: { label: 'Service EndpointSlice inventories', flag: 'serviceEndpointSlices', flagShippedWithEndpoint: true },
