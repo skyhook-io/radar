@@ -97,6 +97,14 @@ func reviewedActionAccess(ctx context.Context, client dynamic.Interface, action 
 		}
 		// With a complete result, no authorizer allowing the request is a denial.
 		if !allowed {
+			// Service routing lists only matching Pods and EndpointSlices. A
+			// selector-aware authorizer may allow that narrower request even
+			// when this namespace-wide list was denied. This preflight
+			// does not read the live Service or its routing evidence.
+			if action == "setServiceSelectorLabel" && check.Verb == "list" {
+				access = "unknown"
+				continue
+			}
 			return "denied"
 		}
 	}

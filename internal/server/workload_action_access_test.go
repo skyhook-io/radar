@@ -110,6 +110,35 @@ func TestReviewedActionAccessIncompleteReviews(t *testing.T) {
 	}
 }
 
+func TestReviewedActionAccessDoesNotExcludeSelectorLimitedReviewer(t *testing.T) {
+	for _, tc := range []struct {
+		action, kind, refusedVerb, refusedResource, want string
+	}{
+		{"setServiceSelectorLabel", "Service", "list", "pods", "unknown"},
+		{"setServiceSelectorLabel", "Service", "list", "endpointslices", "unknown"},
+		{"setServiceSelectorLabel", "Service", "patch", "services", "denied"},
+		{"setPodTemplateLabel", "Deployment", "list", "services", "denied"},
+	} {
+		t.Run(tc.action+"/"+tc.refusedVerb+"/"+tc.refusedResource, func(t *testing.T) {
+			client := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())
+			client.PrependReactor("create", "selfsubjectaccessreviews", func(a ktesting.Action) (bool, runtime.Object, error) {
+				review := a.(ktesting.CreateAction).GetObject().(*unstructured.Unstructured)
+				verb, _, _ := unstructured.NestedString(review.Object, "spec", "resourceAttributes", "verb")
+				resource, _, _ := unstructured.NestedString(review.Object, "spec", "resourceAttributes", "resource")
+				review.Object["status"] = map[string]any{"allowed": !(verb == tc.refusedVerb && resource == tc.refusedResource)}
+				return true, review, nil
+			})
+			target, err := reviewedActionTarget(tc.kind, tc.action)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := reviewedActionAccess(t.Context(), client, tc.action, target.gvr, "prod", "checkout"); got != tc.want {
+				t.Fatalf("access %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestReviewedActionAccessOnlyAsAuthenticatedCaller(t *testing.T) {
 	_, shared := reviewedRestartRouter(t, reviewedDeployment())
 	var users []string
