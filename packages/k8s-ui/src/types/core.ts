@@ -127,6 +127,7 @@ export interface IntegrationCapability {
 // Feature capabilities based on RBAC permissions
 export interface Capabilities {
   configManagement?: 'local' | 'operator' | 'cloud'
+  substrateLocalConnection?: boolean
   podExecUID?: boolean
   podDebugImage?: string
   podDebug?: boolean
@@ -199,6 +200,8 @@ export interface FeatureCapabilities {
   workloadImages?: boolean
   deploymentPause?: boolean
   substrateHealthMetrics?: boolean
+  /** GET /api/substrate/* and PUT /api/substrate/connection. */
+  substrateWorkspace?: boolean
   resourceIssues?: boolean
   resourceIssueCoverage?: boolean
   // GET /api/issues/resource/... with ?correlate=<issueID>

@@ -2329,6 +2329,7 @@ function InfoTab({
         )}
         <ResourceRendererDispatch
           active={active}
+          expanded
           resource={selectedResource}
           data={resource}
           relationships={relationships}

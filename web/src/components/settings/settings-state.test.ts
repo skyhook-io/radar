@@ -3,6 +3,7 @@ import {
   costSourceApplyLabel,
   prometheusHeadersFromRows,
   pendingSections,
+  showsSubstrateSection,
   shouldShowSettingsFooter,
 } from "./settings-state";
 
@@ -24,8 +25,8 @@ describe("Prometheus header edits", () => {
 });
 
 describe("Integration settings state", () => {
-  it.each(['prometheus', 'cost', 'argocd'] as const)("offers discard for a %s draft", (section) => {
-    expect(pendingSections({ prometheus: false, cost: false, argocd: false, ai: false, [section]: true })).toEqual([section]);
+  it.each(['prometheus', 'cost', 'argocd', 'substrate'] as const)("offers discard for a %s draft", (section) => {
+    expect(pendingSections({ prometheus: false, cost: false, argocd: false, substrate: false, ai: false, [section]: true })).toEqual([section]);
     expect(
       shouldShowSettingsFooter({
         canEditConfig: true,
@@ -39,7 +40,7 @@ describe("Integration settings state", () => {
   });
 
   it("offers review from other sections and retains the close guard", () => {
-    expect(pendingSections({ prometheus: true, cost: true, argocd: true, ai: true })).toEqual(['prometheus', 'cost', 'argocd', 'ai']);
+    expect(pendingSections({ prometheus: true, cost: true, argocd: true, substrate: true, ai: true })).toEqual(['prometheus', 'cost', 'argocd', 'substrate', 'ai']);
     expect(
       shouldShowSettingsFooter({
         canEditConfig: true,
@@ -65,3 +66,20 @@ describe("Integration settings state", () => {
     expect(costSourceApplyLabel("prometheus")).toBe("Apply source");
   });
 });
+
+describe('showsSubstrateSection', () => {
+  const base = { supported: true, discovered: false, saved: false, dirty: false }
+  it('hides on a cluster that doesn’t serve Substrate', () => {
+    expect(showsSubstrateSection(base)).toBe(false)
+  })
+  it('shows where Substrate is served, or a connection to remove is still saved', () => {
+    expect(showsSubstrateSection({ ...base, discovered: true })).toBe(true)
+    expect(showsSubstrateSection({ ...base, saved: true })).toBe(true)
+  })
+  it('hides against a Radar that predates the Substrate views', () => {
+    expect(showsSubstrateSection({ ...base, supported: false, discovered: true })).toBe(false)
+  })
+  it('keeps a section holding a draft, even after a switch to a cluster without Substrate', () => {
+    expect(showsSubstrateSection({ ...base, supported: false, dirty: true })).toBe(true)
+  })
+})

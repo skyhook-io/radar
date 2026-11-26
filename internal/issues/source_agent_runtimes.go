@@ -2,6 +2,7 @@ package issues
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/health"
@@ -59,8 +60,8 @@ func detectSandboxSuspensionBlocked(gvr schema.GroupVersionResource, kind string
 	return []Issue{newConditionIssue(gvr, kind, u.GetNamespace(), u.GetName(), SeverityWarning, "PodNotOwned", message, time.Time{}, false, "", u.GetCreationTimestamp().Time)}
 }
 
-// detectWorkerPoolIssues reports each sandbox class of an Agent Substrate
-// WorkerPool whose spec does not resolve to a usable SandboxConfig. The
+// detectWorkerPoolIssues reports one unresolved-configuration issue per
+// WorkerPool, at the severity of its strongest class condition. The
 // condition is nested per class in status.sandboxClasses[], where the generic
 // condition walk never looks. Workers that are not ready are left to the
 // worker Deployment the pool owns, which has Issues of its own; a pool whose
@@ -68,7 +69,8 @@ func detectSandboxSuspensionBlocked(gvr schema.GroupVersionResource, kind string
 func detectWorkerPoolIssues(gvr schema.GroupVersionResource, kind string, u *unstructured.Unstructured) []Issue {
 	desired, _, _ := unstructured.NestedInt64(u.Object, "spec", "replicas")
 	ready, _, _ := unstructured.NestedInt64(u.Object, "status", "readyReplicas")
-	var out []Issue
+	var strongest *Issue
+	var messages []string
 	for _, c := range health.WorkerPoolClasses(u) {
 		if c.Status != "False" {
 			continue
@@ -93,14 +95,20 @@ func detectWorkerPoolIssues(gvr schema.GroupVersionResource, kind string, u *uns
 		if c.Name != "" {
 			message = fmt.Sprintf("Sandbox class %s: %s", c.Name, message)
 		}
-		out = append(out, newConditionIssue(gvr, kind, u.GetNamespace(), u.GetName(), severity, reason, message, c.TransitionAt, !c.TransitionAt.IsZero(), c.Name, u.GetCreationTimestamp().Time))
-	}
-	if len(out) == 0 {
-		if issue, ok := workerPoolDeploymentMissing(gvr, kind, u, desired, time.Now()); ok {
-			out = append(out, issue)
+		messages = append(messages, message)
+		if strongest == nil || severity == SeverityCritical && strongest.Severity != SeverityCritical {
+			issue := newConditionIssue(gvr, kind, u.GetNamespace(), u.GetName(), severity, reason, message, c.TransitionAt, !c.TransitionAt.IsZero(), c.Name, u.GetCreationTimestamp().Time)
+			strongest = &issue
 		}
 	}
-	return out
+	if strongest != nil {
+		strongest.Message = strings.Join(messages, " ")
+		return []Issue{*strongest}
+	}
+	if issue, ok := workerPoolDeploymentMissing(gvr, kind, u, desired, time.Now()); ok {
+		return []Issue{issue}
+	}
+	return nil
 }
 
 // workerPoolDeploymentMissing reports a pool whose worker Deployment never

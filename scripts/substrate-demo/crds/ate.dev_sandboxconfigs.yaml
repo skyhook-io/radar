@@ -1,0 +1,179 @@
+# Copyright 2026 The Agent Substrate Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: sandboxconfigs.ate.dev
+spec:
+  group: ate.dev
+  names:
+    kind: SandboxConfig
+    listKind: SandboxConfigList
+    plural: sandboxconfigs
+    shortNames:
+    - sandboxconfig
+    singular: sandboxconfig
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.sandboxClass
+      name: Class
+      type: string
+    - jsonPath: .spec.defaultVersion
+      name: Default
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          SandboxConfig is cluster-scoped configuration describing the versions of the
+          sandbox binaries for a sandbox runtime family. It is referenced by a
+          WorkerPool's spec.sandboxClasses[].configRef (or resolved via the
+          sandboxconfig.ate.dev/is-class-default annotation) and decouples sandbox
+          binary selection from the workload definition.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: spec defines the desired state of SandboxConfig
+            properties:
+              defaultVersion:
+                description: |-
+                  defaultVersion names the entry in versions that new sandboxes boot with.
+                  It must name an existing, non-Disabled version.
+                maxLength: 63
+                minLength: 1
+                type: string
+              sandboxClass:
+                default: gvisor
+                description: |-
+                  sandboxClass is the sandbox runtime family this config applies to. A
+                  WorkerPool only uses SandboxConfigs whose sandboxClass matches the entry
+                  in its spec.sandboxClasses.
+                enum:
+                - gvisor
+                - microvm
+                type: string
+              versions:
+                description: versions are the sandbox versions this config offers,
+                  keyed by name.
+                items:
+                  description: |-
+                    SandboxVersionConfig is one version of a SandboxConfig: the asset set a
+                    sandbox boots with.
+                  properties:
+                    assets:
+                      additionalProperties:
+                        additionalProperties:
+                          description: |-
+                            AssetFile is one content-addressed file that atelet fetches for a sandbox
+                            runtime (e.g. the gVisor runsc binary, or a micro-VM kernel/firmware/config).
+                          properties:
+                            sha256:
+                              description: |-
+                                sha256 is the lower-case hex SHA256 of the asset. It both names the cached
+                                file (preventing collisions) and verifies the download's integrity.
+                              pattern: ^[a-f0-9]{64}$
+                              type: string
+                            url:
+                              description: |-
+                                url is where to download the asset from (e.g. a gs:// URL). atelet
+                                fetches every URL through the node's object-store plugin, with the
+                                plugin's credentials. The plugin refuses URLs under a snapshot location.
+                                The in-tree plugin serves only its storage backend's scheme: gs:// on
+                                GCS, s3:// on S3. A gs:// URL the plugin has no object for or cannot
+                                serve is then read anonymously, which serves public buckets such as
+                                gs://gvisor.
+                              maxLength: 2048
+                              minLength: 1
+                              type: string
+                          required:
+                          - sha256
+                          - url
+                          type: object
+                        type: object
+                      description: |-
+                        assets is the set of files atelet fetches for this runtime, keyed first by
+                        architecture (GOARCH, e.g. "amd64", "arm64") and then by asset name. The
+                        asset names are interpreted by the sandbox backend: gVisor expects a
+                        "gvisor" asset (the release's gvisor.tar.zstd, which atelet extracts so
+                        the gvisor-bin/ helpers sit next to runsc); a micro-VM backend expects
+                        several (e.g. "cloud-hypervisor", "kata-kernel", "kata-image"). The
+                        schema is intentionally generic; per-class requirements are enforced by
+                        a ValidatingAdmissionPolicy.
+                      type: object
+                    name:
+                      description: |-
+                        name identifies this version within its SandboxConfig. It is a DNS label
+                        (lower-case alphanumerics and '-').
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                      type: string
+                    state:
+                      default: Enabled
+                      description: |-
+                        state is whether this version may be used: Enabled (default) or
+                        Disabled.
+                      enum:
+                      - Enabled
+                      - Disabled
+                      type: string
+                  required:
+                  - name
+                  type: object
+                maxItems: 16
+                minItems: 1
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
+            required:
+            - defaultVersion
+            - versions
+            type: object
+            x-kubernetes-validations:
+            - message: defaultVersion must name an entry in versions
+              rule: self.versions.exists(v, v.name == self.defaultVersion)
+            - message: the version named by defaultVersion must not be Disabled
+              rule: '!self.versions.exists(v, v.name == self.defaultVersion && has(v.state)
+                && v.state == ''Disabled'')'
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources: {}

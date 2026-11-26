@@ -859,3 +859,18 @@ probes:
     periodSeconds: 10
     timeoutSeconds: 5
     failureThreshold: 3
+
+# Substrate API reads require sign-in and each user's own TokenRequest access.
+substrate:
+  api:
+    # Default Hub members and owners read as ate-client where their edit/admin
+    # grants already let them act as that ServiceAccount. Set this to false
+    # to turn off Substrate API reads for everyone.
+    enabled: true
+    endpoint: api.ate-system.svc:443
+    serverName: api.ate-system.svc
+    # Fallback only when listing atespaces is denied. A successful list is used in full.
+    atespaces: []
+    caConfigMap:
+      name: ""
+      key: ca.crt

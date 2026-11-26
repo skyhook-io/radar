@@ -144,6 +144,10 @@ type Capabilities struct {
 	Karpenter              IntegrationCapability    `json:"karpenter"`               // Per-request Karpenter discovery + NodePool read state; populated by the HTTP layer after user SAR.
 	PolicyReports          *PolicyReportStatus      `json:"policyReports,omitempty"` // Why the Kyverno PolicyReport index is (or is not) populated, so an empty policy view can say which.
 	CloudConnect           *CloudConnectCapability  `json:"cloudConnect,omitempty"`
+
+	// SubstrateLocalConnection allows reading and editing the saved connection on a private local Radar.
+	SubstrateLocalConnection bool `json:"substrateLocalConnection"`
+
 	// ChecksIncomplete: an access check errored, so a false above may be a
 	// failed check rather than a denial. The server re-checks after a short
 	// TTL; the UI should refetch soon.
@@ -212,6 +216,8 @@ type FeatureCapabilities struct {
 	PodEnvironment   bool `json:"podEnvironment"`  // GET /api/pods/{namespace}/{name}/environment
 	PolicyResource   bool `json:"policyResource"`  // GET /api/policy/resource/{kind}/{namespace}/{name}
 	WorkloadHistory  bool `json:"workloadHistory"` // GET /api/workloads/{kind}/{namespace}/{name}/history
+	// Substrate workspace routes, including /api/substrate/workerpools/{namespace}/{name}.
+	SubstrateWorkspace bool `json:"substrateWorkspace"`
 	// The workspace and its read/action surfaces, excluding protection setup.
 	CNPGWorkspace       bool `json:"cnpgWorkspace"`
 	CNPGProtectionSetup bool `json:"cnpgProtectionSetup"`

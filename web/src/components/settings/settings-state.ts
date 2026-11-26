@@ -5,20 +5,30 @@ export type SettingsSectionId =
   | 'prometheus'
   | 'cost'
   | 'argocd'
+  | 'substrate'
   | 'ai'
   | 'advanced'
   | 'privacy'
 
 export type IntegrationSectionId = 'prometheus' | 'cost' | 'argocd'
 // Tabs whose drafts save through their own form, not the startup footer.
-export type PendingSectionId = IntegrationSectionId | 'ai'
+export type PendingSectionId = IntegrationSectionId | 'substrate' | 'ai'
 
 export const pendingSectionLabels: Record<PendingSectionId, string> = {
-  prometheus: 'Metrics', cost: 'Cost', argocd: 'Argo CD', ai: 'AI investigations',
+  prometheus: 'Metrics', cost: 'Cost', argocd: 'Argo CD', substrate: 'Agent Substrate', ai: 'AI investigations',
+}
+
+/**
+ * Agent Substrate runs on few clusters, so its section shows only where it can
+ * matter: the cluster serves Substrate's API, a connection is still saved for
+ * this cluster (so it can be disconnected), or the form holds a draft.
+ */
+export function showsSubstrateSection(input: { supported: boolean; discovered: boolean; saved: boolean; dirty: boolean }): boolean {
+  return input.dirty || (input.supported && (input.discovered || input.saved))
 }
 
 export function pendingSections(dirty: Record<PendingSectionId, boolean>): PendingSectionId[] {
-  return (['prometheus', 'cost', 'argocd', 'ai'] as const).filter(section => dirty[section])
+  return (['prometheus', 'cost', 'argocd', 'substrate', 'ai'] as const).filter(section => dirty[section])
 }
 
 // AI preferences are open to every user, so an AI draft pending in another tab

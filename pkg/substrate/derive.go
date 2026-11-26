@@ -1,0 +1,651 @@
+package substrate
+
+import (
+	"maps"
+	"math"
+	"math/bits"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/skyhook-io/radar/pkg/timeutil"
+)
+
+// transitional states are the ones an actor should pass through, not stay in.
+var transitional = map[string]bool{StateResuming: true, StateSuspending: true, StateReverting: true, StateDeleting: true}
+
+// HeldFor is how long the actor's state has held at least: Substrate records
+// no transition time, but every state change updates the actor, so its last
+// update is a lower bound. Zero when Substrate reported no update time.
+func HeldFor(updated, now time.Time) time.Duration {
+	if updated.IsZero() || now.Before(updated) {
+		return 0
+	}
+	return now.Sub(updated)
+}
+
+// ActorReason explains a state other than running in a few words: the crash
+// message, how long a transition has lasted, or a suspended actor's pending
+// upload. Empty for a running actor or one with nothing to add. The upload
+// reading is literal: the API records no upload start, only the actor's last
+// change, which is not Substrate's durability clock.
+func ActorReason(a Actor, now time.Time) string {
+	switch {
+	case a.State == StateCrashed:
+		if a.Crash != nil && a.Crash.Message != "" {
+			return a.Crash.Message
+		}
+		return "Substrate recorded no crash message"
+	case transitional[a.State]:
+		label := strings.ToUpper(a.State[:1]) + a.State[1:]
+		if d := HeldFor(a.UpdateTime, now); d > 0 {
+			return label + " for " + timeutil.FormatAgeShort(d)
+		}
+		return label
+	case a.State == StateSuspended:
+		if s := NewestSnapshot(a); s != nil && s.Durable == DurablePending {
+			if d := HeldFor(a.UpdateTime, now); d > 0 {
+				return "Upload pending; last updated " + timeutil.FormatAgeShort(d) + " ago"
+			}
+			return "Upload pending"
+		}
+	}
+	return ""
+}
+
+// ActorNode prefers the current worker's node, then the last assigned node,
+// then the newest snapshot's locality.
+func ActorNode(a Actor) string {
+	if a.Assignment != nil && a.Assignment.Node != "" {
+		return a.Assignment.Node
+	}
+	if a.AssignedNode != "" {
+		return a.AssignedNode
+	}
+	if s := NewestSnapshot(a); s != nil {
+		return s.Locality
+	}
+	return ""
+}
+
+// ActorRow is one actor as the actor tables show it.
+type ActorRow struct {
+	Atespace string `json:"atespace"`
+	Name     string `json:"name"`
+	State    string `json:"state"`
+	// Reason is the crash message, transition age, or pending-upload reading from ActorReason.
+	Reason string `json:"reason,omitempty"`
+	// Cause names a crash's cause where Substrate's message says it
+	// (CauseMemoryLimit), so a table can show a short label and keep Reason
+	// for hover; absent otherwise.
+	Cause    string `json:"cause,omitempty"`
+	Template Ref    `json:"template"`
+	// Worker is the hosting worker Pod; absent when the actor has no worker.
+	Worker *WorkerPodRef `json:"worker,omitempty"`
+	// Node is ActorNode; absent when Substrate names none.
+	Node string `json:"node,omitempty"`
+	// NewestSnapshot is the highest generation, finished or not.
+	NewestSnapshot *Snapshot `json:"newestSnapshot,omitempty"`
+	// ResumeGeneration is the generation a resume restores from
+	// (ResumeSource); absent when the actor boots cold.
+	ResumeGeneration int32 `json:"resumeGeneration,omitempty"`
+	// Resume is ResumeOf: resumesWith, and the condition it holds on.
+	Resume
+	// WaitingOn is where a transitional actor waits (WaitingOn); absent in
+	// any other state.
+	WaitingOn *Waiting `json:"waitingOn,omitempty"`
+	// WorkerImpact is what its worker's state means for it (WorkerImpactOf);
+	// absent when the worker means nothing for it or was not read.
+	WorkerImpact *WorkerImpact `json:"workerImpact,omitempty"`
+	CreateTime   time.Time     `json:"createTime,omitzero"`
+	UpdateTime   time.Time     `json:"updateTime,omitzero"`
+}
+
+// WorkerPodRef locates a worker by its Pod and pool.
+type WorkerPodRef struct {
+	Worker    string `json:"worker"`
+	Namespace string `json:"namespace"`
+	Pool      string `json:"pool"`
+	Pod       string `json:"pod"`
+}
+
+// RowOf reads one actor into its table row.
+func RowOf(a Actor, now time.Time, rc ResumeContext) ActorRow {
+	row := ActorRow{
+		Atespace: a.Atespace, Name: a.Name, State: a.State, Template: a.Template,
+		Reason: ActorReason(a, now), Node: ActorNode(a), NewestSnapshot: NewestSnapshot(a),
+		Resume: ResumeOf(a, rc), CreateTime: a.CreateTime, UpdateTime: a.UpdateTime,
+	}
+	if src := ResumeSource(a); src != nil {
+		row.ResumeGeneration = src.Generation
+	}
+	if as := a.Assignment; as != nil {
+		row.Worker = &WorkerPodRef{Worker: as.Worker, Namespace: as.Namespace, Pool: as.Pool, Pod: as.Pod}
+	}
+	row.WaitingOn = WaitingOn(a)
+	if IsMemoryLimitCrash(a) {
+		row.Cause = CauseMemoryLimit
+	}
+	return row
+}
+
+// PoolLabels is a pool and the labels selectors match against.
+type PoolLabels struct {
+	Ref    PoolRef
+	Labels map[string]string
+}
+
+// KnownPools lists every pool Radar knows of: the WorkerPools in its cache,
+// then pools only Substrate's workers name. A WorkerPool's own labels win;
+// Substrate copies them onto its workers, so a worker's labels stand in for a
+// pool Radar cannot read. Sorted by namespace and name.
+func KnownPools(pools []Pool, workers []Worker) []PoolLabels {
+	byKey := map[string]PoolLabels{}
+	for _, p := range pools {
+		byKey[p.Ref().Key()] = PoolLabels{Ref: p.Ref(), Labels: p.Labels}
+	}
+	for _, w := range workers {
+		if _, ok := byKey[w.PoolRef().Key()]; !ok {
+			byKey[w.PoolRef().Key()] = PoolLabels{Ref: w.PoolRef(), Labels: w.Labels}
+		}
+	}
+	out := slices.Collect(maps.Values(byKey))
+	slices.SortFunc(out, func(a, b PoolLabels) int { return strings.Compare(a.Ref.Key(), b.Ref.Key()) })
+	return out
+}
+
+// SelectorMatches is Substrate's equality-only selector: every pair must be
+// present. An empty selector matches every pool.
+func SelectorMatches(selector, labels map[string]string) bool {
+	for k, v := range selector {
+		if got, ok := labels[k]; !ok || got != v {
+			return false
+		}
+	}
+	return true
+}
+
+// MatchingPools are the pools whose labels a template's selector matches.
+// A match is not a placement claim: Substrate also checks the actor's own
+// selector, its snapshot's class and node, the runtime, registration and the
+// actor's booking against free resources.
+func MatchingPools(t Template, pools []PoolLabels) []PoolRef {
+	return matching(pools, t.WorkerSelector, nil)
+}
+
+// ActorMatchingPools are the pools matching both the template's selector and
+// the actor's own: Substrate requires both.
+func ActorMatchingPools(a Actor, t Template, pools []PoolLabels) []PoolRef {
+	return matching(pools, t.WorkerSelector, a.WorkerSelector)
+}
+
+func matching(pools []PoolLabels, selectors ...map[string]string) []PoolRef {
+	out := []PoolRef{}
+	for _, p := range pools {
+		ok := true
+		for _, sel := range selectors {
+			ok = ok && SelectorMatches(sel, p.Labels)
+		}
+		if ok {
+			out = append(out, p.Ref)
+		}
+	}
+	return out
+}
+
+// HasFreeSlot reports whether a worker has an actor slot left: fewer actors
+// allocated than its actor capacity. Substrate treats an unreported dimension
+// as zero, so no capacity, or a capacity of 0 actors, is no slot. It says
+// nothing about whether a given actor fits: that also needs its CPU and
+// memory booking, runtime overhead included.
+func HasFreeSlot(w Worker) bool {
+	if w.Capacity == nil {
+		return false
+	}
+	var used int32
+	if w.Allocated != nil {
+		used = w.Allocated.Actors
+	}
+	return used < w.Capacity.Actors
+}
+
+// HasRoomFor reports whether worker w has a free actor slot and enough CPU
+// and memory for a fresh actor, including the default runtime's overhead.
+// Callers check worker state and selectors separately.
+func HasRoomFor(w Worker, t Template) bool {
+	cpu, memory, _ := lacks(w, t)
+	return HasFreeSlot(w) && !cpu && !memory
+}
+
+func lacks(w Worker, t Template) (cpu, memory bool, booking int64) {
+	var capacity, allocated Resources
+	if w.Capacity != nil {
+		capacity = *w.Capacity
+	}
+	if w.Allocated != nil {
+		allocated = *w.Allocated
+	}
+	cpu = t.CPUMillicores > capacity.CPUMillicores-allocated.CPUMillicores
+	// Substrate scales proportional overhead by bytes per GiB, rounding down.
+	hi, lo := bits.Mul64(uint64(t.MemoryBytes), uint64(w.DefaultMemoryOverheadPerGiB))
+	scaled := hi<<34 | lo>>30
+	if hi>>30 != 0 || scaled > math.MaxInt64 || t.MemoryBytes > math.MaxInt64-w.DefaultMemoryOverhead ||
+		int64(scaled) > math.MaxInt64-w.DefaultMemoryOverhead-t.MemoryBytes {
+		return cpu, true, math.MaxInt64
+	}
+	booking = t.MemoryBytes + w.DefaultMemoryOverhead + int64(scaled)
+	if t.CPUMillicores == 0 && booking == 0 {
+		return false, false, 0
+	}
+	memory = booking > capacity.MemoryBytes-allocated.MemoryBytes
+	return cpu, memory, booking
+}
+
+// What a pool's workers lack for an actor of any template that can run on it
+// (PoolRow.Lacking).
+const (
+	LackingCPU          = "cpu"
+	LackingMemory       = "memory"
+	LackingCPUAndMemory = "cpuAndMemory"
+)
+
+// room is a pool's judgment of whether an actor of its templates fits: what
+// its free slots lack, and the figures that prove it per dimension.
+type room struct {
+	// lacking is empty when some active worker may take an actor of some
+	// template, or nothing was judged.
+	lacking string
+	// templates is how many templates can run on the pool.
+	templates int
+	// unbooked is the most of each dimension any active worker with a free
+	// slot has unbooked; ask the least of it any template asks. ask is 0 for
+	// a dimension some template leaves unlimited.
+	unbooked, ask Resources
+}
+
+// roomOf judges whether any active worker with a free slot may take an actor
+// of any of the templates. With no such template, nothing is judged.
+func roomOf(workers []Worker, templates []Template) room {
+	r := room{}
+	r.ask.CPUMillicores, r.ask.MemoryBytes = -1, -1
+	var cpu, memory bool
+	for _, t := range templates {
+		matched := false
+		for _, w := range workers {
+			if w.State != WorkerActive || !HasFreeSlot(w) || !SelectorMatches(t.WorkerSelector, w.Labels) {
+				continue
+			}
+			matched = true
+			c, m, booked := lacks(w, t)
+			if !c && !m {
+				return room{}
+			}
+			cpu, memory = cpu || c, memory || m
+			r.ask.CPUMillicores = leastAsk(r.ask.CPUMillicores, t.CPUMillicores)
+			r.ask.MemoryBytes = leastAsk(r.ask.MemoryBytes, booked)
+			alloc := Resources{}
+			if w.Allocated != nil {
+				alloc = *w.Allocated
+			}
+			r.unbooked.CPUMillicores = max(r.unbooked.CPUMillicores, w.Capacity.CPUMillicores-alloc.CPUMillicores)
+			r.unbooked.MemoryBytes = max(r.unbooked.MemoryBytes, w.Capacity.MemoryBytes-alloc.MemoryBytes)
+		}
+		if matched {
+			r.templates++
+		}
+	}
+	switch {
+	case cpu && memory:
+		r.lacking = LackingCPUAndMemory
+	case cpu:
+		r.lacking = LackingCPU
+	case memory:
+		r.lacking = LackingMemory
+	}
+	return r
+}
+
+func leastAsk(least, ask int64) int64 {
+	if least < 0 || ask < least {
+		return ask
+	}
+	return least
+}
+
+// WorkerCounts counts workers by state.
+type WorkerCounts struct {
+	Total       int `json:"total"`
+	Active      int `json:"active"`
+	Draining    int `json:"draining"`
+	Unavailable int `json:"unavailable"`
+}
+
+func (c *WorkerCounts) add(w Worker) {
+	c.Total++
+	switch w.State {
+	case WorkerActive:
+		c.Active++
+	case WorkerDraining:
+		c.Draining++
+	case WorkerUnavailable:
+		c.Unavailable++
+	}
+}
+
+// Usage is an allocated amount out of a capacity, summed over active workers:
+// the only ones Substrate places on.
+type Usage struct {
+	Used  int64 `json:"used"`
+	Total int64 `json:"total"`
+}
+
+// Placement totals over a set of workers. Slots counts the actor slots of
+// active workers.
+type Placement struct {
+	// Workers includes every state. Resource and slot totals use active workers.
+	Workers WorkerCounts `json:"workers"`
+	Slots   Usage        `json:"slots"`
+	CPU     Usage        `json:"cpuMillicores"`
+	Memory  Usage        `json:"memoryBytes"`
+	// Complete: every Substrate worker was read. Otherwise the totals are
+	// lower bounds over the workers read, and a worker or slot not counted
+	// may exist.
+	Complete bool `json:"complete"`
+	// WithFreeSlots is how many active workers have a free actor slot
+	// (HasFreeSlot), for the pool's capacity verdict; not on the wire.
+	WithFreeSlots int `json:"-"`
+}
+
+func (p *Placement) add(w Worker) {
+	p.Workers.add(w)
+	if w.State != WorkerActive {
+		return
+	}
+	if HasFreeSlot(w) {
+		p.WithFreeSlots++
+	}
+	if w.Capacity != nil {
+		p.Slots.Total += int64(w.Capacity.Actors)
+		p.CPU.Total += w.Capacity.CPUMillicores
+		p.Memory.Total += w.Capacity.MemoryBytes
+	}
+	if w.Allocated != nil {
+		p.Slots.Used += int64(w.Allocated.Actors)
+		p.CPU.Used += w.Allocated.CPUMillicores
+		p.Memory.Used += w.Allocated.MemoryBytes
+	}
+}
+
+// PlacementOf totals the given workers and leaves Complete unset for the caller to qualify.
+func PlacementOf(workers []Worker) Placement {
+	var p Placement
+	for _, w := range workers {
+		p.add(w)
+	}
+	return p
+}
+
+// Pool capacity verdicts.
+const (
+	// CapacityShort: fewer workers take actors than the pool wants.
+	CapacityShort = "short"
+	// CapacityFull: no active worker has a free actor slot.
+	CapacityFull = "full"
+	// CapacityNoRoom: active workers have free actor slots, but none has the
+	// unbooked CPU or memory for an actor of any template that can run on
+	// the pool. Judged only on a complete worker list and a complete
+	// template list; PoolRow.Lacking names the dimension.
+	CapacityNoRoom = "noRoom"
+	// CapacityFree: some active worker has a free actor slot. With a complete
+	// worker and template list, some worker may also take an actor of some
+	// template (HasRoomFor); otherwise whether an actor fits is not judged.
+	CapacityFree = "free"
+)
+
+// PoolRow is one pool, joining Radar's WorkerPool with Substrate's workers.
+type PoolRow struct {
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+	// Kubernetes is the WorkerPool from Radar's cache; absent when only
+	// Substrate's workers name the pool.
+	Kubernetes *Pool `json:"kubernetes,omitempty"`
+	// Placement is absent when Substrate's workers were not read.
+	Placement *Placement `json:"placement,omitempty"`
+	// Actors assigned to the pool's workers; absent when actors were not read.
+	Actors         *int     `json:"actors,omitempty"`
+	SandboxClasses []string `json:"sandboxClasses,omitempty"`
+	// Capacity is short, full, noRoom or free; absent when neither side was
+	// read well enough to say.
+	Capacity string `json:"capacity,omitempty"`
+	// Lacking is what the free slots lack with capacity noRoom: cpu, memory
+	// or cpuAndMemory. Absent otherwise.
+	Lacking string `json:"lacking,omitempty"`
+	// Service is Substrate's own verdict and facts for the pool, from
+	// Prometheus; absent when Prometheus was not read for it.
+	Service *PoolService `json:"service,omitempty"`
+
+	room room
+}
+
+func (r PoolRow) Ref() PoolRef { return PoolRef{Namespace: r.Namespace, Name: r.Name} }
+
+// JoinPools joins the WorkerPools (in.Pools) with Substrate's workers by
+// namespace and name. WorkersRead and ActorsRead say whether those lists were
+// read well enough to count; a nil slice read means Substrate has none.
+// WorkersComplete says the worker list holds every worker, without which a
+// pool's placement can show a free slot. WorkerPool Pod counts or reported
+// readiness can still establish a shortfall when placement is incomplete. A pool with free slots is noRoom only when the
+// templates were read in full (TemplatesComplete) and some of them can run on
+// it: an unread template might fit.
+func JoinPools(in Inputs) []PoolRow {
+	pools, workers, actors := in.Pools, in.Workers, in.Actors
+	workersRead, workersComplete, actorsRead := in.WorkersRead, in.WorkersComplete, in.ActorsRead
+	rows := map[string]*PoolRow{}
+	row := func(ref PoolRef) *PoolRow {
+		r := rows[ref.Key()]
+		if r == nil {
+			r = &PoolRow{Namespace: ref.Namespace, Name: ref.Name}
+			if workersRead {
+				r.Placement = &Placement{Complete: workersComplete}
+			}
+			if actorsRead {
+				zero := 0
+				r.Actors = &zero
+			}
+			rows[ref.Key()] = r
+		}
+		return r
+	}
+	for i := range pools {
+		p := pools[i]
+		row(p.Ref()).Kubernetes = &p
+	}
+	if workersRead {
+		for _, w := range workers {
+			row(w.PoolRef()).Placement.add(w)
+		}
+	}
+	if actorsRead {
+		for _, a := range actors {
+			if as := a.Assignment; as != nil {
+				*row(PoolRef{Namespace: as.Namespace, Name: as.Pool}).Actors++
+			}
+		}
+	}
+	classes := map[string]map[string]bool{}
+	for _, p := range pools {
+		for _, c := range p.SandboxClasses {
+			addClass(classes, p.Ref().Key(), c)
+		}
+	}
+	for _, w := range workers {
+		for _, c := range w.SandboxClasses {
+			addClass(classes, w.PoolRef().Key(), c)
+		}
+	}
+	byPool := map[string][]Worker{}
+	if workersRead {
+		for _, w := range workers {
+			byPool[w.PoolRef().Key()] = append(byPool[w.PoolRef().Key()], w)
+		}
+	}
+	out := make([]PoolRow, 0, len(rows))
+	for key, r := range rows {
+		r.SandboxClasses = slices.Sorted(maps.Keys(classes[key]))
+		r.Capacity = poolCapacity(*r)
+		if r.Capacity == CapacityFree && r.Placement != nil && r.Placement.Complete && in.TemplatesComplete {
+			r.room = roomOf(byPool[key], in.Templates)
+			if r.room.lacking != "" {
+				r.Capacity, r.Lacking = CapacityNoRoom, r.room.lacking
+			}
+		}
+		out = append(out, *r)
+	}
+	slices.SortFunc(out, func(a, b PoolRow) int { return strings.Compare(a.Ref().Key(), b.Ref().Key()) })
+	return out
+}
+
+func addClass(classes map[string]map[string]bool, key, class string) {
+	if classes[key] == nil {
+		classes[key] = map[string]bool{}
+	}
+	classes[key][class] = true
+}
+
+func poolCapacity(r PoolRow) string {
+	var desired int64 = -1
+	if r.Kubernetes != nil && r.Kubernetes.Desired != nil {
+		desired = *r.Kubernetes.Desired
+	}
+	if r.Placement != nil && !r.Placement.Complete && r.Placement.WithFreeSlots > 0 {
+		return CapacityFree
+	}
+	if r.Placement != nil && r.Placement.Complete {
+		if desired >= 0 && int64(r.Placement.Workers.Active) < desired {
+			return CapacityShort
+		}
+		if r.Placement.WithFreeSlots == 0 {
+			if r.Placement.Workers.Active == 0 {
+				return ""
+			}
+			return CapacityFull
+		}
+		return CapacityFree
+	}
+	if r.Kubernetes != nil && desired >= 0 {
+		if ready, known := r.Kubernetes.ReadyWorkers(); known && ready < desired {
+			return CapacityShort
+		}
+	}
+	return ""
+}
+
+// StateCounts counts actors by state.
+type StateCounts struct {
+	Total   int            `json:"total"`
+	ByState map[string]int `json:"byState"`
+}
+
+// NewStateCounts returns counts with every state present at zero, so a
+// state with no actors reads 0 rather than missing.
+func NewStateCounts() StateCounts {
+	c := StateCounts{ByState: map[string]int{}}
+	for _, s := range ActorStates {
+		c.ByState[s] = 0
+	}
+	return c
+}
+
+// Add counts an actor. Initialize the counts with NewStateCounts first.
+func (c *StateCounts) Add(state string) {
+	c.Total++
+	c.ByState[state]++
+}
+
+// CountStates counts actors by state.
+func CountStates(actors []Actor) StateCounts {
+	c := NewStateCounts()
+	for _, a := range actors {
+		c.Add(a.State)
+	}
+	return c
+}
+
+// TemplateRow is one template as the templates screen shows it.
+type TemplateRow struct {
+	Atespace string `json:"atespace"`
+	Name     string `json:"name"`
+	Golden   Golden `json:"golden"`
+	// Actors is absent when actors were not read.
+	Actors         *StateCounts `json:"actors,omitempty"`
+	AttentionCount *int         `json:"attentionCount,omitempty"`
+	// MatchingPools are the pools whose labels the template's selector
+	// matches. Null when Radar cannot say: no pool list was read, or none of a
+	// partial list matches. Empty only when the pool list is complete and
+	// nothing matches.
+	MatchingPools []PoolRef `json:"matchingPools"`
+	// MatchingPoolsComplete: the pool list matched against is complete, so
+	// MatchingPools is every pool the selector matches.
+	MatchingPoolsComplete bool              `json:"matchingPoolsComplete"`
+	SandboxClasses        []string          `json:"sandboxClasses,omitempty"`
+	WorkerSelector        map[string]string `json:"workerSelector,omitempty"`
+	CPUMillicores         int64             `json:"cpuMillicores,omitempty"`
+	MemoryBytes           int64             `json:"memoryBytes,omitempty"`
+	PreferredFidelity     string            `json:"preferredFidelity"`
+	StorageLocation       string            `json:"storageLocation,omitempty"`
+	// Containers lists names. TemplateSpec provides the full definitions.
+	Containers []string  `json:"containers,omitempty"`
+	UpdateTime time.Time `json:"updateTime,omitzero"`
+}
+
+// TemplateRows reads templates with their actors and matching pools.
+// poolsUsable: some pool list (WorkerPools or workers) was read. poolsComplete:
+// it holds every pool, so a selector that matches none matches nothing.
+func TemplateRows(templates []Template, actors []Actor, actorsRead bool, pools []PoolLabels, poolsUsable, poolsComplete bool, poolRows []PoolRow) []TemplateRow {
+	counts := map[Ref]*StateCounts{}
+	if actorsRead {
+		for _, t := range templates {
+			c := NewStateCounts()
+			counts[t.Ref()] = &c
+		}
+		for _, a := range actors {
+			if c := counts[a.Template]; c != nil {
+				c.Add(a.State)
+			}
+		}
+	}
+	classes := map[string][]string{}
+	for _, r := range poolRows {
+		classes[r.Ref().Key()] = r.SandboxClasses
+	}
+	out := make([]TemplateRow, 0, len(templates))
+	for _, t := range templates {
+		row := TemplateRow{
+			Atespace: t.Atespace, Name: t.Name, Golden: GoldenOf(t), Actors: counts[t.Ref()],
+			WorkerSelector: t.WorkerSelector, CPUMillicores: t.CPUMillicores, MemoryBytes: t.MemoryBytes,
+			PreferredFidelity: t.PreferredFidelity, StorageLocation: t.StorageLocation,
+			Containers: t.Containers, UpdateTime: t.UpdateTime,
+		}
+		if poolsUsable {
+			row.MatchingPoolsComplete = poolsComplete
+			if matches := MatchingPools(t, pools); len(matches) > 0 || poolsComplete {
+				row.MatchingPools = matches
+			}
+			set := map[string]bool{}
+			for _, p := range row.MatchingPools {
+				for _, c := range classes[p.Key()] {
+					set[c] = true
+				}
+			}
+			row.SandboxClasses = slices.Sorted(maps.Keys(set))
+			if row.Golden.State == GoldenBuilding && poolsComplete && len(row.MatchingPools) == 0 {
+				row.Golden.Blocked = GoldenBlockedNoMatchingPool
+			}
+		}
+		out = append(out, row)
+	}
+	slices.SortFunc(out, func(a, b TemplateRow) int {
+		return strings.Compare(a.Atespace+"/"+a.Name, b.Atespace+"/"+b.Name)
+	})
+	return out
+}

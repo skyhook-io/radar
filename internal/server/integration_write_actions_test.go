@@ -19,7 +19,7 @@ import (
 // new family can't skip the table. Integration families act on integration
 // custom resources; workload routes also accept Argo Rollouts.
 var (
-	integrationRouteFamilies = []string{"argo", "flux", "rollouts", "workflows", "workflowtemplates", "velero", "gitops", "cnpg", "policy", "capi"}
+	integrationRouteFamilies = []string{"argo", "flux", "rollouts", "workflows", "workflowtemplates", "velero", "gitops", "cnpg", "policy", "capi", "substrate"}
 	// Built-in kinds (cronjobs, nodes, pods), generic edits of any object as
 	// the caller (resources), Helm, Radar's own settings, sessions and
 	// connections, and read-only queries sent as POST.
@@ -34,6 +34,7 @@ var (
 		"POST /api/gitops/write-evidence",
 		"POST /api/capi/clusters/{ns}/{name}/connect",
 		"POST /api/cnpg/clusters/{namespace}/{name}/protection/preview",
+		"PUT /api/substrate/connection",
 	}
 )
 

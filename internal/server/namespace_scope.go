@@ -206,6 +206,7 @@ func (s *Server) invalidatePostContextSwitchCaches() {
 	s.yamlSchemaCacheBytes = 0
 	s.yamlSchemaMu.Unlock()
 	s.vitalsMetrics.clear()
+	s.resetSubstrate()
 	gitopstree.ResetUnknownKindLogDedup()
 }
 
