@@ -108,12 +108,19 @@ describe('Metrics backend choice', () => {
     expect(container.querySelector('[data-testid="prometheus-form"]')?.closest('.hidden')).toBeNull()
   })
 
-  it('switches views without saving, and points a matched cluster to the OpenObserve view to switch', async () => {
-    await mount(matched())
+  it('switches views without saving, and releases a matched cluster from the Prometheus view without a confirmation', async () => {
+    const onChanged = vi.fn()
+    await mount(matched(), { onChanged })
+    expect(button('Use Prometheus for this cluster')).toBeUndefined()
     await click(radio('Prometheus-compatible'))
     expect(calls.filter((c) => c.method !== 'GET')).toHaveLength(0)
-    expect(container.textContent).toContain('This cluster still reads from OpenObserve. To switch, choose OpenObserve above')
-    expect(button('Use Prometheus for this cluster')).toBeUndefined()
+    expect(container.textContent).toContain('This cluster still reads from OpenObserve.')
+    reply('DELETE /integrations/openobserve/cluster?clusterUid=uid-123', { body: { connection: connection(), cluster: { uid: 'uid-123' } } })
+    await click(button('Use Prometheus for this cluster'))
+    expect(calls.at(-1)).toMatchObject({ method: 'DELETE', path: '/integrations/openobserve/cluster?clusterUid=uid-123' })
+    expect(onChanged).toHaveBeenCalled()
+    expect(radio('Prometheus-compatible').getAttribute('aria-checked')).toBe('true')
+    expect(container.textContent).not.toContain('This cluster still reads from OpenObserve.')
   })
 
   it('falls back to Prometheus on a failed load, then follows the cluster match once Retry succeeds', async () => {
@@ -268,14 +275,6 @@ describe('OpenObserve setup', () => {
     replies['GET /integrations/openobserve'] = [{ body: matched() }]
     await click(button('Use for this cluster'))
     expect(posts()[0].body).toEqual({ useSaved: true, clusterUid: 'uid-123' })
-  })
-
-  it('uses Prometheus for this cluster without a confirmation', async () => {
-    await mount(matched())
-    reply('DELETE /integrations/openobserve/cluster?clusterUid=uid-123', { body: { connection: connection(), cluster: { uid: 'uid-123' } } })
-    await click(button('Use Prometheus for this cluster'))
-    expect(calls.at(-1)).toMatchObject({ method: 'DELETE', path: '/integrations/openobserve/cluster?clusterUid=uid-123' })
-    expect(radio('Prometheus-compatible').getAttribute('aria-checked')).toBe('true')
   })
 
   it('asks before removing the saved connection, listing the clusters that use it', async () => {

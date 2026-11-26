@@ -62,7 +62,6 @@ export function OpenObserveSetup({
   status,
   onStateChange,
   onChanged,
-  onUsePrometheus,
   onDirtyChange,
   onBusyChange,
 }: {
@@ -71,7 +70,6 @@ export function OpenObserveSetup({
   status?: ReactNode
   onStateChange: (state: OpenObserveState) => void
   onChanged: () => void
-  onUsePrometheus: () => Promise<void>
   onDirtyChange?: (dirty: boolean) => void
   onBusyChange?: (busy: boolean) => void
 }) {
@@ -222,14 +220,7 @@ export function OpenObserveSetup({
     <fieldset disabled={busy} aria-label="OpenObserve connection settings" className="min-w-0 space-y-4">
       {statusRow}
       {cluster.error && <p className="text-xs text-warning-text">{cluster.error}</p>}
-      {match && (
-        <div className="space-y-1">
-          <p className="text-sm text-theme-text-primary">{matchSummary(match)}</p>
-          <button type="button" onClick={() => void run(async () => { setResult(null); await onUsePrometheus() })} className="text-xs text-accent-text hover:underline">
-            Use Prometheus for this cluster
-          </button>
-        </div>
-      )}
+      {match && <p className="text-sm text-theme-text-primary">{matchSummary(match)}</p>}
       {shared}
       <div className="space-y-4">
         <div className="space-y-1">

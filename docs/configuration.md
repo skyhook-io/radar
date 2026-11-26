@@ -957,8 +957,8 @@ For the next cluster, switch to it and choose OpenObserve again: Radar offers
 the saved connection filled in, so **Use for this cluster** tests and saves it
 for that cluster. Changes to the connection apply to every cluster that uses it. Leaving the token empty
 while the address, organization and user stay the same keeps the saved token.
-**Use Prometheus for this cluster** turns OpenObserve off for the current
-cluster only; **Remove OpenObserve connection** removes the connection
+**Use Prometheus for this cluster**, under Prometheus-compatible, turns
+OpenObserve off for the current cluster only; **Remove OpenObserve connection** removes the connection
 and every cluster's match. Saving and removing work only while Radar listens
 on this machine alone, not on a shared `--listen-address`.
 
