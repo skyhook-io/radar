@@ -125,6 +125,29 @@ func TestOwnerAccessReviewReportsEffectInEachScope(t *testing.T) {
 	}
 }
 
+func TestOwnerAccessReviewReportsVeleroAPIWithoutApprovedGrants(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	for _, test := range []struct {
+		name      string
+		apiGroups *metav1.APIGroupList
+		want      *bool
+	}{
+		{name: "served", apiGroups: &metav1.APIGroupList{Groups: []metav1.APIGroup{{Name: "velero.io"}}}, want: new(true)},
+		{name: "absent", apiGroups: &metav1.APIGroupList{}, want: new(false)},
+		{name: "unknown"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result := reviewOwnerAccess(context.Background(), client, nil, nil, nil, test.apiGroups)
+			if got := result.VeleroAPIServed; (got == nil) != (test.want == nil) || got != nil && *got != *test.want {
+				t.Fatalf("unexpected Velero API state for %s", test.name)
+			}
+			if len(client.Actions()) != 0 {
+				t.Fatal("discovery without approved grants must not run access reviews")
+			}
+		})
+	}
+}
+
 func TestOwnerAccessReviewBoundsNamespaceSample(t *testing.T) {
 	namespaces := []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"}
 	client := fake.NewSimpleClientset()

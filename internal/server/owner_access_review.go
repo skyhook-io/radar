@@ -88,6 +88,7 @@ type ownerAccessReviewResponse struct {
 	NamespaceScoped   bool                                `json:"namespaceScoped"`
 	CheckedScopeCount int                                 `json:"checkedScopeCount"`
 	ScopeCount        int                                 `json:"scopeCount"`
+	VeleroAPIServed   *bool                               `json:"veleroApiServed,omitempty"`
 	Grants            map[string]ownerAccessReviewResult  `json:"grants,omitempty"`
 	Account           map[string]ownerAccountAccessReview `json:"account,omitempty"`
 }
@@ -154,6 +155,12 @@ func reviewOwnerAccess(ctx context.Context, client kubernetes.Interface, user *a
 	}
 	if user == nil {
 		result.Grants = make(map[string]ownerAccessReviewResult, len(approved))
+		if apiGroups != nil {
+			served := slices.ContainsFunc(apiGroups.Groups, func(group metav1.APIGroup) bool {
+				return group.Name == ownerAccessReviewPermissions["velero"].group
+			})
+			result.VeleroAPIServed = &served
+		}
 	} else {
 		result.Account = make(map[string]ownerAccountAccessReview, len(approved))
 	}

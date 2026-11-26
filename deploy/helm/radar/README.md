@@ -323,7 +323,8 @@ those grants on or off in **Settings → Access**. Changes apply on the next
 request without a Helm upgrade. Access verifies the permissions of each grant
 in its reported scope. **Check my access** previews the effect for the signed-in
 Owner. Turning a grant off leaves access from other Kubernetes role bindings
-in place. These switches apply only to Owners.
+in place. These switches apply only to Owners. Access reports whether Kubernetes
+serves the Velero API separately from whether the install approves Velero grants.
 
 | Grant | Active by default | What it allows |
 |---|---|---|
