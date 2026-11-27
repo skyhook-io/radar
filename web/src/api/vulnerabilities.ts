@@ -538,10 +538,7 @@ export function useVulnerabilityReachabilityCapability(w: VulnerabilityWorkloadR
   return { ...query, support }
 }
 
-/**
- * The requests a run would send, for the consent screen. Creates nothing,
- * but traces the routes with Radar's own probes, so it is fetched on a click.
- */
+/** The requests a run would send, for the consent screen, from the routes' and Services' specs. Creates and sends nothing. */
 export function fetchVulnerabilityReachabilityPlan(w: VulnerabilityWorkloadRef, routes: VulnerabilityRoute[]): Promise<VulnerabilityReachability> {
   return fetchJSON<VulnerabilityReachability>(reachabilityQuery(w, routes, true))
 }

@@ -187,8 +187,8 @@ export function ReachabilityCheck({ workload, routes, routesTotal }: {
   const [key, entry] = useEntry(workload)
   const capability = useVulnerabilityReachabilityCapability(workload, routes)
   const cap = capability.data
-  // The consent screen's requests, read after the click: listing them
-  // traces the routes with Radar's own probes.
+  // The consent screen's requests, read after the click. Planning sends
+  // nothing; they come from the routes' and Services' specs.
   const [plan, setPlan] = useState<{ state: 'loading' } | { state: 'ready'; plan: VulnerabilityReachability } | { state: 'failed'; error: string }>()
   const requests = useMemo(() => {
     if (plan?.state !== 'ready') return []
