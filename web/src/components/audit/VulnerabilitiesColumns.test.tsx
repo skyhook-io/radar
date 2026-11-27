@@ -307,14 +307,24 @@ describe('Owner column', () => {
     expect(container.textContent).not.toContain('Unknown')
   })
 
-  it('says in one line that none was found, instead of a column of blanks', () => {
+  it('adds no column or line when none was found, and says so in the menu', () => {
     renderWorkloads(true, false)
     act(() => menuButton()!.click())
-    act(() => menuItem('Show Owner')!.click())
+    const item = menuItems().find((b) => b.textContent?.startsWith('Show Owner'))!
+    expect(item.textContent).toBe('Show Ownernone found')
+    const description = document.getElementById(item.getAttribute('aria-describedby')!)
+    expect(description?.textContent).toContain('Helm release, an Argo CD or Flux app, or a team label')
+    act(() => item.click())
+    expect(item.getAttribute('aria-checked')).toBe('true')
     expect(heads().some((h) => h.includes('Owner'))).toBe(false)
-    expect(container.textContent).toContain('No owner found for these workloads')
-    act(() => menuItem('Show Owner')!.click())
+    expect(container.querySelector('[role="table"], table')?.textContent ?? '').not.toContain('none found')
     expect(container.textContent).not.toContain('No owner found')
+  })
+
+  it('has no menu note when some workload has an owner', () => {
+    renderWorkloads(true)
+    act(() => menuButton()!.click())
+    expect(menuItem('Show Owner')!.getAttribute('aria-describedby')).toBeNull()
   })
 
   it('is not offered by a Radar that reads no owners', () => {

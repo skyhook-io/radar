@@ -54,4 +54,11 @@ describe('RowActionMenu', () => {
     expect(onAction).toHaveBeenCalledOnce()
     expect(trigger().getAttribute('aria-expanded')).toBe('false')
   })
+
+  it('shows a hint after the label and describes the item with its tooltip', () => {
+    act(() => root.render(<RowActionMenu items={[{ key: 'owner', label: 'Show Owner', hint: 'none found', tooltip: 'Nothing to show.', checked: false, onClick: vi.fn() }]} />))
+    act(() => trigger().click())
+    const owner = item('Show Ownernone found')!
+    expect(document.getElementById(owner.getAttribute('aria-describedby')!)?.textContent).toBe('Nothing to show.')
+  })
 })

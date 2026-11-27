@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ComponentType } from 'react'
+import { Fragment, useEffect, useId, useLayoutEffect, useRef, useState, type ComponentType } from 'react'
 import { Check, Loader2, MoreVertical } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Tooltip } from './Tooltip'
@@ -20,6 +20,10 @@ export interface RowActionItem {
   /** A checked state turns this action into a menu checkbox. Clicking it
    *  leaves the menu open. */
   checked?: boolean
+  /** A short muted note after the label, such as "none found". */
+  hint?: string
+  /** Shown on hover and read as the item's description. */
+  tooltip?: string
 }
 
 interface RowActionMenuProps {
@@ -41,6 +45,7 @@ export function RowActionMenu({ items, ariaLabel = 'Row actions', compact = true
   // transition — resetting at logical close would snap the menu to the other
   // side mid-fade — and re-measured on the next open.
   const [openUp, setOpenUp] = useState(false)
+  const describedBy = useId()
   const ref = useRef<HTMLDivElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
 
@@ -122,11 +127,14 @@ export function RowActionMenu({ items, ariaLabel = 'Row actions', compact = true
         >
           {items.map((item) => {
             const Icon = item.icon
+            const tooltip = item.disabled && item.disabledReason ? item.disabledReason : item.tooltip
+            const descriptionId = item.tooltip ? `${describedBy}-${item.key}` : undefined
             const content = (
               <button
                 type="button"
                 role={item.checked === undefined ? 'menuitem' : 'menuitemcheckbox'}
                 aria-checked={item.checked}
+                aria-describedby={descriptionId}
                 disabled={item.disabled || item.pending}
                 onClick={(e) => {
                   e.stopPropagation()
@@ -155,22 +163,24 @@ export function RowActionMenu({ items, ariaLabel = 'Row actions', compact = true
                   <span className="h-3.5 w-3.5 shrink-0" aria-hidden />
                 )}
                 <span className="truncate">{item.label}</span>
+                {item.hint && <span className="ml-auto shrink-0 pl-3 text-theme-text-tertiary">{item.hint}</span>}
               </button>
             )
             return (
               <Fragment key={item.key}>
                 {item.divider && <div className="my-1 h-px bg-theme-border" />}
-                {item.disabled && item.disabledReason ? (
+                {tooltip ? (
                   // wrapperClassName=w-full so the disabled item fills the menu
                   // like enabled items — the Tooltip wrapper is inline-flex and
                   // would otherwise shrink-wrap, and the menu inherits text-right
                   // from the table's actions cell, shoving the item to the edge.
-                  <Tooltip content={item.disabledReason} position="left" wrapperClassName="w-full">
+                  <Tooltip content={tooltip} position="left" wrapperClassName="w-full">
                     {content}
                   </Tooltip>
                 ) : (
                   content
                 )}
+                {descriptionId && <span id={descriptionId} hidden>{item.tooltip}</span>}
               </Fragment>
             )
           })}

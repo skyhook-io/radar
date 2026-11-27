@@ -229,7 +229,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
   const clearFilters = () => update((p) => { for (const key of [...p.keys()]) if (!KEEP_ON_CLEAR.has(key)) p.delete(key) }, true)
   const pageKey = JSON.stringify([view, namespaces, severities, fixableOnly, exposedOnly, eolOnly, query, workload])
   // Owners were read and none of these workloads has one: a column of blanks
-  // would look broken, so one line says so instead.
+  // would look broken, so the menu item says so instead.
   const ownerNone = !!data.ownership && !data.ownership.unavailable && (data.owners ?? []).length === 0
   const fixChip = known && view !== 'fix'
   return (
@@ -245,7 +245,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
             <PageMenu
               params={tableParams}
               cluster={connection.clusterName || connection.context}
-              columns={data.view === view ? availableColumns(view, data).map((c) => ({ key: c.key, label: c.label, shown: optional.shown.has(c.key) })) : []}
+              columns={data.view === view ? availableColumns(view, data).map((c) => ({ key: c.key, label: c.label, shown: optional.shown.has(c.key), ...(c.key === 'workload.owner' && ownerNone ? NO_OWNER : {}) })) : []}
               onToggleColumn={optional.toggle}
               filters={OPTIONAL_FILTERS.filter((f) => filterAvailable(f.key)).map((f) => ({ key: f.key, label: f.label, shown: optionalFilters.shown(f.key) }))}
               onToggleFilter={optionalFilters.toggle}
@@ -370,15 +370,9 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
         ) : view === 'cve' ? (
           <Paged key={pageKey} rows={data.cves ?? []}>{(rows) => <CVETable cves={rows} columns={columnsFor('cve', optional.shown, data)} onOpen={(w) => onNavigateToResource(toResource(w))} />}</Paged>
         ) : view === 'workload' ? (
-          <>
-          {ownerNone && optional.shown.has('workload.owner') && (
-            <p className="text-xs text-theme-text-tertiary">
-              No owner found for these workloads: none has a Helm release, an Argo CD or Flux app, or a <code className="font-mono">team</code> label on it or its namespace.
-            </p>
-          )}
           <Paged key={pageKey} rows={data.workloads ?? []}>{(rows) => <WorkloadTable
             workloads={rows}
-            columns={ownerNone ? {} : columnsFor('workload', optional.shown, data)}
+            columns={{ ...columnsFor('workload', optional.shown, data), ...(ownerNone && { owner: false }) }}
             exposure={exposure}
             severities={severities}
             query={query}
@@ -386,7 +380,6 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
             onOpen={(w) => onNavigateToResource(toResource(w))}
             onShow={(w, by) => update((p) => { p.set('by', by); p.set('workload', workloadParam(w)); p.delete('q') }, true)}
           />}</Paged>
-          </>
         ) : (
           <Paged key={pageKey} rows={data.images ?? []}>{(rows) => <ImageTable
             images={rows}
@@ -421,7 +414,7 @@ function PageMenu({ params, cluster, columns: columnChoices, onToggleColumn, fil
   params: VulnerabilitiesParams
   cluster: string
   /** The view's optional columns this answer has data for. */
-  columns: { key: string; label: string; shown: boolean }[]
+  columns: { key: string; label: string; shown: boolean; hint?: string; tooltip?: string }[]
   onToggleColumn: (key: string) => void
   filters: { key: string; label: string; shown: boolean }[]
   onToggleFilter: (key: string) => void
@@ -440,7 +433,7 @@ function PageMenu({ params, cluster, columns: columnChoices, onToggleColumn, fil
     { key: 'findings', label: 'Download all findings as CSV', icon: FileSpreadsheet, pending: pending === 'findings', disabled: !!pending, onClick: () => download.mutate({ params, as: 'findings', cluster }) },
   ]
   const columns: RowActionItem[] = columnChoices.map((c) => ({
-    key: c.key, label: `Show ${c.label}`, checked: c.shown, onClick: () => onToggleColumn(c.key),
+    key: c.key, label: `Show ${c.label}`, hint: c.hint, tooltip: c.tooltip, checked: c.shown, onClick: () => onToggleColumn(c.key),
   }))
   const filterItems: RowActionItem[] = filters.map((f) => ({
     key: `filter.${f.key}`, label: `Show ${f.label} filter`, checked: f.shown, onClick: () => onToggleFilter(f.key),
@@ -464,6 +457,11 @@ function emptyHeadline(view: VulnerabilityView, filtered: boolean, data: Vulnera
   if (s.imagesScanned === 0) return s.imagesUnscanned > 0 ? "Trivy hasn't scanned the images in this scope yet" : 'No workloads run in this scope'
   if (view === 'fix' && totalFindings(s.counts) > 0) return `None of the ${totalFindings(s.counts)} reported findings has a fixed release yet`
   return `No CVEs reported for the ${s.imagesScanned} scanned ${s.imagesScanned === 1 ? 'image' : 'images'} that run`
+}
+
+const NO_OWNER = {
+  hint: 'none found',
+  tooltip: 'Radar found no owner for these workloads. It looks for a Helm release, an Argo CD or Flux app, or a team label on the workload or its namespace.',
 }
 
 const PAGE_DESCRIPTION = "Known CVEs in the images that run now, from Trivy Operator's reports."

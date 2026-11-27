@@ -33,7 +33,7 @@ export const OPTIONAL_COLUMNS: Partial<Record<VulnerabilityView, OptionalColumn[
     { key: 'cve.age', label: 'Age', tip: 'Days since the CVE was published, not since it was found in this cluster.', track: '76px', hasData: (d) => !!d.cves?.some((c) => c.publishedAt) },
   ],
   workload: [
-    { key: 'workload.owner', label: 'Owner', tip: 'The Helm release, or the Argo CD or Flux app and its repository, that deploys the workload, and its team from the team label on the workload or its namespace. It names the app, not the file that sets the image tag.', track: 'minmax(160px,1fr)', hasData: (d) => !!d.ownership },
+    { key: 'workload.owner', label: 'Owner', tip: 'The Helm release, or the Argo CD or Flux app and its repository, that deploys the workload, and its team from the team label on the workload or its namespace. Blank when the workload has none of these. It names the app, not the file that sets the image tag.', track: 'minmax(160px,1fr)', hasData: (d) => !!d.ownership },
   ],
 }
 
