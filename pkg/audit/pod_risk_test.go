@@ -96,6 +96,10 @@ func TestPodRisks(t *testing.T) {
 			name: "a Windows Pod has no root factor",
 			spec: corev1.PodSpec{OS: &corev1.PodOS{Name: corev1.Windows}, Containers: []corev1.Container{{Name: "app"}}},
 		},
+		{
+			name: "a Pod for Windows nodes has no root factor",
+			spec: corev1.PodSpec{NodeSelector: map[string]string{corev1.LabelOSStable: "windows"}, Containers: []corev1.Container{{Name: "app"}}},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -187,5 +191,18 @@ func TestPodRisksOptionalFactors(t *testing.T) {
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("PodRisks:\n got %+v\nwant %+v", got, want)
+	}
+}
+
+// allowPrivilegeEscalation can't be set on a Windows Pod, so leaving it
+// unset there allows nothing.
+func TestPodRisksWindowsHasNoEscalation(t *testing.T) {
+	for _, spec := range []corev1.PodSpec{
+		{OS: &corev1.PodOS{Name: corev1.Windows}, Containers: []corev1.Container{{Name: "app"}}},
+		{NodeSelector: map[string]string{corev1.LabelOSStable: "windows"}, Containers: []corev1.Container{{Name: "app"}}},
+	} {
+		if got := PodRisks(spec); len(got) != 0 {
+			t.Errorf("PodRisks = %+v, want none", got)
+		}
 	}
 }

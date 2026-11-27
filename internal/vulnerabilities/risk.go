@@ -142,7 +142,8 @@ func (w *workloadRisk) add(risks []audit.PodRisk) {
 }
 
 // risksOf gathers each workload's risk factors across its targets. A
-// workload whose Pods all run as root says so, without may.
+// workload with any container that runs as root says so, without may, and
+// drops the may settings of its other containers too.
 func risksOf(targets []target) map[WorkloadRef]*workloadRisk {
 	out := map[WorkloadRef]*workloadRisk{}
 	for i := range targets {
@@ -200,16 +201,19 @@ func imageRisks(ids []string, imageRisk map[string]riskBits) []RiskFactor {
 	return b.factors()
 }
 
-// riskCounts counts the workloads in scope with each factor.
+// riskCounts counts the workloads in scope that selecting each factor
+// keeps, so may run as root counts those that run as root too.
 func riskCounts(risk map[WorkloadRef]*workloadRisk) map[RiskFactor]int {
 	counts := map[RiskFactor]int{}
 	for _, r := range riskOrder {
-		counts[r.factor] = 0
-	}
-	for _, w := range risk {
-		for _, f := range w.bits.factors() {
-			counts[f]++
+		mask := riskMask([]RiskFactor{r.factor})
+		n := 0
+		for _, w := range risk {
+			if w.bits&mask != 0 {
+				n++
+			}
 		}
+		counts[r.factor] = n
 	}
 	return counts
 }

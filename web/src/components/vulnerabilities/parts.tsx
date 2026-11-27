@@ -309,11 +309,15 @@ export const RISK_ORDER = Object.keys(RISK_FACTORS) as VulnerabilityRiskFactor[]
  */
 export const SERIOUS_RISKS: VulnerabilityRiskFactor[] = ['privileged', 'hostAccess', 'runsAsRoot']
 
-/** The answer's risky workloads by kind/namespace/name; any container of one matches. */
+/** The answer's risky workloads by group/kind/namespace/name; any container of one matches. */
 export type RiskLookup = Map<string, RiskyWorkload>
 
+type RiskKey = WorkloadKey & { group: string }
+
+const riskKey = (w: RiskKey) => `${w.group}/${exposureKey(w)}`
+
 export function riskLookup(podRisk: VulnerabilitiesResponse['podRisk']): RiskLookup {
-  return new Map((podRisk?.workloads ?? []).map((w) => [exposureKey(w), w]))
+  return new Map((podRisk?.workloads ?? []).map((w) => [riskKey(w), w]))
 }
 
 /**
@@ -322,8 +326,8 @@ export function riskLookup(podRisk: VulnerabilitiesResponse['podRisk']): RiskLoo
  */
 export const RiskContext = createContext<{ lookup: RiskLookup; selected: ReadonlySet<VulnerabilityRiskFactor> } | undefined>(undefined)
 
-export function useWorkloadRisk(w: WorkloadKey): RiskyWorkload | undefined {
-  return useContext(RiskContext)?.lookup.get(exposureKey(w))
+export function useWorkloadRisk(w: RiskKey): RiskyWorkload | undefined {
+  return useContext(RiskContext)?.lookup.get(riskKey(w))
 }
 
 /**
@@ -363,7 +367,7 @@ export function RiskMarks({ factors, settings, className }: { factors?: Vulnerab
 }
 
 /** A workload's marks, from the view's lookup. */
-export function WorkloadRiskMarks({ workload, className }: { workload: WorkloadKey; className?: string }) {
+export function WorkloadRiskMarks({ workload, className }: { workload: RiskKey; className?: string }) {
   const risk = useWorkloadRisk(workload)
   return risk ? <RiskMarks factors={risk.factors} settings={risk.settings} className={className} /> : null
 }

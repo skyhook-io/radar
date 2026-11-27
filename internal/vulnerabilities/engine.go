@@ -736,10 +736,16 @@ func (m matcher) findingMatches(f Finding, rowMatched bool) bool {
 	return rowMatched || strings.Contains(strings.ToLower(f.ID), m.query) || strings.Contains(strings.ToLower(f.Package), m.query)
 }
 
+// workloadKept is whether one of the workloads passes every workload
+// filter at once: Exposed and a risk factor on the same workload, as the
+// findings export reads them, not one of each.
 func (m matcher) workloadKept(workloads []WorkloadRef) bool {
-	return (m.f.Workload == nil || slices.ContainsFunc(workloads, m.wanted)) &&
-		(!m.f.ExposedOnly || slices.ContainsFunc(workloads, m.isExposed)) &&
-		(m.riskMask == 0 || slices.ContainsFunc(workloads, m.isRisky))
+	if m.f.Workload == nil && !m.f.ExposedOnly && m.riskMask == 0 {
+		return true
+	}
+	return slices.ContainsFunc(workloads, func(w WorkloadRef) bool {
+		return (m.f.Workload == nil || m.wanted(w)) && (!m.f.ExposedOnly || m.isExposed(w)) && (m.riskMask == 0 || m.isRisky(w))
+	})
 }
 
 // isRisky is whether a workload has a factor the risk filter names.

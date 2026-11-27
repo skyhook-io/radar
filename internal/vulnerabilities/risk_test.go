@@ -129,7 +129,8 @@ func TestRunsAsRootReplacesMay(t *testing.T) {
 			t.Fatalf("may kept beside runs as root: %+v", w.Settings)
 		}
 	}
-	if c := resp.PodRisk.Counts; c[RiskRunsAsRoot] != 1 || c[RiskMayRunAsRoot] != 0 || c[RiskHostAccess] != 1 {
+	// Counts are what selecting each factor keeps: may keeps runs as root.
+	if c := resp.PodRisk.Counts; c[RiskRunsAsRoot] != 1 || c[RiskMayRunAsRoot] != 1 || c[RiskHostAccess] != 1 {
 		t.Fatalf("counts %v", c)
 	}
 	if got := mergeRisks([]audit.PodRisk{mayRootRisk}, []audit.PodRisk{mayRootRisk, rootRisk, rootRisk}); !slices.Equal(got, []audit.PodRisk{mayRootRisk, rootRisk}) {
@@ -155,6 +156,18 @@ func TestRiskFilter(t *testing.T) {
 	}
 	if got := mustBuild(t, items, targets, ViewWorkload, privileged).Workloads; len(got) != 1 || got[0].Name != "frontend" {
 		t.Fatalf("workload: %+v", got)
+	}
+	// Exposed and privileged must be the same workload: an exposed hardened
+	// frontend beside an internal privileged worker on one image is not the
+	// combination.
+	apart := slices.Clone(targets)
+	apart[0], apart[1] = risky(apart[0], mayRootRisk), risky(apart[1], privilegedRisk)
+	both := Filter{RiskFactors: []RiskFactor{RiskPrivileged}, ExposedOnly: true}
+	if got := mustBuild(t, items, apart, ViewImage, both).Images; len(got) != 0 {
+		t.Fatalf("exposed and privileged on different workloads: %+v", got)
+	}
+	if got := mustBuild(t, items, targets, ViewImage, both).Images; len(got) != 1 {
+		t.Fatalf("exposed and privileged on one workload: %+v", got)
 	}
 	host := Filter{RiskFactors: []RiskFactor{RiskHostAccess}}
 	if got := mustBuild(t, items, targets, ViewFix, host).Fixes; len(got) != 0 {

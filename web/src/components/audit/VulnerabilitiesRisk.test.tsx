@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useVulnerabilities, vulnerabilitiesPath, type VulnerabilitiesResponse, type VulnerabilityWorkloadRef } from '../../api/vulnerabilities'
 import { VulnerabilitiesView } from './VulnerabilitiesView'
+import { riskLookup } from '../vulnerabilities/parts'
 
 vi.mock('../../api/client', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../api/client')>(),
@@ -158,6 +159,18 @@ describe('risky Pod settings', () => {
   it('still shows the chip a link sets, whatever the counts', () => {
     render('/checks/vulnerabilities?by=image&risk=privileged', true, none)
     expect(riskChip()!.textContent).toBe('Risk: Privileged')
+  })
+
+  it('keeps same-named workloads of different API groups apart', () => {
+    const lookup = riskLookup({
+      counts: { privileged: 1, hostAccess: 0, runsAsRoot: 0, mayRunAsRoot: 1, dangerousCapabilities: 0, privilegeEscalation: 0, hostPort: 0 },
+      workloads: [
+        { kind: 'Rollout', group: 'argoproj.io', namespace: 'shop', name: 'web', factors: ['privileged'], settings: [] },
+        { kind: 'Rollout', group: 'example.com', namespace: 'shop', name: 'web', factors: ['mayRunAsRoot'], settings: [] },
+      ],
+    })
+    expect(lookup.size).toBe(2)
+    expect(lookup.get('argoproj.io/Rollout/shop/web')?.factors).toEqual(['privileged'])
   })
 
   it('shows no chip or mark when Radar sends no podRisk', () => {

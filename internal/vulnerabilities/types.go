@@ -144,8 +144,8 @@ type RiskyWorkload struct {
 // factors but only the settings behind those the screen marks: SeriousRisks,
 // and those the risk filter selects. Rows carry every factor in
 // RiskFactors, and so does the CSV. Counts are the workloads in scope with
-// each factor, before the filters; a workload that runs as root isn't
-// counted as may.
+// each factor, before the filters: as many as selecting it keeps, so a
+// workload that runs as root counts as may too.
 type PodRisk struct {
 	Workloads []RiskyWorkload    `json:"workloads,omitempty"`
 	Counts    map[RiskFactor]int `json:"counts"`

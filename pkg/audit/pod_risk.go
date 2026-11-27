@@ -52,7 +52,9 @@ type PodRisk struct {
 // unlike the checks, which audit the whole spec, it isn't read. The rules and
 // words are the checks' own (checkPodSpecSecurity, checkPodSpecVolumes),
 // except that an explicit runAsUser of 0 reads as runs as root rather than
-// may. A Windows Pod has no root factor: its user is runAsUserName.
+// may. A Windows Pod (spec.os, or a node selector for Windows nodes) has no
+// root or privilege escalation factor: its user is runAsUserName, and
+// allowPrivilegeEscalation can't be set there.
 func PodRisks(spec corev1.PodSpec) []PodRisk {
 	var out []PodRisk
 	add := func(factor PodRiskFactor, checkID, msg string) {
@@ -74,7 +76,7 @@ func PodRisks(spec corev1.PodSpec) []PodRisk {
 		}
 	}
 	mounted := map[string]bool{}
-	windows := spec.OS != nil && spec.OS.Name == corev1.Windows
+	windows := (spec.OS != nil && spec.OS.Name == corev1.Windows) || spec.NodeSelector[corev1.LabelOSStable] == string(corev1.Windows)
 	for i := range running {
 		c := &running[i]
 		for _, m := range c.VolumeMounts {
@@ -94,7 +96,7 @@ func PodRisks(spec corev1.PodSpec) []PodRisk {
 		for _, a := range addedCapabilities(c) {
 			add(PodRiskDangerousCapabilities, a.checkID, a.msg)
 		}
-		if allowsEscalation(c.SecurityContext) {
+		if !windows && allowsEscalation(c.SecurityContext) {
 			add(PodRiskPrivilegeEscalation, "privilegeEscalation", msgEscalation(c.Name))
 		}
 		for _, p := range c.Ports {
