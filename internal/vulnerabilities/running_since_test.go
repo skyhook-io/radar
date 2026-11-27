@@ -128,6 +128,20 @@ func TestRunningSinceRollsUp(t *testing.T) {
 	if w, ok := byName["worker"]; !ok || w.RunningSince != nil || w.Containers[0].RunningSince != nil {
 		t.Fatalf("worker has no running Pod: %+v", w)
 	}
+
+	// Narrowed to checkout, sha256:a's date is checkout's own, not db's
+	// older start, in the image row and the CVE rows alike.
+	narrowed := Filter{Workload: &WorkloadRef{Kind: co.Kind, Group: co.Group, Namespace: co.Namespace, Name: co.Name}}
+	for _, img := range mustBuild(t, items, targets, ViewImage, narrowed).Images {
+		if img.ID == "sha256:a" && !sameTime(img.RunningSince, &day2) {
+			t.Fatalf("image sha256:a narrowed to checkout: %v, want %v", img.RunningSince, day2)
+		}
+	}
+	for _, c := range mustBuild(t, items, targets, ViewCVE, narrowed).CVEs {
+		if c.RunningSince != nil && c.RunningSince.Before(day2) {
+			t.Fatalf("CVE %s narrowed to checkout: %v, earlier than checkout's %v", c.ID, c.RunningSince, day2)
+		}
+	}
 }
 
 // The image and workload CSVs carry each row's running_since; the findings

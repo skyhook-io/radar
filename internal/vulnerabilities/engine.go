@@ -782,6 +782,18 @@ func (m matcher) workloadKept(workloads []WorkloadRef) bool {
 		(!m.f.ExposedOnly || slices.ContainsFunc(workloads, m.isExposed))
 }
 
+// inScope are the workloads the workload filters ask about: the one
+// narrowed to, and only exposed ones under the Exposed filter. A row's
+// Running since comes from these, as the findings export's rows do.
+func (m matcher) inScope(workloads []WorkloadRef) []WorkloadRef {
+	if m.f.Workload == nil && !m.f.ExposedOnly {
+		return workloads
+	}
+	return slices.DeleteFunc(slices.Clone(workloads), func(w WorkloadRef) bool {
+		return (m.f.Workload != nil && !m.wanted(w)) || (m.f.ExposedOnly && !m.isExposed(w))
+	})
+}
+
 // imageKept is whether an image passes the image filters: the OS end of
 // life one.
 func (m matcher) imageKept(r *report) bool { return !m.f.OSEndOfLifeOnly || r.osEOL }
@@ -970,7 +982,7 @@ func (j *rollup) imageRows(f Filter) (rows []Image, clean []CleanImage) {
 			ID: r.imageID, Image: cmp.Or(r.image, r.digest), Digest: r.digest, OS: r.os, OSEndOfLife: r.osEOL, Scanner: r.wireScanner(), ScannedAt: r.scannedAt,
 			Counts: counts, Fixable: fixable, Matching: len(matching), FindingsUnread: r.unread,
 			Workloads: m.listed(workloads, j.lim.workloadsPerRow), WorkloadsTotal: len(workloads),
-			FindingsTotal: len(r.findings), Report: r.ref, RunningSince: j.imageRunningSince(r.imageID, workloads),
+			FindingsTotal: len(r.findings), Report: r.ref, RunningSince: j.imageRunningSince(r.imageID, m.inScope(workloads)),
 		}
 		row.Findings = matching[:min(len(matching), j.lim.findingsPerImage)]
 		if row.Findings == nil {
@@ -1120,6 +1132,9 @@ func (j *rollup) cves(ctx context.Context, f Filter) ([]CVE, error) {
 	imageWorkloads := map[string][]WorkloadRef{}
 	imageExposed := map[string]bool{}
 	imageUnknown := map[string]bool{}
+	// imageSince is each image's Running since, worked out once: CVEs from
+	// one base image share its images.
+	imageSince := map[string]time.Time{}
 	exposedImage := func(id string) bool { return imageExposed[id] }
 	for _, agg := range j.sortedImages() {
 		if err := ctx.Err(); err != nil {
@@ -1134,6 +1149,9 @@ func (j *rollup) cves(ctx context.Context, f Filter) ([]CVE, error) {
 		distinct := withoutContainers(workloads)
 		imageExposed[r.imageID] = slices.ContainsFunc(distinct, j.exposed)
 		imageUnknown[r.imageID] = j.exposureUnknown(distinct)
+		if t := j.imageRunningSince(r.imageID, m.inScope(workloads)); t != nil {
+			imageSince[r.imageID] = *t
+		}
 		listed := m.listed(distinct, j.lim.workloadsPerAffected)
 		rowMatched := m.rowMatches(agg.searchText(), workloads)
 		// Whether an upgrade clears each CVE here: every package it's in has
@@ -1202,9 +1220,7 @@ func (j *rollup) cves(ctx context.Context, f Filter) ([]CVE, error) {
 		c.row.Images = len(ids)
 		var since time.Time
 		for _, id := range ids {
-			if t := j.imageRunningSince(id, imageWorkloads[id]); t != nil {
-				since = oldest(since, *t)
-			}
+			since = oldest(since, imageSince[id])
 		}
 		c.row.RunningSince = timePtr(since)
 		c.row.Packages = sortedKeys(c.packages)
