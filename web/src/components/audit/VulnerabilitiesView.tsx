@@ -220,7 +220,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
   const filtered = severities.length > 0 || (fixableOnly && view !== 'fix') || (exposedOnly && !!exposure) || (eolOnly && eolCount !== undefined) || query !== '' || !!workload
   // Narrowed only to a workload whose images are all clean or unscanned:
   // the folds below list them, so "nothing matches" would mislead.
-  const workloadFolds = !!workload && (view === 'image' || view === 'workload') && severities.length === 0 && !fixableOnly && query === '' &&
+  const workloadFolds = !!workload && (view === 'image' || view === 'workload') && severities.length === 0 && !fixableOnly && !(exposedOnly && !!exposure) && !(eolOnly && eolCount !== undefined) && query === '' &&
     ((data.unscanned ?? []).length > 0 || (data.clean ?? []).length > 0 || (data.cleanWorkloads ?? []).length > 0)
   const rows = view === 'cve' ? data.cves ?? [] : view === 'workload' ? data.workloads ?? [] : view === 'fix' ? data.fixes ?? [] : data.images ?? []
 
@@ -897,7 +897,7 @@ function CVETable({ cves, columns, onOpen }: { cves: VulnerabilityCVE[]; columns
                   <SeverityBadge severity={c.severity} />
                   <Num>{c.score?.toFixed(1) ?? '—'}</Num>
                   {columns.published && <PublishedDate at={c.publishedAt} now={now} />}
-                  {columns.age && <Num>{c.publishedAt ? `${(daysSince(c.publishedAt, now) ?? 0).toLocaleString('en-US')} d` : '—'}</Num>}
+                  {columns.age && <CVEAge at={c.publishedAt} now={now} />}
                   {columns.runningSince && <RunningSince since={c.runningSince} cve />}
                   <span className="truncate font-mono text-xs text-theme-text-secondary">{c.packages.join(', ')}</span>
                   <CVEFix cve={c} />
@@ -1018,12 +1018,18 @@ function WorkloadRoute({ workload: w, gaps }: { workload: VulnerabilityWorkload;
   return <span />
 }
 
+// Days since the CVE was published; a dash when Trivy gave no readable date.
+function CVEAge({ at, now }: { at?: string; now: number }) {
+  const days = at ? daysSince(at, now) : undefined
+  return <Num>{days === undefined ? '—' : `${days.toLocaleString('en-US')} d`}</Num>
+}
+
 // The CVE's publication date; its age, which is not how long it has been
 // here, is in the tooltip.
 function PublishedDate({ at, now }: { at?: string; now: number }) {
   const days = at ? daysSince(at, now) : undefined
   return (
-    <WithTooltip tip={days === undefined ? undefined : `Published ${days.toLocaleString()} ${days === 1 ? 'day' : 'days'} ago. That is the CVE's age, not how long it has been in this cluster.`}>
+    <WithTooltip tip={days === undefined ? undefined : `Published ${days.toLocaleString('en-US')} ${days === 1 ? 'day' : 'days'} ago. That is the CVE's age, not how long it has been in this cluster.`}>
       <span className="font-mono text-xs tabular-nums text-theme-text-secondary">{at ? isoDate(at) : '—'}</span>
     </WithTooltip>
   )
