@@ -5,6 +5,8 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/skyhook-io/radar/internal/portforward"
+
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
@@ -12,7 +14,7 @@ import (
 )
 
 // Connection owns the clients, config, discovery, permissions, informer
-// caches and metrics history for one cluster context. A switch installs a new
+// caches, metrics history and automatic port-forwards for one cluster context. A switch installs a new
 // connection, so a request that captures one keeps the same clients and resource mapping
 // even if a switch lands mid-request. A rebuild on the same clients (rescope, recovery)
 // also starts from a new one, so state built for the old admission stays there.
@@ -21,6 +23,9 @@ type Connection struct {
 	clients                                  *sharedKubernetesClients
 	contextName, contextBinding, clusterName string
 	contextNamespace                         string
+	forwardOnce                              sync.Once
+	forwards                                 *portforward.Manager
+	scopeOverride                            string // guarded by clientMu
 	perms                                    atomic.Pointer[permissionState]
 	cache                                    atomic.Pointer[connectionCache]
 	dynamicCache                             atomic.Pointer[connectionDynamicCache]
@@ -44,23 +49,32 @@ func Current() *Connection {
 // BoundOrCurrent returns the request's connection, falling back to the installed
 // connection for callers that have not bound one.
 func BoundOrCurrent(ctx context.Context) *Connection {
-	if c := ConnectionFrom(ctx); c != nil {
-		return c
+	if a, bound := ctx.Value(connectionKey{}).(Admission); bound {
+		return a.conn
 	}
 	return Current()
 }
 
 func installedConnectionLocked(config *rest.Config, clients *sharedKubernetesClients) *Connection {
-	return &Connection{config: config, clients: clients, contextName: contextName, contextBinding: contextBinding, clusterName: clusterName, contextNamespace: contextNamespace}
+	return &Connection{config: config, clients: clients, contextName: contextName, contextBinding: contextBinding, clusterName: clusterName, contextNamespace: contextNamespace, scopeOverride: namespaceScopeOverride}
+}
+
+// A switch can displace an intermediate build on the old clients after
+// subsystem teardown. Even an unadmitted build may have a captured probe.
+func replaceConnectionLocked(next *Connection) *Connection {
+	previous := Current()
+	previous.PortForwards().Close()
+	installedConn.Store(next)
+	return previous
 }
 
 // fresh returns a new, unadmitted connection on the same clients, with no
-// discovery, permissions, informer cache or metrics history yet.
+// discovery, permissions, informer caches, metrics history or forwards yet.
 func (c *Connection) fresh() *Connection {
 	if c == nil {
 		return &Connection{}
 	}
-	return &Connection{config: c.config, clients: c.clients, contextName: c.contextName, contextBinding: c.contextBinding, clusterName: c.clusterName, contextNamespace: c.contextNamespace}
+	return &Connection{config: c.config, clients: c.clients, contextName: c.contextName, contextBinding: c.contextBinding, clusterName: c.clusterName, contextNamespace: c.contextNamespace, scopeOverride: c.scopeOverride}
 }
 
 func (c *Connection) Client() *kubernetes.Clientset {
@@ -181,4 +195,12 @@ func (c *Connection) ID() string {
 	connectionStatusMu.RLock()
 	defer connectionStatusMu.RUnlock()
 	return c.id
+}
+
+func (c *Connection) PortForwards() *portforward.Manager {
+	if c == nil {
+		return nil
+	}
+	c.forwardOnce.Do(func() { c.forwards = portforward.NewManager(c.ClientInterface(), c.Config(), c.ContextName()) })
+	return c.forwards
 }

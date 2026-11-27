@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { AggregatedFlow, TrafficFlow } from '../../types'
-import { dataByProtocol, protocolsOf, totalDataByProtocol, rateWindowSeconds, throughputLabel, protocolName, matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, isExternalKind, isPolicyDropReason, requestRateOf, errorRateOf, formatRate, displayVolume, groupAddonFlows, mergeFlowVolume, dedupeHTTPPairs, coverageLabel, latencyWeightOf, endpointPair, selectionRawPairs, mergeRawPairs, graphEndpoint, graphSize, parseFocus, focusParam, focusId, touchesFocus, focusNeighborhood, endpointSummaries, searchEndpoints, namespaceSummaries, namespaceOverBudget, hasStatusData, connectionRows, selectionMatch, edgeCarriesPort, edgesOnPort, mergedEdgePort, selectedEdgeMatcher, verdictChoices, warningRetries, warningBannerTitle, emptyWarningHeadline, protocolLabel, type GraphFlow } from './trafficFilters'
+import { dataByProtocol, protocolsOf, totalDataByProtocol, rateWindowSeconds, throughputLabel, protocolName, matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, isExternalKind, isPolicyDropReason, requestRateOf, errorRateOf, formatRate, displayVolume, groupAddonFlows, mergeFlowVolume, dedupeHTTPPairs, coverageLabel, latencyWeightOf, endpointPair, selectionRawPairs, mergeRawPairs, graphEndpoint, graphSize, parseFocus, focusParam, focusId, touchesFocus, focusNeighborhood, endpointSummaries, searchEndpoints, namespaceSummaries, namespaceOverBudget, hasStatusData, connectionRows, selectionMatch, edgeCarriesPort, edgesOnPort, mergedEdgePort, mergeEdgePortInto, portLabel, selectedEdgeMatcher, verdictChoices, warningRetries, warningBannerTitle, emptyWarningHeadline, protocolLabel, type GraphFlow } from './trafficFilters'
 
 describe('matchesStatusRanges', () => {
   it('does not filter when nothing is selected', () => {
@@ -883,5 +883,34 @@ describe('throughputLabel', () => {
     // An older Radar sends only the sum, which can mix TCP and UDP: no protocol, no throughput.
     expect(throughputLabel({ ...base, bytesSent: 4200, bytesRecv: 7500 }, 300)).toBe('')
     expect(throughputLabel({ ...base, bytesByProtocol: { tcp: { bytesSent: 0, bytesRecv: 0 } } }, 60)).toBe('')
+  })
+})
+
+describe('portLabel', () => {
+  it('marks a port taken from a Service', () => {
+    expect(portLabel(5432, 'service')).toBe('5432 (from Service)')
+    expect(portLabel(0, 'serviceMultiple')).toBe('multiple (from Service)')
+    expect(portLabel(80)).toBe('80')
+    expect(portLabel(0)).toBeNull()
+  })
+})
+
+describe('mergeEdgePortInto', () => {
+  const merge = (a: { port: number; portSource?: 'service' | 'serviceMultiple' }, b: typeof a) => {
+    const into = { ...a }
+    mergeEdgePortInto(into, b)
+    return into
+  }
+  it('keeps the marking of the port it shows', () => {
+    expect(merge({ port: 0 }, { port: 5432, portSource: 'service' })).toEqual({ port: 5432, portSource: 'service' })
+    expect(merge({ port: 9000, portSource: 'service' }, { port: 80 })).toEqual({ port: 80, portSource: undefined })
+    expect(merge({ port: 80 }, { port: 9000, portSource: 'service' })).toEqual({ port: 80 })
+  })
+  it('lets an observed port outrank the same number from a Service', () => {
+    expect(merge({ port: 80, portSource: 'service' }, { port: 80 })).toEqual({ port: 80, portSource: undefined })
+  })
+  it('keeps "multiple" when no part has a port', () => {
+    expect(merge({ port: 0 }, { port: 0, portSource: 'serviceMultiple' })).toEqual({ port: 0, portSource: 'serviceMultiple' })
+    expect(merge({ port: 0, portSource: 'serviceMultiple' }, { port: 0 })).toEqual({ port: 0, portSource: 'serviceMultiple' })
   })
 })

@@ -512,3 +512,24 @@ func TestAggregateFlows_RequestAndResponseRecordsAreOneRequest(t *testing.T) {
 		}
 	}
 }
+
+func TestAggregateFlowsReconcilesPortSource(t *testing.T) {
+	a := Endpoint{Name: "api", Namespace: "shop", Kind: "Workload"}
+	b := Endpoint{Name: "db", Namespace: "shop", Kind: "Workload"}
+	for _, order := range [][]Flow{
+		{{Source: a, Destination: b, Protocol: "tcp"}, {Source: a, Destination: b, Protocol: "udp", PortSource: PortSourceServiceMultiple}},
+		{{Source: a, Destination: b, Protocol: "udp", PortSource: PortSourceServiceMultiple}, {Source: a, Destination: b, Protocol: "tcp"}},
+	} {
+		if got := AggregateFlows(order); len(got) != 1 || got[0].PortSource != PortSourceServiceMultiple {
+			t.Errorf("port 0 with any Service ports reads multiple, whatever the order: %+v", got)
+		}
+	}
+	for _, order := range [][]Flow{
+		{{Source: a, Destination: b, Port: 80}, {Source: a, Destination: b, Port: 80, PortSource: PortSourceService}},
+		{{Source: a, Destination: b, Port: 80, PortSource: PortSourceService}, {Source: a, Destination: b, Port: 80}},
+	} {
+		if got := AggregateFlows(order); len(got) != 1 || got[0].PortSource != "" {
+			t.Errorf("an observed port outranks the same number from a Service: %+v", got)
+		}
+	}
+}

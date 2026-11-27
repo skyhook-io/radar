@@ -85,10 +85,10 @@ func initBindingTestCluster(t *testing.T) *k8s.ResourceCache {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	Initialize(nil, nil, "binding-test")
+	Initialize(nil, nil, "binding-test", nil)
 	t.Cleanup(func() {
 		Reset()
-		Initialize(nil, nil, "")
+		Initialize(nil, nil, "", nil)
 	})
 	return cache
 }

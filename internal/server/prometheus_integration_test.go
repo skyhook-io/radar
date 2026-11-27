@@ -23,9 +23,9 @@ func setupPrometheusIntegrationTest(t *testing.T, liveHeaders map[string]string)
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	t.Setenv("USERPROFILE", dir)
-	prometheuspkg.Initialize(nil, nil, "test")
+	prometheuspkg.Initialize(nil, nil, "test", nil)
 	prometheuspkg.SetHeaders(liveHeaders)
-	t.Cleanup(func() { prometheuspkg.Initialize(nil, nil, "") })
+	t.Cleanup(func() { prometheuspkg.Initialize(nil, nil, "", nil) })
 	return &Server{}
 }
 

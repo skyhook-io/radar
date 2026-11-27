@@ -370,6 +370,34 @@
                   "properties": {
                     "owner": { "type": "boolean" }
                   }
+                },
+                "velero": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "owner": { "type": "boolean" }
+                  }
+                },
+                "cnpg": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "owner": { "type": "boolean" }
+                  }
+                },
+                "velero-download": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "owner": { "type": "boolean" }
+                  }
+                },
+                "velero-delete": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "owner": { "type": "boolean" }
+                  }
                 }
               }
             }

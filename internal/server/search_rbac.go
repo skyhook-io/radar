@@ -5,6 +5,7 @@ import (
 	"sync/atomic"
 
 	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/internal/search"
 )
@@ -19,7 +20,7 @@ func (s *Server) computeSearchKindRBAC(r *http.Request) func([]string, string, s
 		if user == nil {
 			return namespaces, nil, nil
 		}
-		perms := s.permCache.Get(user.Username, user.Groups)
+		perms := k8s.PermissionCacheFor(r.Context(), s.permCache).Get(user.Username, user.Groups)
 		return readscope.ClusterFirstNamespaceAccess(r.Context(), namespaces, budget,
 			func(ns string) (bool, bool) {
 				if perms == nil {

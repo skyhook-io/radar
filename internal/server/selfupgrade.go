@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -104,7 +105,8 @@ func (s *Server) handleSelfUpgrade(w http.ResponseWriter, r *http.Request) {
 	// The SA has patch rights on its own Deployment; a hub-forwarded user
 	// identity is a Cloud user ID, not a K8s principal, so impersonation
 	// would fail anyway.
-	client := k8s.GetClient()
+	r = r.WithContext(k8s.CaptureConnection(r.Context()))
+	client := k8s.ConnectionFrom(r.Context()).Client()
 	if client == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "k8s client not available")
 		return
@@ -134,7 +136,7 @@ func (s *Server) handleSelfUpgrade(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	patch, err := selfUpgradeApplyPatch(ns, releaseName, deployment, targetImage)
+	patch, err := selfUpgradeApplyPatch(r.Context(), ns, releaseName, deployment, targetImage)
 	if err != nil {
 		log.Printf("[self-upgrade] failed to build apply patch: ns=%s deploy=%s tag=%s err=%v", ns, deployment, logsafe.Sanitize(tag), err)
 		s.writeError(w, http.StatusServiceUnavailable, "helm release manifest not available")
@@ -195,8 +197,8 @@ func selfUpgradeImage(containers []corev1.Container, tag string) (string, error)
 	return "", errors.New("Radar container not found")
 }
 
-func selfUpgradeApplyPatch(namespace, releaseName, deployment, image string) ([]byte, error) {
-	helmClient := helm.GetClient()
+func selfUpgradeApplyPatch(ctx context.Context, namespace, releaseName, deployment, image string) ([]byte, error) {
+	helmClient := helm.GetClient(ctx)
 	if helmClient == nil {
 		return nil, fmt.Errorf("helm client not initialized")
 	}

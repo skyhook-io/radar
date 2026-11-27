@@ -316,69 +316,60 @@ Radar binary (including Radar Cloud self-upgrade) does not update RBAC. Missing 
 on an older `--reuse-values` installation default to enabled; set explicit false
 before upgrading if the added visibility is unwanted.
 
-### Cloud Owner access to Argo CD
+### Cloud Owner permissions
 
-The chart lets Cloud Owners refresh and sync Argo CD Applications on a standard
-install. The [grant](files/integration-write-baseline.yaml) fills the gap in
-the built-in `admin` role.
+Helm approves the grants available on each cluster. Organization Owners turn
+those grants on or off in **Settings → Access**. Changes apply on the next
+request without a Helm upgrade. Access verifies the permissions of each grant
+in its reported scope. **Check my access** previews the effect for the signed-in
+Owner. Turning a grant off leaves access from other Kubernetes role bindings
+in place. These switches apply only to Owners. Access reports whether Kubernetes
+serves the Velero API separately from whether the install approves Velero grants.
 
-```yaml
-cloud:
-  defaultRbac:
-    integrationWrite:
-      argocd:
-        owner: true  # Set false to opt out
-```
+| Grant | Active by default | What it allows |
+|---|---|---|
+| Argo CD (`argocd`) | On | Refresh, sync and edit Argo CD Applications |
+| CloudNativePG (`cnpg`) | On for built-in Owners | Administer existing clusters, backups, schedules and poolers. Creating a cluster for a restore requires separate permission |
+| Velero backups and schedules (`velero`) | On for cluster-wide built-in Owners | Start backups and manage schedules |
+| Velero backup data (`velero-download`) | Off | Read logs and full backup contents, which can include Secrets |
+| Velero backup deletion (`velero-delete`) | Off | Request permanent deletion of stored backup data |
 
-The switch grants `get` and `patch` on Argo CD Applications
-(`argoproj.io/applications`) through a `*-integration-write` ClusterRole bound
-to `radar:owner` and `cloud:owner`.
+**Approve or remove a grant.** Set
+`cloud.defaultRbac.integrationWrite.<grant>.owner` to `true` or `false` and
+apply the chart. For Velero data access and deletion, also turn on the grant
+in **Settings → Access**. If Access says the cluster does not accept a
+permission, check that chart-managed Owner RBAC and the matching collection
+(`rbac.crdGroups.argo`, `rbac.crdGroups.cloudnativePg` or
+`rbac.crdGroups.velero`) are enabled. `rbac.crdGroups.all=true` also enables them.
 
-The grant is on by default for chart-managed Cloud owners, including owners
-with a custom base role. Set `owner: false` to disable the add-on. Kubernetes
-RBAC is additive, so other bindings and vendor aggregation can still grant
-access. An owner bound to `cluster-admin` already has Application patch access.
+If Access can change a grant but cannot verify it on an older Radar version,
+update the agent. If the cluster already approves the grant and Kubernetes
+reports missing permissions, check the installed Radar role bindings.
+You can also give people access directly through Kubernetes role bindings.
+Access switches apply only to the managed grants.
 
-The add-on also requires `cloud.enabled`, `rbac.create`,
-`cloud.defaultRbac.create`, `cloud.defaultRbac.owner`, and the `argo`
-collection (`rbac.crdGroups.argo` or `all`). If `rbac.namespaces` is set, the
-chart creates a RoleBinding in each listed namespace. Cloud actions use the
-caller’s Kubernetes identity, including MCP clients and confirmed actions in
-Radar Diagnose. `rbac.additionalRules` extends the collector ServiceAccount,
-which is the identity used for in-cluster actions without authentication.
+**Check the scope.** Argo CD defaults on for chart-managed Owner roles,
+including custom roles. CloudNativePG defaults on for the built-in `admin` and
+`cluster-admin` Owner roles. For a custom Owner role, approve CloudNativePG with
+`cloud.defaultRbac.integrationWrite.cnpg.owner=true`. `rbac.namespaces` limits
+the objects these grants can change. The grants apply to whole Kubernetes objects,
+including writes through the resource editor and direct MCP. Argo CD deploys
+with its controller’s credentials and can reach other namespaces or clusters. See
+[how Argo CD actions are authorized](../../../docs/gitops.md#how-radar-performs-argo-actions).
 
-**Authority delegated.** Kubernetes grants access to the entire Application.
-The patch permission applies through any Kubernetes client and covers deployment
-configuration, project assignment, and sync operations. These requests use
-Kubernetes authorization. The Argo CD controller then uses its own deployment
-credentials, which can extend to cluster-scoped resources and to other clusters.
-Review the [controller credentials](https://argo-cd.readthedocs.io/en/stable/operator-manual/security/#cluster-rbac),
-eligible [AppProjects](https://argo-cd.readthedocs.io/en/stable/user-guide/projects/),
-and any Kubernetes admission controls before granting this access.
+All managed Velero grants require leaving `rbac.namespaces` unset and using
+the built-in `admin` or `cluster-admin` Owner role. Velero can act across namespaces.
+Supply your own bindings for scoped or custom Velero access. Set
+`cloud.defaultRbac.create=false` to manage all tier bindings yourself. In
+Kubernetes user-token mode, access comes from the caller’s own Kubernetes
+permissions. Hub forwards managed grants only on direct Owner cluster requests,
+including MCP. See the [exact grant rules](files/integration-write-baseline.yaml).
 
-The namespace setting scopes access to Application objects. Those Applications
-may deploy into different namespaces or clusters. To limit the grant to named
-Applications, leave the add-on off and manage RoleBindings with `resourceNames`.
-Each named Application still delegates controller authority.
-
-**Upgrades.** Upgrading the chart adds this permission to eligible Cloud owners.
-Older values files that omit the key inherit `true`, including with
-`helm upgrade --reuse-values`. A saved `false` continues to disable the grant
-when the upgrade reuses that value. To opt out, set
-`cloud.defaultRbac.integrationWrite.argocd.owner=false` in the release values
-before applying the chart:
-
-```bash
-helm upgrade radar skyhook/radar -n radar --reuse-values \
-  --set cloud.defaultRbac.integrationWrite.argocd.owner=false
-```
-
-For an installation managed by Argo CD or Flux, change the values in Git.
-If Argo CD manages the Radar release, [sync with pruning enabled](https://argo-cd.readthedocs.io/en/stable/user-guide/auto_sync/#automatic-pruning).
-Verify that the `*-cloud-owner-integration-write` ClusterRoleBinding, or the
-RoleBinding in each configured namespace, has been removed. Review other
-bindings, changes made to Applications while the grant was on, and pending
-operations the Argo CD controller can still run.
+**Upgrading.** Older values that omit these settings inherit the table defaults,
+including with `--reuse-values`. Set unwanted grants to `false` before applying
+the chart. For self-managed deployments, upgrade Hub to a version with
+**Settings → Access** first. Upgrading the chart before Hub interrupts the
+chart-managed Argo CD grant until Hub can send its dedicated group.
 
 ### Radar Cloud background services (`radar:system`)
 
@@ -391,9 +382,8 @@ Helm stores releases as Secrets. The grant includes no writes.
 
 ### Radar Cloud automatic Diagnose (`radar:ai:reader`)
 
-Manual Diagnose turns read as the person who started them. Radar Cloud forwards
-that person's identity and groups; `radar:ai:reader` is not involved. MCP clients
-also read with the user's own permissions.
+Manual Diagnose turns use the person’s Kubernetes identity and usual groups.
+The managed Owner groups are reserved for direct Owner cluster requests.
 
 Automatic (alert-triggered) Diagnose runs use username `radar:ai:<org>` and
 group `radar:ai:reader` only, a permanent read-only background diagnostic reader.

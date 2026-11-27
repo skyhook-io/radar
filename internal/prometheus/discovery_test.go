@@ -13,6 +13,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/portforward/forwardtest"
+	"k8s.io/client-go/kubernetes"
+
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
@@ -270,7 +273,7 @@ func TestDiscover_StaleFlightGenerationDoesNotCommit(t *testing.T) {
 	}
 
 	// Flight was keyed at generation 4 (before the Reset).
-	_, _, err := c.discover(context.Background(), 4)
+	_, err := c.discover(context.Background(), 4)
 	if !errors.Is(err, errDiscoverySuperseded) {
 		t.Fatalf("err = %v, want errDiscoverySuperseded", err)
 	}
@@ -300,7 +303,7 @@ func TestDiscover_InClusterDoesNotFallBackToPortForward(t *testing.T) {
 		inCluster:   true,
 	}
 
-	_, _, err := c.discover(context.Background(), c.discoveryGen)
+	_, err := c.discover(context.Background(), c.discoveryGen)
 	if !errors.Is(err, errPrometheusUnreachable) || errors.Is(err, ErrPrometheusNotFound) {
 		t.Fatalf("in-cluster discovery: err=%v, want unreachable without not-found", err)
 	}
@@ -391,15 +394,15 @@ func TestMarkConnected_DropsStaleGeneration(t *testing.T) {
 // can't report a hollow success for a superseded context.
 func TestConnectionLive(t *testing.T) {
 	live := &Client{baseURL: "http://p"}
-	if !live.connectionLive("http://p") {
+	if !live.connectionLiveLocked(discoveredEndpoint{addr: "http://p"}, 0) {
 		t.Fatal("current connection reported not live")
 	}
-	if live.connectionLive("http://other") {
+	if live.connectionLiveLocked(discoveredEndpoint{addr: "http://other"}, 0) {
 		t.Fatal("mismatched address reported live (Reset cleared/changed baseURL)")
 	}
 
 	retired := &Client{baseURL: "http://p", retired: true}
-	if retired.connectionLive("http://p") {
+	if retired.connectionLiveLocked(discoveredEndpoint{addr: "http://p"}, 0) {
 		t.Fatal("retired client reported live (would query the previous cluster)")
 	}
 }
@@ -580,10 +583,8 @@ func TestDiscoverCandidateFailuresAreNotAbsent(t *testing.T) {
 					return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "pods"}, "", errors.New(`cannot list resource "pods"`))
 				})
 			}
-			portforward.SetK8sClients(cs, &rest.Config{})
-			defer portforward.SetK8sClients(nil, nil)
-			c := &Client{k8sClient: cs, contextName: "test", httpClient: &http.Client{Transport: transport}}
-			_, _, err := c.discover(context.Background(), 0)
+			c := &Client{forwards: portforward.NewManager(cs, &rest.Config{}, "test"), k8sClient: cs, contextName: "test", httpClient: &http.Client{Transport: transport}}
+			_, err := c.discover(context.Background(), 0)
 			if err == nil || !errors.Is(err, errPrometheusUnreachable) || errors.Is(err, ErrPrometheusNotFound) {
 				t.Fatalf("failure classification: %v", err)
 			}
@@ -629,11 +630,77 @@ func TestDiscover_AutoPortForwardDisabledStopsAfterDirectProbe(t *testing.T) {
 		contextName: "laptop",
 	}
 
-	_, _, err := c.discover(context.Background(), c.discoveryGen)
+	_, err := c.discover(context.Background(), c.discoveryGen)
 	if !errors.Is(err, errAutoPortForwardDisabled) || !IsUnreachable(err) {
 		t.Fatalf("discovery with port-forwarding off: err=%v, want the turned-off explanation", err)
 	}
 	if c.GetStatus().Service != nil {
 		t.Fatal("no candidate was connected, so none may be reported as the discovered service")
+	}
+}
+
+func TestEnsureConnectedSkipsAddressOfStoppedForward(t *testing.T) {
+	var requests atomic.Int32
+	reused := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		fmt.Fprint(w, healthyProbeBody)
+	}))
+	t.Cleanup(reused.Close)
+	replacement := healthyServer(t, 0)
+	c := &Client{baseURL: reused.URL, forward: &portforward.Handle{}, manualURL: replacement.URL, httpClient: replacement.Client()}
+	if status := c.GetStatus(); status.Connected || status.Address != "" {
+		t.Fatalf("stopped tunnel still reported: %+v", status)
+	}
+	addr, _, err := c.EnsureConnected(t.Context())
+	if err != nil || addr != replacement.URL || requests.Load() != 0 {
+		t.Fatalf("connected to %q, err=%v, requests to stopped forward=%d", addr, err, requests.Load())
+	}
+}
+
+func TestClosedForwardManagerDoesNotCacheDiscoveryFailure(t *testing.T) {
+	cs := fake.NewSimpleClientset(&corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "monitoring", Name: "prometheus-server"},
+		Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Name: "http", Port: 9090}}},
+	})
+	proxy, err := url.Parse(deadURL(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := &http.Transport{Proxy: http.ProxyURL(proxy)}
+	t.Cleanup(tr.CloseIdleConnections)
+	c := &Client{k8sClient: cs, httpClient: &http.Client{Transport: tr}, forwards: portforward.NewManager(cs, &rest.Config{}, "test")}
+	c.forwards.Close()
+	_, _, err = c.EnsureConnected(t.Context())
+	if !errors.Is(err, portforward.ErrClosed) || c.recentDiscoveryError(time.Now()) != nil || c.GetStatus().Error != "" {
+		t.Fatalf("teardown recorded as discovery failure: err=%v, status=%+v", err, c.GetStatus())
+	}
+}
+
+func TestDiscoveryHandoffRejectsHandleAtReusedAddress(t *testing.T) {
+	cfg := forwardtest.Server(t, forwardtest.ServeTunnel)
+	m := portforward.NewManager(kubernetes.NewForConfigOrDie(cfg), cfg, "ctx")
+	defer m.Close()
+	open := func() *portforward.Handle {
+		t.Helper()
+		h, err := m.Start(t.Context(), portforward.OwnerPrometheus, "ns", "svc", 9090)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return h
+	}
+	released, current := open(), open()
+	released.Stop()
+	if released.Alive() || !current.Alive() {
+		t.Fatal("expected a released and a live handle")
+	}
+
+	// Model local port reassignment without depending on the OS to reassign it.
+	c := &Client{baseURL: released.Address(), forward: current}
+	stale := discoveredEndpoint{addr: released.Address(), forward: released}
+	if c.connectionLiveLocked(stale, 0) || c.forward != current || !current.Alive() {
+		t.Fatal("stale result accepted or current forward disturbed")
+	}
+	if !c.connectionLiveLocked(discoveredEndpoint{addr: c.baseURL, forward: current}, 0) {
+		t.Fatal("current handle rejected")
 	}
 }

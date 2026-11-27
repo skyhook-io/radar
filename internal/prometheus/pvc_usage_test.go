@@ -67,7 +67,7 @@ func TestPVCUsageAvailability(t *testing.T) {
 				_, _ = fmt.Fprintf(w, `{"status":"success","data":{"resultType":"vector","result":%s}}`, result)
 			}))
 			defer upstream.Close()
-			Initialize(nil, nil, "pvc-test")
+			Initialize(nil, nil, "pvc-test", nil)
 			SetManualURL(upstream.URL)
 			SetAuthGate(func(_ *http.Request, group, resource, namespace, verb string) bool {
 				if group != "" || resource != "persistentvolumeclaims" || namespace != "demo" || verb != "get" {
@@ -75,7 +75,7 @@ func TestPVCUsageAvailability(t *testing.T) {
 				}
 				return !tc.denied
 			})
-			defer func() { SetAuthGate(nil); Reset(); Initialize(nil, nil, "") }()
+			defer func() { SetAuthGate(nil); Reset(); Initialize(nil, nil, "", nil) }()
 			w := httptest.NewRecorder()
 			metricsRouter().ServeHTTP(w, httptest.NewRequest("GET", "/prometheus/pvc/demo/disk", nil))
 			if tc.denied {
@@ -159,10 +159,10 @@ func TestPVCUsageHandlerRefusesMergedClusters(t *testing.T) {
 		_, _ = fmt.Fprintf(w, `{"status":"success","data":{"resultType":"vector","result":%s}}`, result)
 	}))
 	defer upstream.Close()
-	Initialize(nil, nil, "pvc-test")
+	Initialize(nil, nil, "pvc-test", nil)
 	SetManualURL(upstream.URL)
 	SetAuthGate(func(*http.Request, string, string, string, string) bool { return true })
-	defer func() { SetAuthGate(nil); Reset(); Initialize(nil, nil, "") }()
+	defer func() { SetAuthGate(nil); Reset(); Initialize(nil, nil, "", nil) }()
 	w := httptest.NewRecorder()
 	metricsRouter().ServeHTTP(w, httptest.NewRequest("GET", "/prometheus/pvc/demo/disk", nil))
 	var response PVCUsageResponse
@@ -211,10 +211,10 @@ func TestPVCUsageSingleClusterScrapes(t *testing.T) {
 				_, _ = fmt.Fprintf(w, `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"persistentvolumeclaim":"disk"},"value":[1700000000,"%d"]}]}}`, value)
 			}))
 			defer upstream.Close()
-			Initialize(nil, nil, "pvc-test")
+			Initialize(nil, nil, "pvc-test", nil)
 			SetManualURL(upstream.URL)
 			SetAuthGate(func(*http.Request, string, string, string, string) bool { return true })
-			defer func() { SetAuthGate(nil); Reset(); Initialize(nil, nil, "") }()
+			defer func() { SetAuthGate(nil); Reset(); Initialize(nil, nil, "", nil) }()
 			w := httptest.NewRecorder()
 			metricsRouter().ServeHTTP(w, httptest.NewRequest("GET", "/prometheus/pvc/demo/disk", nil))
 			var response PVCUsageResponse
@@ -256,14 +256,14 @@ func TestPVCUsageHandlerKeepsCapturedClient(t *testing.T) {
 		_, _ = fmt.Fprintf(w, `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"persistentvolumeclaim":"disk"},"value":[1700000000,"%d"]}]}}`, value)
 	}))
 	defer upstream.Close()
-	Initialize(nil, nil, "original")
+	Initialize(nil, nil, "original", nil)
 	SetManualURL(upstream.URL)
 	SetAuthGate(func(*http.Request, string, string, string, string) bool {
-		Initialize(nil, nil, "replacement")
+		Initialize(nil, nil, "replacement", nil)
 		SetManualURL(replacement.URL)
 		return true
 	})
-	defer func() { SetAuthGate(nil); Reset(); Initialize(nil, nil, "") }()
+	defer func() { SetAuthGate(nil); Reset(); Initialize(nil, nil, "", nil) }()
 	w := httptest.NewRecorder()
 	metricsRouter().ServeHTTP(w, httptest.NewRequest("GET", "/prometheus/pvc/demo/disk", nil))
 	var response PVCUsageResponse
@@ -581,12 +581,12 @@ func TestPVCUsageHandlerUsesNamespaceCacheProof(t *testing.T) {
 				_, _ = fmt.Fprintf(w, `{"status":"success","data":{"resultType":"vector","result":%s}}`, result)
 			}))
 			defer upstream.Close()
-			Initialize(nil, nil, "cache-proof")
+			Initialize(nil, nil, "cache-proof", nil)
 			SetManualURL(upstream.URL)
 			SetAuthGate(func(_ *http.Request, group, resource, namespace, verb string) bool {
 				return group == "" && resource == "persistentvolumeclaims" && namespace == "db" && verb == "get"
 			})
-			defer func() { SetAuthGate(nil); Reset(); Initialize(nil, nil, "") }()
+			defer func() { SetAuthGate(nil); Reset(); Initialize(nil, nil, "", nil) }()
 			wantProofs := 1
 			if tc.priorEmpty {
 				wantProofs++

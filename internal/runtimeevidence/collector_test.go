@@ -5,10 +5,13 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	pfpkg "github.com/skyhook-io/radar/pkg/portforward"
 
 	evidence "github.com/skyhook-io/radar/pkg/runtimeevidence"
 	corev1 "k8s.io/api/core/v1"
@@ -183,13 +186,17 @@ func TestKubernetesTransportCancellation(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { close(entered); <-r.Context().Done() }))
 	defer server.Close()
 	ctx, cancel := context.WithCancel(context.Background())
-	client := &http.Client{Transport: contextTransport{ctx: ctx, base: http.DefaultTransport}}
+	u, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dialer, err := pfpkg.NewDialerWithContext(ctx, &rest.Config{Host: server.URL}, u)
+	if err != nil {
+		t.Fatal(err)
+	}
 	done := make(chan error, 1)
 	go func() {
-		resp, err := client.Get(server.URL)
-		if resp != nil {
-			resp.Body.Close()
-		}
+		_, _, err := dialer.Dial("portforward.k8s.io")
 		done <- err
 	}()
 	<-entered

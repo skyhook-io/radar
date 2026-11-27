@@ -1,4 +1,4 @@
-suite: Radar Cloud owner integration writes
+suite: Radar Cloud Owner access
 templates:
   - cloud-rbac-integration-write.yaml
 set:
@@ -7,17 +7,10 @@ set:
   cloud.url: wss://cloud.example
   cloud.clusterName: test
 tests:
-  - it: grants only get and patch on Argo CD Applications to the stock owner by default
+  - it: grants the standard capabilities to separate dedicated groups
     asserts:
       - hasDocuments:
-          count: 2
-      - isKind:
-          of: ClusterRole
-        documentIndex: 0
-      - equal:
-          path: metadata.name
-          value: RELEASE-NAME-radar-integration-write
-        documentIndex: 0
+          count: 6
       - equal:
           path: rules
           value:
@@ -25,195 +18,178 @@ tests:
               resources: [applications]
               verbs: [get, patch]
         documentIndex: 0
-      - isKind:
-          of: ClusterRoleBinding
-        documentIndex: 1
-      - equal:
-          path: metadata.name
-          value: RELEASE-NAME-radar-cloud-owner-integration-write
-        documentIndex: 1
-      - equal:
-          path: roleRef
-          value:
-            apiGroup: rbac.authorization.k8s.io
-            kind: ClusterRole
-            name: RELEASE-NAME-radar-integration-write
-        documentIndex: 1
       - equal:
           path: subjects
           value:
             - kind: Group
-              name: radar:owner
+              name: radar:owner-access:argocd
               apiGroup: rbac.authorization.k8s.io
-            - kind: Group
-              name: cloud:owner
-              apiGroup: rbac.authorization.k8s.io
-        documentIndex: 1
-  - it: scopes the owner add-on to configured namespaces
-    set:
-      rbac.namespaces: [argocd, apps]
-    asserts:
-      - hasDocuments:
-          count: 3
-      - isKind:
-          of: RoleBinding
         documentIndex: 1
       - equal:
-          path: metadata.namespace
-          value: argocd
-        documentIndex: 1
+          path: rules
+          value:
+            - apiGroups: [postgresql.cnpg.io]
+              resources: [clusters]
+              verbs: [get, patch]
+            - apiGroups: [postgresql.cnpg.io]
+              resources: [clusters/status]
+              verbs: [patch]
+            - apiGroups: [postgresql.cnpg.io]
+              resources: [backups]
+              verbs: [get, list, create]
+            - apiGroups: [postgresql.cnpg.io]
+              resources: [scheduledbackups]
+              verbs: [get, patch]
+            - apiGroups: [postgresql.cnpg.io]
+              resources: [poolers]
+              verbs: [get, patch]
+        documentIndex: 2
+      - equal:
+          path: subjects[0].name
+          value: radar:owner-access:cnpg
+        documentIndex: 3
+      - equal:
+          path: rules
+          value:
+            - apiGroups: [velero.io]
+              resources: [schedules]
+              verbs: [get, patch]
+            - apiGroups: [velero.io]
+              resources: [backups]
+              verbs: [get, create]
+        documentIndex: 4
+      - equal:
+          path: subjects[0].name
+          value: radar:owner-access:velero
+        documentIndex: 5
+  - it: provisions backup-data access and deletion only with separate approvals
+    set:
+      cloud.defaultRbac.integrationWrite.velero-download.owner: true
+      cloud.defaultRbac.integrationWrite.velero-delete.owner: true
+    asserts:
+      - hasDocuments:
+          count: 10
+      - equal:
+          path: rules
+          value:
+            - apiGroups: [velero.io]
+              resources: [deletebackuprequests]
+              verbs: [list, create]
+        documentIndex: 6
+      - equal:
+          path: subjects[0].name
+          value: radar:owner-access:velero-delete
+        documentIndex: 7
+      - equal:
+          path: rules
+          value:
+            - apiGroups: [velero.io]
+              resources: [downloadrequests]
+              verbs: [create, get, delete]
+        documentIndex: 8
+      - equal:
+          path: subjects[0].name
+          value: radar:owner-access:velero-download
+        documentIndex: 9
+  - it: download approval does not provision deletion
+    set:
+      cloud.defaultRbac.integrationWrite.velero-download.owner: true
+    asserts:
+      - hasDocuments:
+          count: 8
+      - equal:
+          path: subjects[0].name
+          value: radar:owner-access:velero-download
+        documentIndex: 7
+  - it: namespace scoping uses RoleBindings and omits all Velero grants
+    set:
+      rbac.namespaces: [apps, databases]
+      cloud.defaultRbac.integrationWrite.velero-download.owner: true
+      cloud.defaultRbac.integrationWrite.velero-delete.owner: true
+    asserts:
+      - hasDocuments:
+          count: 6
       - isKind:
           of: RoleBinding
-        documentIndex: 2
+        documentIndex: 1
       - equal:
           path: metadata.namespace
           value: apps
+        documentIndex: 1
+      - isKind:
+          of: RoleBinding
         documentIndex: 2
-  - it: grants with a custom owner role by default
+      - equal:
+          path: metadata.namespace
+          value: databases
+        documentIndex: 2
+      - equal:
+          path: subjects[0].name
+          value: radar:owner-access:cnpg
+        documentIndex: 4
+  - it: custom owner roles get Argo CD by default and omit all Velero grants
     set:
-      cloud.defaultRbac.ownerClusterRole: platform-owner
+      cloud.defaultRbac.ownerClusterRole: custom-operator
+      cloud.defaultRbac.integrationWrite.velero-download.owner: true
+      cloud.defaultRbac.integrationWrite.velero-delete.owner: true
     asserts:
       - hasDocuments:
           count: 2
       - equal:
-          path: rules
-          value:
-            - apiGroups: [argoproj.io]
-              resources: [applications]
-              verbs: [get, patch]
-        documentIndex: 0
-  - it: false grants nothing even with the stock roles
+          path: subjects[0].name
+          value: radar:owner-access:argocd
+        documentIndex: 1
+  - it: each approval can be disabled explicitly
     set:
       cloud.defaultRbac.integrationWrite.argocd.owner: false
     asserts:
       - hasDocuments:
-          count: 0
-  - it: false grants nothing with cluster-admin
-    set:
-      cloud.defaultRbac.ownerClusterRole: cluster-admin
-      cloud.defaultRbac.integrationWrite.argocd.owner: false
-    asserts:
-      - hasDocuments:
-          count: 0
-  # null deletes the key, as an older --reuse-values tree lacks it entirely.
-  - it: a missing integrationWrite map follows the argocd default (true)
+          count: 4
+      - equal:
+          path: subjects[0].name
+          value: radar:owner-access:cnpg
+        documentIndex: 1
+  - it: an omitted map uses cluster approval defaults
     set:
       cloud.defaultRbac.integrationWrite: null
     asserts:
       - hasDocuments:
-          count: 2
-  - it: a missing integrationWrite map inherits the default with a custom owner role
-    set:
-      cloud.defaultRbac.integrationWrite: null
-      cloud.defaultRbac.ownerClusterRole: platform-owner
-    asserts:
-      - hasDocuments:
-          count: 2
-  - it: a missing argocd map follows the argocd default (true)
-    set:
-      cloud.defaultRbac.integrationWrite.argocd: null
-    asserts:
-      - hasDocuments:
-          count: 2
-  - it: a missing owner key follows the argocd default (true)
-    set:
-      cloud.defaultRbac.integrationWrite.argocd.owner: null
-    asserts:
-      - hasDocuments:
-          count: 2
-  - it: respects customer-managed RBAC
+          count: 6
+  - it: respects customer-managed Kubernetes roles
     set:
       cloud.defaultRbac.create: false
-      cloud.defaultRbac.integrationWrite.argocd.owner: true
     asserts:
       - hasDocuments:
           count: 0
-  - it: needs the owner tier
+  - it: omits grants when the owner tier is disabled
     set:
       cloud.defaultRbac.owner: false
-      cloud.defaultRbac.integrationWrite.argocd.owner: true
     asserts:
       - hasDocuments:
           count: 0
-  - it: needs chart RBAC
-    set:
-      rbac.create: false
-      cloud.defaultRbac.integrationWrite.argocd.owner: true
-    asserts:
-      - hasDocuments:
-          count: 0
-  - it: does not affect OSS
+  - it: omits grants outside Radar Cloud
     set:
       cloud.enabled: false
-      cloud.defaultRbac.integrationWrite.argocd.owner: true
     asserts:
       - hasDocuments:
           count: 0
-  - it: follows the Argo collection flag
+  - it: omits grants when chart RBAC is disabled
     set:
-      rbac.crdGroups.argo: false
-      cloud.defaultRbac.integrationWrite.argocd.owner: true
+      rbac.create: false
     asserts:
       - hasDocuments:
           count: 0
-  - it: crdGroups.all enables only the reviewed grant rows
+  - it: honors collection controls
     set:
-      cloud.defaultRbac.integrationWrite.argocd.owner: true
       rbac.crdGroups.argo: false
-      rbac.crdGroups.all: true
+      rbac.crdGroups.cloudnativePg: false
+      rbac.crdGroups.velero: false
     asserts:
       - hasDocuments:
-          count: 2
-      - equal:
-          path: rules
-          value:
-            - apiGroups: [argoproj.io]
-              resources: [applications]
-              verbs: [get, patch]
-        documentIndex: 0
-  - it: never binds members or viewers
-    set:
-      cloud.defaultRbac.integrationWrite.argocd.owner: true
-    asserts:
-      - notContains:
-          path: subjects
-          content:
-            kind: Group
-            name: radar:member
-            apiGroup: rbac.authorization.k8s.io
-        documentIndex: 1
-      - notContains:
-          path: subjects
-          content:
-            kind: Group
-            name: radar:viewer
-            apiGroup: rbac.authorization.k8s.io
-        documentIndex: 1
-  - it: rejects the auto switch
-    set:
-      cloud.defaultRbac.integrationWrite.argocd.owner: auto
-    asserts:
-      - failedTemplate:
-          errorPattern: "integrationWrite[./]argocd[./]owner"
-  - it: rejects string true
-    set:
-      cloud.defaultRbac.integrationWrite.argocd.owner: "true"
-    asserts:
-      - failedTemplate:
-          errorPattern: "integrationWrite[./]argocd[./]owner"
-  - it: rejects unknown capability keys
+          count: 0
+  - it: rejects unsupported grant IDs
     set:
       cloud.defaultRbac.integrationWrite.flux.owner: true
     asserts:
       - failedTemplate:
           errorPattern: "integrationWrite"
-      - failedTemplate:
-          errorPattern: "flux"
-  - it: has no member or viewer switches
-    set:
-      cloud.defaultRbac.integrationWrite.argocd.member: true
-    asserts:
-      - failedTemplate:
-          errorPattern: "integrationWrite[./]argocd"
-      - failedTemplate:
-          errorPattern: "member"

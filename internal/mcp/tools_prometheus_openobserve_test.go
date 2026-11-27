@@ -18,7 +18,7 @@ func setupOpenObserveRelay(t *testing.T) *fakeProm {
 	t.Helper()
 	f := &fakeProm{}
 	srv := httptest.NewServer(f)
-	prometheus.Initialize(nil, nil, "test-ctx")
+	prometheus.Initialize(nil, nil, "test-ctx", nil)
 	opts := oo.RewriteOptions{Matchers: []oo.Matcher{{Name: oo.IDLabel, Value: "uid-1"}}}
 	if err := prometheus.EnableRelay(prometheus.RelayConfig{
 		Key:      "test-openobserve",
@@ -35,7 +35,7 @@ func setupOpenObserveRelay(t *testing.T) *fakeProm {
 		prometheus.DisableRelay()
 		srv.Close()
 		prometheus.Reset()
-		prometheus.Initialize(nil, nil, "")
+		prometheus.Initialize(nil, nil, "", nil)
 	})
 	return f
 }

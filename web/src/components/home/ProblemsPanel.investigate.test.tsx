@@ -42,7 +42,7 @@ let root: Root
 let container: HTMLDivElement
 const onResourceClick = vi.fn()
 
-function render(rowIssue: Issue = issue) {
+function render(rowIssue: Issue = issue, onNavigateToIssue?: (id: string) => void) {
   act(() => {
     root.render(
       <ProblemsPanel
@@ -55,6 +55,7 @@ function render(rowIssue: Issue = issue) {
         error={null}
         totalReturned={1}
         onNavigateToIssues={() => {}}
+        onNavigateToIssue={onNavigateToIssue}
         onResourceClick={onResourceClick}
       />,
     )
@@ -89,7 +90,16 @@ describe('Home Active Issues Investigate action', () => {
     expect(onResourceClick).not.toHaveBeenCalled()
   })
 
-  it('still opens the resource from the rest of the row', () => {
+  it('opens the issue from the row when the Issues page handles links', () => {
+    const onNavigateToIssue = vi.fn()
+    render(issue, onNavigateToIssue)
+    const row = buttons().find((b) => b.textContent?.includes('checkout'))
+    act(() => row!.click())
+    expect(onNavigateToIssue).toHaveBeenCalledWith(issue.id)
+    expect(onResourceClick).not.toHaveBeenCalled()
+  })
+
+  it('still opens the resource from the row when the host takes over Issues', () => {
     render()
     const row = buttons().find((b) => b.textContent?.includes('checkout'))
     act(() => row!.click())

@@ -80,18 +80,12 @@ export function MetricsBackendSwitch({
     onBusyChange?.(next || reported.current.ooBusy || reported.current.releasing)
   }, [onBusyChange])
 
-  const releaseCluster = useCallback(async () => {
-    const next = await removeOpenObserveCluster(data?.cluster.uid)
-    setData(next)
-    setChoice('prometheus')
-    onChanged()
-  }, [data?.cluster.uid, onChanged])
-
-  const releaseFromPrometheusView = async () => {
+  const releaseCluster = async () => {
     setReleasing(true)
     setReleaseError('')
     try {
-      await releaseCluster()
+      setData(await removeOpenObserveCluster(data?.cluster.uid))
+      onChanged()
     } catch (error) {
       setReleaseError(error instanceof Error ? error.message : String(error))
     } finally {
@@ -101,6 +95,8 @@ export function MetricsBackendSwitch({
 
   const statusRow = status ? <div className="flex flex-wrap items-center gap-x-3 gap-y-1">{status}</div> : null
   const matched = !!data?.cluster.match
+  // The status describes where metrics come from now, whichever view is open.
+  const active: Backend = matched ? 'openobserve' : 'prometheus'
 
   return (
     <div className="space-y-4">
@@ -133,25 +129,27 @@ export function MetricsBackendSwitch({
         {matched && !locked && (
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
             <span className="text-warning-text">This cluster still reads from OpenObserve.</span>
-            <button type="button" disabled={busy} onClick={() => void releaseFromPrometheusView()} className="font-medium text-accent-text hover:underline">
+            <button type="button" disabled={busy} onClick={() => void releaseCluster()} className="text-accent-text hover:underline">
               {releasing ? 'Switching…' : 'Use Prometheus for this cluster'}
             </button>
             {releaseError && <span role="alert" className="basis-full text-semantic-error">{releaseError}</span>}
           </div>
         )}
         {locked
-          ? choice === 'prometheus' && statusRow
-          : prometheus({ status: choice === 'prometheus' ? status : undefined, onDirtyChange: promDirtyChange, onBusyChange: promBusyChange })}
+          ? active === 'prometheus' && statusRow
+          : prometheus({ status: active === 'prometheus' ? status : undefined, onDirtyChange: promDirtyChange, onBusyChange: promBusyChange })}
       </div>
       <div className={clsx(choice !== 'openobserve' && 'hidden')} inert={choice !== 'openobserve' || undefined}>
         {data ? (
           <OpenObserveSetup
             state={data}
             locked={locked}
-            status={choice === 'openobserve' ? status : undefined}
-            onStateChange={setData}
+            status={active === 'openobserve' ? status : undefined}
+            onStateChange={(next) => {
+              setData(next)
+              if (!next.connection) setChoice('prometheus')
+            }}
             onChanged={onChanged}
-            onUsePrometheus={releaseCluster}
             onDirtyChange={setOoDirty}
             onBusyChange={setOoBusy}
           />

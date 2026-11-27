@@ -58,6 +58,14 @@ func WithConnection(ctx context.Context, c *Connection) context.Context {
 	return Admission{conn: c, id: c.ID()}.Bind(ctx)
 }
 
+// CaptureConnection keeps an existing admission or captures the installed connection once for a read.
+func CaptureConnection(ctx context.Context) context.Context {
+	if _, bound := ctx.Value(connectionKey{}).(Admission); bound {
+		return ctx
+	}
+	return WithConnection(ctx, Current())
+}
+
 // ConnectionFrom returns the connection a request was bound to, or nil.
 func ConnectionFrom(ctx context.Context) *Connection {
 	b, _ := ctx.Value(connectionKey{}).(Admission)
