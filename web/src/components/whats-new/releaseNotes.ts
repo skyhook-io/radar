@@ -54,9 +54,9 @@ export const RELEASE_NOTES: ReleaseNotes[] = [
       {
         id: 'app-deploys-timeline',
         icon: History,
-        title: 'App deploys, workload revisions and Timeline',
-        description: 'Compare pod templates in workload Revisions, see Helm, Argo and Flux Deploys on apps, and follow changes and problems together on Timeline.',
-        leadDescription: 'Compare retained pod templates on Deployments, StatefulSets, DaemonSets and Argo Rollouts even when the image tag is unchanged. Open Deploys on an application to see its Helm releases, Argo CD syncs (with inline rendered-commit diffs) and Flux history, or follow deploys, config changes and problems together on one Timeline.',
+        title: 'Detailed deployment and rollout history for applications and workloads',
+        description: 'Applications gain a Deploys tab (Helm, Flux and Argo CD diffs) and a unified Timeline; workloads gain a Revisions tab to diff pod templates.',
+        leadDescription: "The Timeline tab in Applications now puts deploys, config changes and problems in one view. A new Deploys tab shows Helm releases, Flux history and inline Argo CD sync diffs, and a new Revisions tab on workloads lets you diff pod templates across rollouts even when the image tag didn't change.",
         importance: 7,
         path: '/applications',
         cta: 'Open Applications',
