@@ -215,6 +215,7 @@ type FeatureCapabilities struct {
 	// The workspace and its read/action surfaces, excluding protection setup.
 	CNPGWorkspace       bool `json:"cnpgWorkspace"`
 	CNPGProtectionSetup bool `json:"cnpgProtectionSetup"`
+	CNPGPostureChecks   bool `json:"cnpgPostureChecks"` // Cluster posture Checks in the workspace's audit findings
 	// GET /api/velero/workspace and GET /api/velero/schedules/{namespace}/{name}/activity
 	VeleroWorkspace     bool `json:"veleroWorkspace"`
 	VeleroBackupNow     bool `json:"veleroBackupNow"`     // POST /api/velero/schedules/{namespace}/{name}/backup

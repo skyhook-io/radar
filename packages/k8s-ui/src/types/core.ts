@@ -209,6 +209,7 @@ export interface FeatureCapabilities {
   workloadHistory?: boolean
   cnpgWorkspace?: boolean
   cnpgProtectionSetup?: boolean
+  cnpgPostureChecks?: boolean
   veleroWorkspace?: boolean
   /** POST /api/velero/schedules/{namespace}/{name}/backup */
   veleroBackupNow?: boolean

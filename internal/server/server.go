@@ -1600,6 +1600,7 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 		WorkloadHistory:              true,
 		CNPGWorkspace:                true,
 		CNPGProtectionSetup:          true,
+		CNPGPostureChecks:            true,
 		VeleroWorkspace:              true,
 		VeleroBackupNow:              true,
 		VeleroSchedulePause:          true,

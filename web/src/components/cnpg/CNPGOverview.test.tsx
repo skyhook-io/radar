@@ -7,7 +7,8 @@ const sidebar = vi.hoisted(() => ({ data: undefined as CNPGWorkspaceResponse | u
 vi.mock('../../api/cnpg', () => ({ useCNPGWorkspace: () => ({ data: sidebar.data }) }))
 vi.mock('../../api/cnpg-storage', () => ({ useCNPGFleetDisk: () => ({}) }))
 vi.mock('../../api/cnpg-history', () => ({ useCNPGFleetMetrics: () => ({}) }))
-vi.mock('../../api/client', () => ({ useRadarFeature: () => ({ support: 'supported' }) }))
+const feature = vi.hoisted(() => ({ value: { support: 'supported', upgrade: null } as { support: string; upgrade: { feature: string; minimumVersion?: string } | null } }))
+vi.mock('../../api/client', () => ({ useRadarFeature: () => feature.value }))
 
 vi.mock('../../context/ConnectionContext', () => ({ useConnection: () => ({ connection: { context: 'kind-test' } }) }))
 vi.mock('./CNPGOperatorBanner', () => ({ CNPGOperatorBanner: () => null }))
@@ -224,4 +225,19 @@ describe('CNPGOverview posture summary', () => {
     expect(html).not.toContain('No clusters need attention')
   })
 
+  it('replaces the counts with an upgrade note on a Radar that predates them, never a zero', () => {
+    feature.value = { support: 'unsupported', upgrade: { feature: 'CloudNativePG backup and availability counts', minimumVersion: 'v1.21.0' } }
+    try {
+      const html = render(bareAndIntree())
+      expect(html).toContain('CloudNativePG backup and availability counts')
+      expect(html).toContain('need Radar v1.21 or newer')
+      expect(html).not.toContain('Backup and availability configuration')
+      expect(render(bareAndIntree(), 'protect=none')).toContain('>intree<')
+      const loading = (feature.value = { support: 'unknown', upgrade: null }, render(bareAndIntree()))
+      expect(loading).not.toContain('Backup and availability configuration')
+      expect(loading).not.toContain('need Radar')
+    } finally {
+      feature.value = { support: 'supported', upgrade: null }
+    }
+  })
 })

@@ -9,6 +9,7 @@ import {
   cnpgMatchesPostureFilter,
   cnpgReadyInstances,
   FactValue,
+  RadarUpgradeNote,
   StatusDot,
   Tooltip,
   toneTextClass,
@@ -21,6 +22,7 @@ import {
 import type { SelectedResource } from '../../types'
 import { useConnection } from '../../context/ConnectionContext'
 import { getApiBase } from '../../api/config'
+import { useRadarFeature } from '../../api/client'
 import { CNPGWorkspaceHeader, CoverageNotice, coverageEmpty, type CNPGScreenProps } from './shared'
 import { cnpgClusterFullPath, cnpgClusterProblemsPath } from './paths'
 import { currentPageLabel } from '../../utils/page-links'
@@ -253,8 +255,10 @@ export function CNPGOverview({
   const rawFilter = searchParams.get('filter') as Filter | null
   // The view is the list of clusters: all of them unless asked for less.
   const filter: Filter = rawFilter === 'attention' ? 'attention' : 'all'
+  // An older Radar's findings lack the posture Checks: its counts would read 0.
+  const postureFeature = useRadarFeature('cnpgPostureChecks')
   const rawProtect = searchParams.get('protect')
-  const protect = (CNPG_POSTURE_FILTERS as readonly string[]).includes(rawProtect ?? '') ? rawProtect as CNPGPostureFilter : null
+  const protect = postureFeature.support === 'supported' && (CNPG_POSTURE_FILTERS as readonly string[]).includes(rawProtect ?? '') ? rawProtect as CNPGPostureFilter : null
 
   const rows = useMemo(() => {
     let list = fleet.rows
@@ -362,7 +366,11 @@ export function CNPGOverview({
           <CoverageNotice fleet={fleet} data={data} kinds={['clusters', 'pods', 'backups', 'scheduledBackups', 'objectStores', 'poolers', 'databases', 'databaseRoles', 'publications', 'subscriptions']} includeJobs />
           <CNPGOperatorBanner namespaces={fleet.rows.map((r) => r.namespace)} className="" />
 
-          <PostureSummary posture={fleet.posture} lowerBound={fleet.incompleteKinds.includes('clusters')} active={protect} onToggle={(f) => onSetParams({ protect: protect === f ? null : f })} />
+          {postureFeature.upgrade ? (
+            <RadarUpgradeNote requirement={postureFeature.upgrade} />
+          ) : postureFeature.support === 'supported' ? (
+            <PostureSummary posture={fleet.posture} lowerBound={fleet.incompleteKinds.includes('clusters')} active={protect} onToggle={(f) => onSetParams({ protect: protect === f ? null : f })} />
+          ) : null}
 
           <div className="flex flex-wrap items-center gap-2">
             <div role="tablist" aria-label="Clusters" className="inline-flex rounded-lg bg-theme-elevated p-0.5">
