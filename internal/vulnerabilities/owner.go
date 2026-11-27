@@ -122,7 +122,13 @@ func resolveOwners(ctx context.Context, cache *k8s.ResourceCache, refs []Workloa
 		if err := ctx.Err(); err != nil {
 			return nil, "", err
 		}
-		ref := resourceid.NewRef(w.Group, w.Kind, w.Namespace, w.Name)
+		ns := w.Namespace
+		if b, ok := resourceid.BuiltinForKind(w.Kind); ok && b.Group == w.Group && !b.Namespaced {
+			// A static Pod's workload is its Node, named with the Pod's
+			// namespace; the Node itself has none.
+			ns = ""
+		}
+		ref := resourceid.NewRef(w.Group, w.Kind, ns, w.Name)
 		obj, read := rs.Borrow(ref)
 		if read.State == ownership.Unavailable || read.State == ownership.Absent {
 			// Its store couldn't say, or Pods still name a controller that

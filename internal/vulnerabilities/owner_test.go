@@ -42,6 +42,7 @@ func ownerCluster(t *testing.T) *k8s.ResourceCache {
 	client := fake.NewClientset(
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "shop", Labels: map[string]string{"team": "storefront"}}},
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "other"}},
+		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "cp"}},
 		ownerDeployment("shop", "web",
 			map[string]string{"app.kubernetes.io/managed-by": "Helm", "helm.sh/chart": "web-1.2.0", "team": "payments"},
 			map[string]string{"meta.helm.sh/release-name": "web", "meta.helm.sh/release-namespace": "shop"}),
@@ -333,6 +334,12 @@ func TestResolveOwnersUnreadWorkloadIsUnknown(t *testing.T) {
 	owners, _, err := resolveOwners(context.Background(), cache, []WorkloadRef{unread, gone}, nil, TeamLabel)
 	if err != nil {
 		t.Fatal(err)
+	}
+	// A static Pod's Node, named with the Pod's namespace, is read as the
+	// cluster-scoped object it is: found, with no manager, so not listed.
+	node := WorkloadRef{Kind: "Node", Namespace: "kube-system", Name: "cp"}
+	if got, _, _ := resolveOwners(context.Background(), cache, []WorkloadRef{node}, nil, TeamLabel); len(got) != 0 {
+		t.Errorf("node owners = %+v, want none", got)
 	}
 	if len(owners) != 2 || !owners[0].ManagerUnknown || !owners[1].ManagerUnknown || owners[0].Manager != nil || owners[1].Manager != nil {
 		t.Errorf("owners = %+v, want both unknown", owners)
