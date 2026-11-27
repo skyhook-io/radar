@@ -203,9 +203,6 @@ func GetCertificateExpiryWithPolicy(provider ResourceProvider, namespaces []stri
 		if secret.Type != corev1.SecretTypeTLS {
 			continue
 		}
-		if _, sealed := secret.Labels["sealedsecrets.bitnami.com/sealed-secrets-key"]; sealed {
-			continue
-		}
 		certPEM, exists := secret.Data["tls.crt"]
 		if !exists || len(certPEM) == 0 {
 			continue

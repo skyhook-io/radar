@@ -75,8 +75,9 @@ export function CNPGClusterRenderer({ data, onNavigate, declared, certificateExp
   const hasSplitBrain = primariesReported.length > 1
 
   // Certificate expiry warnings
+  const invalidCerts = certExpirations.filter(c => !Number.isFinite(c.remainingMilliseconds))
   const expiredCerts = certExpirations.filter(c => c.remainingMilliseconds <= 0)
-  const tone = (c: typeof certExpirations[number]) => c.renewal === 'user'
+  const tone = (c: typeof certExpirations[number]) => !Number.isFinite(c.remainingMilliseconds) ? 'unknown' : c.renewal === 'user'
     ? certificateExpiryHealth(c.remainingMilliseconds, certificateExpiryPolicy)
     : Number.isFinite(c.remainingMilliseconds) && c.remainingMilliseconds < 86_400_000 ? 'unhealthy' : 'healthy'
   const criticalCerts = certExpirations.filter(c => c.remainingMilliseconds > 0 && tone(c) === 'unhealthy')
@@ -205,6 +206,13 @@ export function CNPGClusterRenderer({ data, onNavigate, declared, certificateExp
             `The most recent backup attempt failed${lastBackupFailure.lastTransitionTime ? ` ${formatRelativeAgeTime(lastBackupFailure.lastTransitionTime)}` : ''}.` +
             (lastBackupFailure.message ? ` Operator reported: ${lastBackupFailure.message}` : '')
           }
+        />
+      )}
+      {invalidCerts.length > 0 && (
+        <AlertBanner
+          variant="warning"
+          title="Certificate expiry unavailable"
+          items={invalidCerts.map(c => `${c.secretName}: the reported expiry date could not be read.`)}
         />
       )}
       {expiredCerts.length > 0 && (

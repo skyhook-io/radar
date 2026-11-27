@@ -211,8 +211,11 @@ func TestCertificatePolicyHTTPAcrossSurfacesAndCache(t *testing.T) {
 	}
 	var list map[string]CertExpiry
 	read("/api/secrets/certificate-expiry?namespaces=default", &list)
-	if len(list) != 4 {
+	if len(list) != 5 {
 		t.Fatalf("expiry count=%d", len(list))
+	}
+	if list["default/sealed-key"].Expiry == "" {
+		t.Fatal("Secret list lost sealed-secrets key expiry")
 	}
 	for _, row := range inventory {
 		if string(list["default/"+row.Name].Health) != string(row.Health) {
@@ -235,7 +238,7 @@ func TestCertificatePolicyHTTPAcrossSurfacesAndCache(t *testing.T) {
 		}
 	}
 	dashboard := s.getDashboardCertificateHealth([]string{"default"})
-	if dashboard == nil || dashboard.Total != 4 || dashboard.Healthy != 1 || dashboard.Warning != 1 || dashboard.Critical != 1 || dashboard.Expired != 1 {
+	if dashboard == nil || dashboard.Total != 5 || dashboard.Healthy != 1 || dashboard.Warning != 1 || dashboard.Critical != 2 || dashboard.Expired != 1 {
 		t.Fatalf("dashboard=%+v", dashboard)
 	}
 	var empty []certs.Cert

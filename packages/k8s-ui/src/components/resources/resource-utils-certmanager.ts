@@ -36,8 +36,8 @@ export function getCertificateIssuer(cert: any): string {
   return ref.name || '-'
 }
 
-export function getCertificateExpiry(cert: { status?: { notBefore?: string; notAfter?: string } }, windows?: CertificateExpiryWindows): { text: string; level: HealthLevel } {
-  const remaining = new Date(cert.status?.notAfter ?? '').getTime() - Date.now()
+export function getCertificateExpiry(cert: { status?: { notBefore?: string; notAfter?: string } }, windows?: CertificateExpiryWindows, now = Date.now()): { text: string; level: HealthLevel } {
+  const remaining = new Date(cert.status?.notAfter ?? '').getTime() - now
   const level = certificateExpiryHealth(remaining, resolveCertificateExpiryWindows(windows, cert.status?.notBefore, cert.status?.notAfter))
   if (level === 'unknown') return { text: '-', level }
   return { text: remaining <= 0 ? `Expired ${formatDuration(-remaining)} ago` : formatDuration(remaining), level }

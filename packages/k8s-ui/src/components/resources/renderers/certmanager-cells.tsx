@@ -24,7 +24,7 @@ import {
   getChallengePresented,
 } from '../resource-utils'
 
-export function CertificateCell({ resource, column, certificateExpiryPolicy }: { resource: any; column: string; certificateExpiryPolicy?: CertificateExpiryWindows }) {
+export function CertificateCell({ resource, column, certificateExpiryPolicy, now }: { resource: any; column: string; certificateExpiryPolicy?: CertificateExpiryWindows; now?: number }) {
   switch (column) {
     case 'status': {
       const status = getCertificateStatus(resource)
@@ -47,7 +47,7 @@ export function CertificateCell({ resource, column, certificateExpiryPolicy }: {
       return <span className="text-sm text-theme-text-secondary">{issuer}</span>
     }
     case 'expires': {
-      const expiry = getCertificateExpiry(resource, certificateExpiryPolicy)
+      const expiry = getCertificateExpiry(resource, certificateExpiryPolicy, now)
       return (
         <span title={expiry.text} className={clsx(
           'text-sm font-medium truncate block',

@@ -3755,6 +3755,7 @@ const MetricsContext = React.createContext<MetricsLookup>({ pods: new Map(), nod
 
 // Context for deeply nested sub-components (PodCell, SecretCell) to access injected platform data
 interface ResourcesViewData {
+  certificateNow?: number
   onNavigate?: (path: string, options?: { replace?: boolean }) => void
   certExpiry?: Record<string, { expired?: boolean; daysLeft: number; expiry?: string; health?: string; expiryPolicy?: import('../../types').CertificateExpiryWindows }>
   certExpiryError?: boolean
@@ -4182,7 +4183,7 @@ export function ResourcesView({
 }: ResourcesViewProps) {
   const initialFilters = getInitialFiltersFromURL()
   const [selectedKind, setSelectedKind] = useState<SelectedKindInfo>(() => getInitialKindFromURL(basePath, defaultKind, locationPathname, locationSearch))
-  useCertificateClock(selectedKind.name === 'secrets' || selectedKind.name === 'certificates' || selectedKind.name === 'knativecertificates')
+  const certificateNow = useCertificateClock(selectedKind.name === 'secrets' || selectedKind.name === 'certificates' || selectedKind.name === 'knativecertificates')
   // Phones: the 224px kind list would leave the table a sliver, so it lives in
   // a drawer over the table, opened from the toolbar and closed by a pick.
   const isPhone = usePhoneLayout()
@@ -6853,6 +6854,7 @@ export function ResourcesView({
   }, [labelSelector])
 
   const resourcesViewDataContextValue = useMemo<ResourcesViewData>(() => ({
+    certificateNow,
     onNavigate,
     certExpiry,
     certExpiryError,
@@ -6862,7 +6864,7 @@ export function ResourcesView({
     operationalIssuesIncomplete,
     onOpenLogs,
     onOpenWorkloadLogs,
-  }), [onNavigate, certExpiry, certExpiryError, certificateExpiryPolicy, auditBadges, operationalIssues, operationalIssuesIncomplete, onOpenLogs, onOpenWorkloadLogs])
+  }), [certificateNow, onNavigate, certExpiry, certExpiryError, certificateExpiryPolicy, auditBadges, operationalIssues, operationalIssuesIncomplete, onOpenLogs, onOpenWorkloadLogs])
 
   const renderSidebar = (className?: string, inDrawer = false) => (
     <ResourcesSidebar
@@ -8229,7 +8231,7 @@ interface CellContentProps {
 }
 
 function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, storeProviders, extraColumn, nameHref, findingMatch }: CellContentProps) {
-  const { auditBadges, certificateExpiryPolicy, certExpiry } = useContext(ResourcesViewDataContext)
+  const { auditBadges, certificateExpiryPolicy, certExpiry, certificateNow } = useContext(ResourcesViewDataContext)
   // Parent-injected extra columns short-circuit the built-in switch.
   // Used by hosts that inject leading columns (e.g. a multi-cluster Cluster column).
   if (extraColumn) {
@@ -8431,7 +8433,7 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
       const secretExpiry = certExpiry?.[`${resource.metadata?.namespace}/${resource.spec?.secretName}`]
       const sameExpiry = secretExpiry?.expiry && Date.parse(secretExpiry.expiry) === Date.parse(resource.status?.notAfter)
       const policy = !resource.status?.notBefore && sameExpiry ? secretExpiry?.expiryPolicy ?? certificateExpiryPolicy : certificateExpiryPolicy
-      return <CertificateCell resource={resource} column={column} certificateExpiryPolicy={policy} />
+      return <CertificateCell resource={resource} column={column} certificateExpiryPolicy={policy} now={certificateNow} />
     }
     case 'persistentvolumes':
       return <PersistentVolumeCell resource={resource} column={column} />
@@ -8863,7 +8865,7 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
       const secretExpiry = certExpiry?.[`${resource.metadata?.namespace}/${resource.spec?.secretName}`]
       const sameExpiry = secretExpiry?.expiry && Date.parse(secretExpiry.expiry) === Date.parse(resource.status?.notAfter)
       const policy = !resource.status?.notBefore && sameExpiry ? secretExpiry?.expiryPolicy ?? certificateExpiryPolicy : certificateExpiryPolicy
-      return <KnativeCertificateCell resource={resource} column={column} certificateExpiryPolicy={policy} />
+      return <KnativeCertificateCell resource={resource} column={column} certificateExpiryPolicy={policy} now={certificateNow} />
     }
     // Traefik
     case 'ingressroutes':
@@ -9608,7 +9610,7 @@ function ConfigMapCell({ resource, column }: { resource: any; column: string }) 
 }
 
 function SecretCell({ resource, column }: { resource: any; column: string }) {
-  const { certExpiry, certExpiryError } = useContext(ResourcesViewDataContext)
+  const { certExpiry, certExpiryError, certificateNow } = useContext(ResourcesViewDataContext)
   switch (column) {
     case 'type': {
       const { type, color } = getSecretType(resource)
@@ -9632,7 +9634,7 @@ function SecretCell({ resource, column }: { resource: any; column: string }) {
       if (!expiry) {
         return <span className="text-sm text-theme-text-tertiary">-</span>
       }
-      const remaining = expiry.expiry ? Date.parse(expiry.expiry) - Date.now() : expiry.daysLeft * 24 * 60 * 60 * 1000
+      const remaining = expiry.expiry ? Date.parse(expiry.expiry) - (certificateNow ?? Date.now()) : expiry.daysLeft * 24 * 60 * 60 * 1000
       const expiryHealth = expiry.expiry
         ? certificateExpiryHealth(remaining, expiry.expiryPolicy)
         : expiry.health ?? certificateExpiryHealth(expiry.daysLeft * 24 * 60 * 60 * 1000)

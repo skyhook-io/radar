@@ -360,7 +360,7 @@ export function KnativeIngressCell({ resource, column }: { resource: any; column
 // KNATIVE CERTIFICATE
 // ============================================================================
 
-export function KnativeCertificateCell({ resource, column, certificateExpiryPolicy }: { resource: any; column: string; certificateExpiryPolicy?: CertificateExpiryWindows }) {
+export function KnativeCertificateCell({ resource, column, certificateExpiryPolicy, now }: { resource: any; column: string; certificateExpiryPolicy?: CertificateExpiryWindows; now?: number }) {
   switch (column) {
     case 'status':
       return <StatusCell resource={resource} getStatus={getKnativeConditionStatus} />
@@ -371,7 +371,7 @@ export function KnativeCertificateCell({ resource, column, certificateExpiryPoli
     case 'secretName':
       return <TextCell value={resource?.spec?.secretName || '-'} />
     case 'expires': {
-      const expiry = getCertificateExpiry(resource, certificateExpiryPolicy)
+      const expiry = getCertificateExpiry(resource, certificateExpiryPolicy, now)
       // "Expired 365d ago" is far wider than the column; bound it like the
       // other status badges that carry arbitrary-length text.
       return (
