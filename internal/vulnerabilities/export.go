@@ -39,13 +39,19 @@ var ExportColumns = map[View][]string{
 	// published, last_modified and days_since_published are the scanner
 	// database's dates for the CVE, not when it was found here.
 	ViewCVE:      slices.Concat(exportLead, []string{"cve", "title", "severity", "score", "packages", "installed", "fixed_versions", "fix", "images", "workloads", "image_names", "running_in", "link", "exposed_workloads", "published", "last_modified", "days_since_published"}),
-	ViewWorkload: slices.Concat(exportLead, []string{"kind", "namespace", "workload", "critical", "high", "medium", "low", "unrated", "with_a_fix", "containers", "exposed_workloads"}),
+	ViewWorkload: slices.Concat(exportLead, []string{"kind", "namespace", "workload", "critical", "high", "medium", "low", "unrated", "with_a_fix", "containers", "exposed_workloads"}, ownerColumns),
 	// One row per finding, image and workload container, for a compliance
 	// tracker (a POA&M): exposure is "exposed", "unknown", or empty when
 	// Radar sees no route.
 	ViewFindings: slices.Concat(exportLead, []string{"cve", "severity", "score", "title", "package", "package_type", "installed_version", "fixed_version", "fix_target", "fix_available", "image", "digest", "namespace", "workload_kind", "workload", "container", "exposure", "routes", "link",
-		"published", "last_modified", "days_since_published", "package_url", "os", "os_end_of_life", "scanner", "scanner_version"}),
+		"published", "last_modified", "days_since_published", "package_url", "os", "os_end_of_life", "scanner", "scanner_version"}, ownerColumns),
 }
+
+// ownerColumns are who owns a row's workload, as far as Radar knows
+// (ownerCells): the Helm release or GitOps object that deploys it, the
+// repository and path it deploys from, its chart, and the team label's
+// value. They name the app and the repository, never the file to change.
+var ownerColumns = []string{"owner_kind", "owner", "source_repo", "source_path", "chart", "team"}
 
 // exportExtras is what an export's CSV needs beyond the wire shape: scan
 // metadata for every image, the images whose findings went unread (which
@@ -279,6 +285,7 @@ func WriteCSV(ctx context.Context, resp Response, f Filter, cluster string) ([]b
 		return w.Write(row)
 	}
 	blank := func(n int) []string { return make([]string, n) }
+	owners := ownerIndex(&resp)
 	// Clean rows follow the screen's clean fold: hidden under a severity or
 	// fix filter.
 	unfiltered := len(f.Severities) == 0 && !f.FixableOnly
@@ -375,7 +382,7 @@ func WriteCSV(ctx context.Context, resp Response, f Filter, cluster string) ([]b
 			return nil, err
 		}
 	case ViewFindings:
-		if err := writeFindings(ctx, resp, f, put, join, cols); err != nil {
+		if err := writeFindings(ctx, resp, f, put, join, cols, owners); err != nil {
 			return nil, err
 		}
 	case ViewWorkload:
@@ -397,7 +404,7 @@ func WriteCSV(ctx context.Context, resp Response, f Filter, cluster string) ([]b
 			if len(wl.Routes) > 0 {
 				exposed = []ExposedWorkload{{WorkloadRef: ref, Routes: wl.Routes}}
 			}
-			if err := put(scanned, status, slices.Concat([]string{wl.Kind, wl.Namespace, wl.Name}, counts, []string{join(containers), exposedCell(exposed, []WorkloadRef{ref})})...); err != nil {
+			if err := put(scanned, status, slices.Concat([]string{wl.Kind, wl.Namespace, wl.Name}, counts, []string{join(containers), exposedCell(exposed, []WorkloadRef{ref})}, ownerCells(owners(ref), join))...); err != nil {
 				return nil, err
 			}
 		}
@@ -454,7 +461,7 @@ func writeImageGaps(put func(time.Time, string, ...string) error, join func([]st
 // containers of that workload, or of exposed ones. Images not scanned and
 // images whose findings weren't read are a row per workload container with
 // the finding cells blank, as the image view writes them.
-func writeFindings(ctx context.Context, resp Response, f Filter, put func(time.Time, string, ...string) error, join func([]string) string, cols []string) error {
+func writeFindings(ctx context.Context, resp Response, f Filter, put func(time.Time, string, ...string) error, join func([]string) string, cols []string, owners func(WorkloadRef) *WorkloadOwner) error {
 	x := resp.export
 	m := newMatcher(f)
 	// containers are a row's workload containers the filters keep, each
@@ -463,6 +470,7 @@ func writeFindings(ctx context.Context, resp Response, f Filter, put func(time.T
 		w        WorkloadRef
 		exposure string
 		routes   string
+		owner    []string
 	}
 	// A workload's routes cell is built once and shared by its containers
 	// and images, so a file's memory grows with its routes, not with
@@ -486,7 +494,7 @@ func writeFindings(ctx context.Context, resp Response, f Filter, put func(time.T
 			}
 			// No route seen leaves exposure empty, as exposed_workloads does:
 			// absence of a route Radar sees is not a finding of "not exposed".
-			c := container{w: w}
+			c := container{w: w, owner: ownerCells(owners(ref), join)}
 			switch {
 			case len(rs) > 0:
 				cell, ok := routeCells[ref]
@@ -512,11 +520,15 @@ func writeFindings(ctx context.Context, resp Response, f Filter, put func(time.T
 			return err
 		}
 		for _, c := range kept {
-			if err := put(scanned, status, named(cols, map[string]string{
+			cells := map[string]string{
 				"image": image, "digest": meta.digest, "namespace": c.w.Namespace, "workload_kind": c.w.Kind, "workload": c.w.Name,
 				"container": c.w.Container, "exposure": c.exposure, "routes": c.routes,
 				"os": meta.os, "os_end_of_life": meta.osEOL, "scanner": meta.scanner.Name, "scanner_version": meta.scanner.Version,
-			})...); err != nil {
+			}
+			for i, col := range ownerColumns {
+				cells[col] = c.owner[i]
+			}
+			if err := put(scanned, status, named(cols, cells)...); err != nil {
 				return err
 			}
 		}
@@ -550,11 +562,11 @@ func writeFindings(ctx context.Context, resp Response, f Filter, put func(time.T
 			}
 			dates := dateCells(fd.publishedAt, fd.lastModified)
 			for _, c := range kept {
-				if err := put(meta.scanned, StatusOK,
+				if err := put(meta.scanned, StatusOK, slices.Concat([]string{
 					fd.ID, severityLabel(fd.Severity), score, fd.Title, fd.Package, ecosystemLabel(cmp.Or(fd.PackageType, fd.ecosystem)),
 					fd.InstalledVersion, fd.FixedVersion, fd.FixTarget, fixAvailable,
 					img.Image, meta.digest, c.w.Namespace, c.w.Kind, c.w.Name, c.w.Container, c.exposure, c.routes, fd.Link,
-					dates[0], dates[1], dates[2], fd.PackageURL, meta.os, meta.osEOL, meta.scanner.Name, meta.scanner.Version); err != nil {
+					dates[0], dates[1], dates[2], fd.PackageURL, meta.os, meta.osEOL, meta.scanner.Name, meta.scanner.Version}, c.owner)...); err != nil {
 					return err
 				}
 			}

@@ -284,3 +284,79 @@ describe('No data', () => {
     expect(menuButton()).toBeNull()
   })
 })
+
+describe('Owner column', () => {
+  const workload = (name: string) => ({ kind: 'Deployment', group: 'apps', namespace: 'shop', name, counts: { ...zero, high: 1 }, fixable: zero, containers: [] })
+  function renderWorkloads(ownership: boolean, owners: boolean | 'fold' = true) {
+    vi.mocked(useVulnerabilities).mockImplementation((p) => ({
+      data: {
+        ...response(p.view, 0),
+        workloads: [workload('web'), workload('plain')],
+        ...(ownership ? {
+          ownership: { teamLabel: 'team' },
+          owners: !owners ? [] : [{ kind: 'Deployment', group: 'apps', namespace: 'shop', name: owners === 'fold' ? 'folded' : 'web', manager: { tool: 'helm', kind: 'HelmRelease', namespace: 'shop', name: 'web-release', chart: 'web-1.2.0' }, team: 'payments', teamFrom: 'workload' }],
+        } : {}),
+      },
+      isLoading: false, isFetching: false, isPlaceholderData: false, error: null, dataUpdatedAt: 0, refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useVulnerabilities>))
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, enabled: false } } })
+    act(() => root.render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter initialEntries={['/checks/vulnerabilities?by=workload']}>
+          <VulnerabilitiesView namespaces={[]} onNavigateToResource={vi.fn()} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    ))
+  }
+
+  it('is off by default and shows only what Radar knows when on', () => {
+    renderWorkloads(true)
+    expect(heads().some((h) => h.includes('Owner'))).toBe(false)
+    expect(container.textContent).not.toContain('web-release')
+    act(() => menuButton()!.click())
+    act(() => menuItem('Show Owner')!.click())
+    expect(heads().some((h) => h.includes('Owner'))).toBe(true)
+    expect(container.textContent).toContain('web-release')
+    expect(container.textContent).toContain('Helm · web-1.2.0')
+    expect(container.textContent).toContain('team: payments')
+    // The unmanaged workload's owner cell is empty, not a guess.
+    expect(container.textContent).not.toContain('Unknown')
+  })
+
+  it('adds no column or line when none was found, and says so in the menu', () => {
+    renderWorkloads(true, false)
+    act(() => menuButton()!.click())
+    const item = menuItems().find((b) => b.textContent?.startsWith('Show Owner'))!
+    expect(item.textContent).toBe('Show Ownernone found')
+    const description = document.getElementById(item.getAttribute('aria-describedby')!)
+    expect(description?.textContent).toContain('Helm release, an Argo CD or Flux app, or a team label')
+    act(() => item.click())
+    expect(item.getAttribute('aria-checked')).toBe('true')
+    expect(heads().some((h) => h.includes('Owner'))).toBe(false)
+    expect(container.querySelector('[role="table"], table')?.textContent ?? '').not.toContain('none found')
+    expect(container.textContent).not.toContain('No owner found')
+  })
+
+  it('says none found when only a workload outside the table has an owner', () => {
+    renderWorkloads(true, 'fold')
+    act(() => menuButton()!.click())
+    expect(menuItems().find((b) => b.textContent?.startsWith('Show Owner'))!.textContent).toBe('Show Ownernone found')
+  })
+
+  it('has no menu note when some workload has an owner', () => {
+    renderWorkloads(true)
+    act(() => menuButton()!.click())
+    expect(menuItem('Show Owner')!.getAttribute('aria-describedby')).toBeNull()
+  })
+
+  it('is not offered by a Radar that reads no owners', () => {
+    renderWorkloads(true)
+    act(() => menuButton()!.click())
+    expect(menuItem('Show Owner')).toBeTruthy()
+    act(() => root.unmount())
+    root = createRoot(container)
+    renderWorkloads(false)
+    act(() => menuButton()?.click())
+    expect(menuItem('Show Owner')).toBeUndefined()
+  })
+})

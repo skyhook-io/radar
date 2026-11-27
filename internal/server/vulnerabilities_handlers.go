@@ -12,6 +12,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/readplan"
 	"github.com/skyhook-io/radar/internal/vulnerabilities"
+	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/readreason"
 )
 
@@ -33,6 +34,12 @@ import (
 // for workload kinds (checkedInNamespace). With auth off it reads with
 // Radar's identity, like the resource list; it is a GET, so the shared
 // listener's cross-site read guard applies.
+//
+// Owners (each named workload's Helm release or GitOps manager, its source
+// repository, and its team label's value) come from the ownership caches
+// in one session, read with Related Resources' access (ownershipAccess): a
+// manager or source object the caller can't read contributes nothing but
+// the name the workload's own metadata already gives.
 //
 // Exposure (each row's workloads with a route from outside the cluster)
 // reads Services and Ingresses in the answer's namespaces and Gateways and
@@ -176,6 +183,7 @@ func (s *Server) readVulnerabilities(w http.ResponseWriter, r *http.Request, exp
 		RouteNamespaces:      routeNamespaces,
 		RouteCeiling:         !routeCheckFailed,
 		ReportAccess:         s.searchKindAccess(r, s.computeSearchKindRBAC(r)),
+		OwnerAccess:          func(c *ownership.Catalog) ownership.Access { return s.ownershipAccess(r, c) },
 		View:                 view,
 		Filter:               vulnerabilityFilter(r),
 		Export:               export,

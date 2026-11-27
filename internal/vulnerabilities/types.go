@@ -413,6 +413,11 @@ type Response struct {
 	// Exposure says where Radar looked for routes from outside the cluster;
 	// set on every answer.
 	Exposure *Exposure `json:"exposure,omitempty"`
+	// Owners are the owners Radar knows of the workloads the answer names
+	// (each once, without a container); Ownership says how they were read.
+	// Set on every answer that names a workload.
+	Owners    []WorkloadOwner `json:"owners,omitempty"`
+	Ownership *Ownership      `json:"ownership,omitempty"`
 	// WorkloadRuns is whether Filter.Workload names something that runs in
 	// the answer's scope, so an empty answer can't pass for "no CVEs". Not
 	// on the wire: the UI and agents learn it differently.

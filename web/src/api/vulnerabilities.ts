@@ -186,6 +186,46 @@ export interface VulnerabilitySummary {
   oldestScan?: string
 }
 
+/** Where a workload's manager deploys from; credentials removed. path is in that repository. */
+export interface VulnerabilityOwnerSource {
+  repo: string
+  path?: string
+  /** A Helm source's chart in a multi-source Argo CD Application, where the manager names no single chart. */
+  chart?: string
+}
+
+/**
+ * The Helm release, Argo CD Application or Flux Kustomization / HelmRelease
+ * that deploys a workload. It names the app and the repository, never the
+ * file to change: an image tag can come from CI, an override or a values file.
+ */
+export interface VulnerabilityOwnerManager {
+  tool: 'helm' | 'argocd' | 'fluxcd'
+  kind: string
+  group?: string
+  namespace: string
+  name: string
+  /** A Helm release's helm.sh/chart label (a subchart's workload names the subchart), or the chart a Flux or Argo CD source names. */
+  chart?: string
+  /** Empty for a Helm release, which records none, and where the caller can't read the manager or its source. */
+  sources?: VulnerabilityOwnerSource[]
+  /** Two or more Argo CD or Flux objects list the workload, or what runs it; this is the one Radar leads with. */
+  shared?: boolean
+}
+
+/** What Radar knows of who owns a workload. A workload with nothing known is left out of `owners`. */
+export interface VulnerabilityWorkloadOwner {
+  kind: string
+  group: string
+  namespace: string
+  name: string
+  manager?: VulnerabilityOwnerManager
+  /** No manager could be named, but the evidence doesn't say there is none. */
+  managerUnknown?: boolean
+  team?: string
+  teamFrom?: 'workload' | 'namespace'
+}
+
 /** A shared read gap; `kinds` names what wasn't read, absent meaning the reports themselves. */
 export type VulnerabilityGap = ReadGap
 
@@ -212,6 +252,10 @@ export interface VulnerabilitiesResponse {
     /** Route kinds this cluster serves that Radar doesn't follow (Istio, Traefik IngressRoute, Contour, Knative). */
     unchecked?: { kind: string; group?: string }[]
   }
+  /** The owners of the workloads the answer names. Present with `ownership` from a Radar that reads owners. */
+  owners?: VulnerabilityWorkloadOwner[]
+  /** Absent from an older Radar: owners are unknown there. unavailable: why none could be read this time. */
+  ownership?: { teamLabel: string; unavailable?: string }
   coverage: {
     complete: boolean
     gaps: VulnerabilityGap[]
@@ -439,6 +483,14 @@ export function vulnerabilitiesCSVFilename(view: VulnerabilityExportView, cluste
 
 // GET /api/vulnerabilities. Filters run server-side so the summary always
 // describes the unfiltered scope and every surface (REST, MCP) filters alike.
+/** Looks up a workload's owner; the container, if any, is ignored. */
+export type OwnerLookup = (w: { kind: string; group?: string; namespace: string; name: string }) => VulnerabilityWorkloadOwner | undefined
+
+export function ownerLookup(owners: VulnerabilityWorkloadOwner[] | undefined): OwnerLookup {
+  const byKey = new Map((owners ?? []).map((o) => [`${o.namespace}/${o.group}/${o.kind}/${o.name}`, o]))
+  return (w) => byKey.get(`${w.namespace}/${w.group ?? ''}/${w.kind}/${w.name}`)
+}
+
 export function useVulnerabilities(p: VulnerabilitiesParams, enabled = true) {
   const { guard, gatedKey } = useRadarFeature('vulnerabilities')
   const path = vulnerabilitiesPath(p)

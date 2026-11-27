@@ -12,6 +12,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/readplan"
 	"github.com/skyhook-io/radar/internal/vulnerabilities"
+	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/readreason"
 )
 
@@ -92,6 +93,7 @@ func handleListVulnerabilities(ctx context.Context, _ *mcp.CallToolRequest, inpu
 		RouteCeiling:         !routeCheckFailed,
 		CanRead:              clusterWideFirst(ctx, summaryRefReader(ctx)),
 		CanListPods:          canListPods,
+		OwnerAccess:          func(c *ownership.Catalog) ownership.Access { return ownershipAccess(ctx, c) },
 		View:                 view,
 		Filter:               filter,
 	})
@@ -210,6 +212,7 @@ func trimVulnerabilities(resp vulnerabilities.Response, limit int) vulnerabiliti
 		resp.Images[i].Workloads = resp.Images[i].Workloads[:min(len(resp.Images[i].Workloads), vulnerabilityDetailsPerRow)]
 	}
 	resp.Coverage.RowsOmitted += omitted
+	resp.PruneOwners()
 	if c := resp.Coverage; c.RowsOmitted > 0 || c.CleanOmitted > 0 || c.UnscannedOmitted > 0 {
 		resp.Coverage.Complete = false
 	}

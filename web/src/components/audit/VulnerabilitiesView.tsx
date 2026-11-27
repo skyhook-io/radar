@@ -51,8 +51,10 @@ import {
   type VulnerabilityWorkload,
   type VulnerabilityWorkloadRef,
   type VulnerableImage,
+  ownerLookup,
 } from '../../api/vulnerabilities'
 import type { SelectedResource } from '../../types'
+import { OwnerCell, OwnerProvider, ownerInfo, ownerTip, useOwners } from '../vulnerabilities/owner'
 import { EndOfLifeBadge, OPTIONAL_FILTERS, OptionalHead, availableColumns, columnsFor, daysSince, isoDate, optionalColumn, useOptionalColumns, useOptionalFilters } from '../vulnerabilities/columns'
 import { useConnection } from '../../context/ConnectionContext'
 import { useDesktopDownload } from '../../hooks/useDesktopDownload'
@@ -117,9 +119,8 @@ const trackOf = (view: VulnerabilityView, name: string, on: boolean | undefined)
 const imageGrid = (c: Record<string, boolean>) => gridOf(['minmax(220px,1.6fr)', trackOf('image', 'os', c.os), 'minmax(180px,1.2fr)', '88px', 'minmax(0,2fr)', trackOf('image', 'scanner', c.scanner), '72px'])
 const cveGrid = (c: Record<string, boolean>) => gridOf(['minmax(260px,1.6fr)', '80px', '48px', trackOf('cve', 'published', c.published), trackOf('cve', 'age', c.age), 'minmax(200px,1.6fr)', '56px', '64px', '80px'])
 const FIX_COLS = 'grid-cols-[minmax(200px,1.2fr)_minmax(220px,1.5fr)_120px_minmax(0,1.6fr)_64px_80px]'
-const WORKLOAD_COLS = 'grid-cols-[minmax(200px,1.4fr)_minmax(180px,1.2fr)_minmax(0,2.4fr)]'
-// With the route column, shown only when the answer reports exposure.
-const WORKLOAD_ROUTE_COLS = 'grid-cols-[minmax(200px,1.4fr)_minmax(180px,1.2fr)_minmax(180px,1.2fr)_minmax(0,2fr)]'
+// The route column shows only when the answer reports exposure.
+const workloadGrid = (route: boolean, c: Record<string, boolean>) => gridOf(['minmax(200px,1.4fr)', trackOf('workload', 'owner', c.owner), 'minmax(180px,1.2fr)', route && 'minmax(180px,1.2fr)', route ? 'minmax(0,2fr)' : 'minmax(0,2.4fr)'])
 const HEAD = 'grid gap-4 border-b border-theme-border py-2 pl-10 pr-3 text-[11px] font-semibold uppercase tracking-wider text-theme-text-tertiary'
 const FOLD_ROW = 'grid grid-cols-[minmax(220px,1.6fr)_minmax(0,4fr)] items-baseline gap-4 py-1.5 pl-10 pr-3 text-xs'
 const SUB = 'grid items-baseline gap-4 py-1.5 pl-10 pr-3 text-xs'
@@ -228,6 +229,11 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
   // Every filter lives in the URL; the view and the namespace scope aren't filters.
   const clearFilters = () => update((p) => { for (const key of [...p.keys()]) if (!KEEP_ON_CLEAR.has(key)) p.delete(key) }, true)
   const pageKey = JSON.stringify([view, namespaces, severities, fixableOnly, exposedOnly, eolOnly, query, workload])
+  const findOwner = ownerLookup(data.owners)
+  // Owners were read and none of the table's workloads has one: a column of
+  // blanks would look broken, so the menu item says so instead. Owners of
+  // workloads only in the folds don't count; they show on hover there.
+  const ownerNone = !!data.ownership && !data.ownership.unavailable && !(data.workloads ?? []).some((w) => !!findOwner(w))
   const fixChip = known && view !== 'fix'
   return (
     <div aria-busy={isFetching} className="flex-1 flex flex-col min-h-0 p-4 gap-4 overflow-auto">
@@ -242,7 +248,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
             <PageMenu
               params={tableParams}
               cluster={connection.clusterName || connection.context}
-              columns={data.view === view ? availableColumns(view, data).map((c) => ({ key: c.key, label: c.label, shown: optional.shown.has(c.key) })) : []}
+              columns={data.view === view ? availableColumns(view, data).map((c) => ({ key: c.key, label: c.label, shown: optional.shown.has(c.key), ...(c.key === 'workload.owner' && ownerNone ? NO_OWNER : {}) })) : []}
               onToggleColumn={optional.toggle}
               filters={OPTIONAL_FILTERS.filter((f) => filterAvailable(f.key)).map((f) => ({ key: f.key, label: f.label, shown: optionalFilters.shown(f.key) }))}
               onToggleFilter={optionalFilters.toggle}
@@ -353,7 +359,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
       {data.view !== view ? (
         <PaneLoader label="Reading vulnerability reports…" className="min-h-48" />
       ) : (
-        <>
+        <OwnerProvider info={ownerInfo(data)}>
         {rows.length === 0 ? (
           <EmptyState
             tone="neutral"
@@ -369,6 +375,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
         ) : view === 'workload' ? (
           <Paged key={pageKey} rows={data.workloads ?? []}>{(rows) => <WorkloadTable
             workloads={rows}
+            columns={{ ...columnsFor('workload', optional.shown, data), ...(ownerNone && { owner: false }) }}
             exposure={exposure}
             severities={severities}
             query={query}
@@ -393,7 +400,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
           <CleanList data={data} view={view} onOpen={(w) => onNavigateToResource(toResource(w))} />
         )}
         <UnscannedList data={data} onOpen={(w) => onNavigateToResource(toResource(w))} />
-        </>
+        </OwnerProvider>
       )}
     </div>
   )
@@ -410,7 +417,7 @@ function PageMenu({ params, cluster, columns: columnChoices, onToggleColumn, fil
   params: VulnerabilitiesParams
   cluster: string
   /** The view's optional columns this answer has data for. */
-  columns: { key: string; label: string; shown: boolean }[]
+  columns: { key: string; label: string; shown: boolean; hint?: string; tooltip?: string }[]
   onToggleColumn: (key: string) => void
   filters: { key: string; label: string; shown: boolean }[]
   onToggleFilter: (key: string) => void
@@ -429,7 +436,7 @@ function PageMenu({ params, cluster, columns: columnChoices, onToggleColumn, fil
     { key: 'findings', label: 'Download all findings as CSV', icon: FileSpreadsheet, pending: pending === 'findings', disabled: !!pending, onClick: () => download.mutate({ params, as: 'findings', cluster }) },
   ]
   const columns: RowActionItem[] = columnChoices.map((c) => ({
-    key: c.key, label: `Show ${c.label}`, checked: c.shown, onClick: () => onToggleColumn(c.key),
+    key: c.key, label: `Show ${c.label}`, hint: c.hint, tooltip: c.tooltip, checked: c.shown, onClick: () => onToggleColumn(c.key),
   }))
   const filterItems: RowActionItem[] = filters.map((f) => ({
     key: `filter.${f.key}`, label: `Show ${f.label} filter`, checked: f.shown, onClick: () => onToggleFilter(f.key),
@@ -453,6 +460,11 @@ function emptyHeadline(view: VulnerabilityView, filtered: boolean, data: Vulnera
   if (s.imagesScanned === 0) return s.imagesUnscanned > 0 ? "Trivy hasn't scanned the images in this scope yet" : 'No workloads run in this scope'
   if (view === 'fix' && totalFindings(s.counts) > 0) return `None of the ${totalFindings(s.counts)} reported findings has a fixed release yet`
   return `No CVEs reported for the ${s.imagesScanned} scanned ${s.imagesScanned === 1 ? 'image' : 'images'} that run`
+}
+
+const NO_OWNER = {
+  hint: 'none found',
+  tooltip: 'Radar found no owner for these workloads. It looks for a Helm release, an Argo CD or Flux app, or a team label on the workload or its namespace.',
 }
 
 const PAGE_DESCRIPTION = "Known CVEs in the images that run now, from Trivy Operator's reports."
@@ -649,6 +661,7 @@ function Disclosure({ summary, children, flush = false }: { summary: React.React
 }
 
 function WorkloadLinks({ workloads, onOpen, inline = false, exposure }: { workloads: VulnerabilityWorkloadRef[]; onOpen: (w: VulnerabilityWorkloadRef) => void; inline?: boolean; exposure?: ExposureLookup }) {
+  const owners = useOwners()
   return (
     <ul className={clsx('flex min-w-0', inline ? 'flex-wrap gap-x-4 gap-y-0.5' : 'flex-col gap-0.5')}>
       {workloads.map((w) => {
@@ -656,10 +669,12 @@ function WorkloadLinks({ workloads, onOpen, inline = false, exposure }: { worklo
         return (
         <li key={`${w.namespace}/${w.kind}/${w.name}/${w.container ?? ''}`} className="flex min-w-0 items-baseline gap-1">
           {exposed && <ExposedMark exposed={exposed} />}
-          <button type="button" onClick={() => onOpen(w)} className="group flex min-w-0 items-baseline gap-1.5 text-left text-xs">
-            <span className="truncate text-accent-text group-hover:underline">{w.name}</span>
-            <span className="shrink-0 text-theme-text-tertiary">{w.kind} · {w.namespace}{w.container ? ` · ${w.container}` : ''}</span>
-          </button>
+          <WithTooltip tip={ownerTip(owners?.find(w))}>
+            <button type="button" onClick={() => onOpen(w)} className="group flex min-w-0 items-baseline gap-1.5 text-left text-xs">
+              <span className="truncate text-accent-text group-hover:underline">{w.name}</span>
+              <span className="shrink-0 text-theme-text-tertiary">{w.kind} · {w.namespace}{w.container ? ` · ${w.container}` : ''}</span>
+            </button>
+          </WithTooltip>
         </li>
         )
       })}
@@ -935,8 +950,10 @@ function CVETable({ cves, columns, onOpen }: { cves: VulnerabilityCVE[]; columns
   )
 }
 
-function WorkloadTable({ workloads, exposure, severities, query, namespaces, onOpen, onShow }: {
+function WorkloadTable({ workloads, columns, exposure, severities, query, namespaces, onOpen, onShow }: {
   workloads: VulnerabilityWorkload[]
+  /** Its optional columns that are on. */
+  columns: Record<string, boolean>
   /** Absent from an older Radar: the route column is left out, not shown empty. */
   exposure: VulnerabilitiesResponse['exposure']
   severities: VulnerabilitySeverity[]
@@ -946,23 +963,24 @@ function WorkloadTable({ workloads, exposure, severities, query, namespaces, onO
   onOpen: (w: VulnerabilityWorkloadRef) => void
   onShow: (w: VulnerabilityWorkloadRef, by: VulnerabilityView) => void
 }) {
-  const cols = exposure ? WORKLOAD_ROUTE_COLS : WORKLOAD_COLS
+  const grid = workloadGrid(!!exposure, columns)
   return (
     <div className="shrink-0 overflow-x-auto overflow-y-hidden rounded-lg border border-theme-border bg-theme-surface">
-      <div className={exposure ? 'min-w-[920px]' : 'min-w-[760px]'}>
-        <div className={clsx(HEAD, cols)}>
-          <span>Workload</span><span>Findings across its images</span>{exposure && <span>{EXPOSURE.column}</span>}<span>Containers</span>
+      <div style={{ minWidth: (exposure ? 920 : 760) + (columns.owner ? 176 : 0) }}>
+        <div className={HEAD} style={grid}>
+          <span>Workload</span>{columns.owner && <OptionalHead column={optionalColumn('workload', 'owner')} />}<span>Findings across its images</span>{exposure && <span>{EXPOSURE.column}</span>}<span>Containers</span>
         </div>
         {workloads.map((w) => (
           <Disclosure
             key={`${w.namespace}/${w.kind}/${w.name}`}
             flush
             summary={
-              <div className={clsx('grid flex-1 items-start gap-4 text-sm', cols)}>
+              <div className="grid flex-1 items-start gap-4 text-sm" style={grid}>
                 <span className="flex min-w-0 flex-col">
                   <span className="truncate text-theme-text-primary">{w.name}</span>
                   <span className="text-xs text-theme-text-tertiary">{w.kind} · {w.namespace}</span>
                 </span>
+                {columns.owner && <OwnerCell workload={w} />}
                 <WorkloadFindings workload={w} />
                 {exposure && <WorkloadRoute workload={w} gaps={exposure.gaps} />}
                 <ul className="flex min-w-0 flex-col gap-1">
@@ -977,7 +995,7 @@ function WorkloadTable({ workloads, exposure, severities, query, namespaces, onO
               </div>
             }
           >
-            {(open) => <WorkloadUpgrades workload={w} routeColumn={!!exposure} active={open} severities={severities} query={query} namespaces={namespaces} onOpen={onOpen} onShow={onShow} />}
+            {(open) => <WorkloadUpgrades workload={w} grid={grid} ownerColumn={!!columns.owner} routeColumn={!!exposure} active={open} severities={severities} query={query} namespaces={namespaces} onOpen={onOpen} onShow={onShow} />}
           </Disclosure>
         ))}
       </div>
@@ -1044,8 +1062,11 @@ const MAX_WORKLOAD_UPGRADES = 8
 
 // What a workload's owner changes: the By fix rows narrowed to this
 // workload, read when the row opens.
-function WorkloadUpgrades({ workload: w, routeColumn, active, severities, query, namespaces, onOpen, onShow }: {
+function WorkloadUpgrades({ workload: w, grid, ownerColumn, routeColumn, active, severities, query, namespaces, onOpen, onShow }: {
   workload: VulnerabilityWorkload
+  /** The table's columns; sub-rows keep a cell for the owner column too. */
+  grid: React.CSSProperties
+  ownerColumn: boolean
   /** The table shows the route column; sub-rows keep a cell for it so detail lines up. */
   routeColumn: boolean
   /** False once the row closes: its subtree stays mounted, its polling stops. */
@@ -1058,8 +1079,9 @@ function WorkloadUpgrades({ workload: w, routeColumn, active, severities, query,
   onShow: (w: VulnerabilityWorkloadRef, by: VulnerabilityView) => void
 }) {
   const ref = { kind: w.kind, group: w.group, namespace: w.namespace, name: w.name }
-  const cols = routeColumn ? WORKLOAD_ROUTE_COLS : WORKLOAD_COLS
+  const ownerLine = ownerTip(useOwners()?.find(ref))
   const routeCell = routeColumn && <span />
+  const ownerCell = ownerColumn && <span />
   // The row's own scope: the newest report for an image wins across every
   // namespace read, so a narrower read could pick an older one.
   const { data, isLoading, error } = useVulnerabilities({ view: 'fix', namespaces, severities, query, workload: ref }, active)
@@ -1095,12 +1117,13 @@ function WorkloadUpgrades({ workload: w, routeColumn, active, severities, query,
   )
   return (
     <>
-      <div className={clsx(SUB, cols)}>
+      <div className={SUB} style={grid}>
         <span className="col-span-full">{lead}</span>
       </div>
       {fixes.length > 0 && (
-        <div className={clsx(SUB, cols, 'text-theme-text-tertiary')}>
+        <div className={clsx(SUB, 'text-theme-text-tertiary')} style={grid}>
           <span />
+          {ownerCell}
           <span className="grid min-w-0 grid-cols-[1.75rem_2.25rem_minmax(0,1fr)] gap-2">
             <span className="text-right">C</span><span className="text-right">H</span><span>Upgrade</span>
           </span>
@@ -1109,11 +1132,12 @@ function WorkloadUpgrades({ workload: w, routeColumn, active, severities, query,
         </div>
       )}
       {fixes.slice(0, MAX_WORKLOAD_UPGRADES).map((f) => (
-        <div key={`${f.packageType ?? ''}/${f.package}/${f.to ?? (f.fixedVersions ?? []).join('|')}`} className={clsx(SUB, cols)}>
+        <div key={`${f.packageType ?? ''}/${f.package}/${f.to ?? (f.fixedVersions ?? []).join('|')}`} className={SUB} style={grid}>
           <span className="flex min-w-0 items-baseline gap-2">
             <span className="truncate font-mono text-theme-text-primary">{f.package}</span>
             {f.packageType && <span className="truncate text-theme-text-tertiary">{ecosystemLabel(f.packageType)}</span>}
           </span>
+          {ownerCell}
           {/* Critical and High cleared, in fixed columns so rows line up. */}
           <span className="grid min-w-0 grid-cols-[1.75rem_2.25rem_minmax(0,1fr)] items-baseline gap-2">
             <ClearedCount count={f.counts.critical} severity="critical" />
@@ -1128,6 +1152,7 @@ function WorkloadUpgrades({ workload: w, routeColumn, active, severities, query,
           </span>
         </div>
       ))}
+      {ownerLine && <div className={clsx(SUB, 'flex text-theme-text-secondary')}>{ownerLine}</div>}
       <div className={clsx(SUB, 'flex')}>{actions}</div>
     </>
   )
