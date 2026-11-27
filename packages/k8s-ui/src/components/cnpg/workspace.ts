@@ -205,6 +205,8 @@ export interface CNPGFleetRow {
   /** False when Poolers are not readable in this cluster's namespace, so an empty list means unknown. */
   poolersKnown: boolean
   problems: CNPGProblem[]
+  /** Checks with a finding on this Cluster, including any `problems` folds into another problem. */
+  checks: Set<string>
   /** Any issue at warning or worse. Posture findings alone do not need attention. */
   attention: boolean
   categories: Set<CNPGProblemCategory>
@@ -223,6 +225,25 @@ export interface CNPGFleet {
   categoryCounts: Record<CNPGProblemCategory, number>
   /** Kinds whose coverage is not complete, so counts built on them are lower bounds. */
   incompleteKinds: CNPGWorkspaceKey[]
+  /** Clusters with each posture Check's finding, as Checks reports them. */
+  posture: CNPGFleetPosture
+}
+
+export type CNPGPostureFilter = 'none' | 'nowal' | 'single' | 'intree'
+export const CNPG_POSTURE_FILTERS: readonly CNPGPostureFilter[] = ['none', 'nowal', 'single', 'intree']
+
+/** The Check whose findings each posture filter counts and keeps. */
+export const CNPG_POSTURE_CHECKS: Record<CNPGPostureFilter, string> = {
+  none: 'cnpgNoBackupDestination',
+  nowal: 'cnpgNoWALArchiving',
+  single: 'cnpgSingleInstance',
+  intree: 'cnpgInTreeBackupDeprecated',
+}
+
+export type CNPGFleetPosture = Record<CNPGPostureFilter, number>
+
+export function cnpgMatchesPostureFilter(row: Pick<CNPGFleetRow, 'checks'>, filter: CNPGPostureFilter): boolean {
+  return row.checks.has(CNPG_POSTURE_CHECKS[filter])
 }
 
 const PROTECTION_ISSUE_REASONS = new Set([
@@ -1054,6 +1075,12 @@ export function buildCNPGFleet(resp: CNPGWorkspaceResponse): CNPGFleet {
   const children = childIndex(resp)
   const jobs = jobPodIndex(resp)
   const poolers = resp.objects.poolers ?? []
+  const checks = new Map<string, Set<string>>()
+  for (const f of resp.audit ?? []) {
+    if (f.kind !== 'Cluster') continue
+    const k = key(f.namespace ?? '', f.name)
+    checks.set(k, (checks.get(k) ?? new Set()).add(f.checkId))
+  }
 
   const rows: CNPGFleetRow[] = clusters.map((cluster) => {
     const ns = cluster.metadata?.namespace ?? ''
@@ -1136,6 +1163,7 @@ export function buildCNPGFleet(resp: CNPGWorkspaceResponse): CNPGFleet {
         .map((p) => p.metadata?.name),
       poolersKnown: coverageReadable(coverageOf(resp, 'poolers'), ns),
       problems,
+      checks: checks.get(key(ns, name)) ?? new Set(),
       attention: problems.some((p) => p.severity !== 'posture'),
       categories,
       managedBy: cnpgManagedBy(resp, cluster),
@@ -1181,11 +1209,14 @@ function finishFleet(rows: CNPGFleetRow[], incompleteKinds: CNPGWorkspaceKey[]):
   rows.sort(compareCNPGFleetUrgency)
   const categoryCounts = { availability: 0, protection: 0, declarations: 0, pooling: 0 } as Record<CNPGProblemCategory, number>
   for (const r of rows) for (const c of r.categories) categoryCounts[c]++
+  const posture: CNPGFleetPosture = { none: 0, nowal: 0, single: 0, intree: 0 }
+  for (const r of rows) for (const f of CNPG_POSTURE_FILTERS) if (cnpgMatchesPostureFilter(r, f)) posture[f]++
   return {
     rows,
     attentionCount: rows.filter((r) => r.attention).length,
     categoryCounts,
     incompleteKinds,
+    posture,
   }
 }
 

@@ -64,6 +64,8 @@ export const RADAR_FEATURES = {
   workflowStop: { label: 'Argo Workflow stop actions', flag: 'workflowStop', flagShippedWithEndpoint: true },
   workflowTemplateSubmit: { label: 'Argo WorkflowTemplate submissions', flag: 'workflowTemplateSubmit', flagShippedWithEndpoint: true },
   cnpgProtectionSetup: { label: 'CloudNativePG backup setup', flag: 'cnpgProtectionSetup', flagShippedWithEndpoint: true },
+  // Radars from v1.21.0 report these Checks in the workspace without advertising the flag.
+  cnpgPostureChecks: { label: 'CloudNativePG backup and availability counts', minimumVersion: 'v1.21.0', flag: 'cnpgPostureChecks' },
   veleroWorkspace: { label: 'Velero views', flag: 'veleroWorkspace', flagShippedWithEndpoint: true },
   veleroBackupNow: { label: 'Back up now', flag: 'veleroBackupNow', flagShippedWithEndpoint: true },
   veleroSchedulePause: { label: 'Pause and resume Velero schedules', flag: 'veleroSchedulePause', flagShippedWithEndpoint: true },

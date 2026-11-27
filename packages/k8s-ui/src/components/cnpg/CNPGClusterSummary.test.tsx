@@ -38,6 +38,7 @@ function row(over: Partial<CNPGFleetRow> = {}): CNPGFleetRow {
     declarations: { summary: { text: 'None', tone: 'neutral' }, total: 0, failed: 0, pending: 0 },
     poolers: [],
     poolersKnown: true,
+    checks: new Set(),
     problems: [],
     attention: false,
     categories: new Set(),
