@@ -91,17 +91,19 @@ metadata:
 		_, _ = w.Write(secrets)
 	}))
 	t.Cleanup(storage.Close)
-	helm.ResetClient()
-	if err := helm.InitializeWithRESTConfig(&rest.Config{Host: storage.URL}); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(helm.ResetClient)
+	helm.ResetTestClient()
+	previousConfig := k8s.SetTestConfig(&rest.Config{Host: storage.URL})
+	t.Cleanup(func() { k8s.SetTestConfig(previousConfig) })
+	helm.Initialize()
+	t.Cleanup(helm.ResetTestClient)
 
 	devA := &pkgauth.UserPermissions{AllowedNamespaces: []string{"team-a"}}
 	admin := &pkgauth.UserPermissions{}
 	admin.SetCanI("list", "", "secrets", "", true)
 	getPermCache().Set("dev-a", nil, devA)
 	getPermCache().Set("admin", nil, admin)
+	k8s.PermissionCacheFor(k8s.CaptureConnection(t.Context()), getPermCache()).Set("dev-a", nil, devA)
+	k8s.PermissionCacheFor(k8s.CaptureConnection(t.Context()), getPermCache()).Set("admin", nil, admin)
 	t.Cleanup(getPermCache().Invalidate)
 
 	call := func(t *testing.T, user string, run func(context.Context) (string, error)) string {

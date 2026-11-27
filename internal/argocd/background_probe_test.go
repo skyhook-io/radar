@@ -25,9 +25,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/client-go/kubernetes"
+
 	"k8s.io/client-go/kubernetes/fake"
-	"k8s.io/client-go/rest"
+
 	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/skyhook-io/radar/internal/config"
@@ -262,7 +262,7 @@ func TestPrewarm_FailureDoesNotThrottleTheFirstRead(t *testing.T) {
 	fwd := m.dropConnectionLocked()
 	m.mu.Unlock()
 	if fwd != nil {
-		fwd.stop()
+		fwd.Stop()
 	}
 	_, _ = m.ApplicationHealthCached(context.Background(), billing) // starts a connect that fails
 	waitForBackgroundProbe(t, m)
@@ -410,7 +410,7 @@ func TestSlowRecheck_LeavesNoFailureBehind(t *testing.T) {
 	fwd := m.dropConnectionLocked() // what a port-forward exit does
 	m.mu.Unlock()
 	if fwd != nil {
-		fwd.stop()
+		fwd.Stop()
 	}
 	a.slow.Store(false)
 	if _, err := m.ManagedResourcesCached(context.Background(), q); !errors.Is(err, ErrConnecting) {
@@ -429,7 +429,7 @@ func TestSlowRecheckThroughAPortForwardKeepsTheConnection(t *testing.T) {
 	m.SetConfig(srv.URL, "argo-secret", false, true)
 	mustConnect(t, m)
 	stopped := make(chan struct{})
-	fwd := &activeForward{localPort: 1, stopCh: make(chan struct{}), cancel: func() { close(stopped) }}
+	fwd := &testForward{localPort: 1, cancel: func() { close(stopped) }}
 	m.mu.Lock()
 	m.forward = fwd
 	// The forward belongs to a discovered connection: no URL configured,
@@ -497,22 +497,22 @@ func TestSlowRecheckThroughAPortForward_ReplacesOnlyAVerifiedForward(t *testing.
 				Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Name: "http", Port: 80}}},
 			}
 			k8sc := fake.NewSimpleClientset(svc)
-			m.clusterClients = func() (kubernetes.Interface, *rest.Config) { return k8sc, nil }
+			m.clusterClients = func() probeCluster { return probeCluster{k8sClient: k8sc} }
 			var stoppedMu sync.Mutex
 			stopped := map[int]bool{}
 			targets := []int{port(oldSrv), port(freshSrv)}
-			m.portForward = func(context.Context, probeSnapshot, string, string, int) (*activeForward, error) {
+			m.portForward = func(context.Context, probeSnapshot, string, string, int) (activeForward, error) {
 				if len(targets) == 0 {
 					return nil, errors.New("no more forwards")
 				}
 				p := targets[0]
 				targets = targets[1:]
-				fwd := &activeForward{localPort: p, stopCh: make(chan struct{}), cancel: func() {
+				fwd := &testForward{localPort: p, cancel: func() {
 					stoppedMu.Lock()
 					stopped[p] = true
 					stoppedMu.Unlock()
 				}}
-				fwd.exited.Store(tc.newExits && p == port(freshSrv))
+				fwd.exited = tc.newExits && p == port(freshSrv)
 				return fwd, nil
 			}
 			m.SetConfig("", "argo-secret", false, true)
@@ -520,7 +520,7 @@ func TestSlowRecheckThroughAPortForward_ReplacesOnlyAVerifiedForward(t *testing.
 			m.mu.Lock()
 			oldClient, oldForward := m.client, m.forward
 			m.mu.Unlock()
-			if oldForward == nil || oldForward.localPort != port(oldSrv) {
+			if oldForward == nil || oldForward.Info().LocalPort != port(oldSrv) {
 				t.Fatalf("connected through %+v, want a forward to the first server", oldForward)
 			}
 
@@ -540,7 +540,7 @@ func TestSlowRecheckThroughAPortForward_ReplacesOnlyAVerifiedForward(t *testing.
 				if err != nil {
 					t.Fatalf("probe = %v, want the new forward to connect", err)
 				}
-				if forward == nil || forward.localPort != port(freshSrv) || client == oldClient {
+				if forward == nil || forward.Info().LocalPort != port(freshSrv) || client == oldClient {
 					t.Fatal("the verified new forward must replace the dead one")
 				}
 				if !stopped[port(oldSrv)] {
@@ -1082,7 +1082,7 @@ func TestDiscover_NothingToConnectToIsNotRetried(t *testing.T) {
 	})
 	for name, client := range map[string]*fake.Clientset{"no Service": fake.NewSimpleClientset(), "list forbidden": forbidden} {
 		m := newTestManager(config.Config{})
-		_, _, err := m.discover(context.Background(), probeSnapshot{k8sClient: client})
+		_, _, err := m.discover(context.Background(), probeSnapshot{probeCluster: probeCluster{k8sClient: client}})
 		if !errors.Is(err, ErrUnreachable) {
 			t.Errorf("%s: discover = %v, want ErrUnreachable", name, err)
 		}
@@ -1137,7 +1137,7 @@ func TestRead_NotCachedAfterItsConnectionWasDropped(t *testing.T) {
 	fwd := m.dropConnectionLocked() // what a re-check that found it gone does
 	m.mu.Unlock()
 	if fwd != nil {
-		fwd.stop()
+		fwd.Stop()
 	}
 	a.slow.Store(false)
 	if err := <-done; err != nil {

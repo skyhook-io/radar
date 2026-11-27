@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Collapse, ConfirmDialog, Disclosure, Input } from '@skyhook-io/k8s-ui'
-import { Check, ExternalLink } from 'lucide-react'
+import { ExternalLink } from 'lucide-react'
 import {
   getOpenObserveState,
   removeOpenObserveConnection,
@@ -13,8 +13,9 @@ import {
   type OpenObserveState,
 } from '../../api/openobserveSetup'
 import { missingFamiliesNote } from './openobserveStatus'
+import { FormSaveActions } from './FormSaveActions'
 
-const SERVICE_ACCOUNT_DOCS = 'https://openobserve.ai/docs/user-guide/identity-and-access-management/service-accounts/'
+const SERVICE_ACCOUNT_DOCS = 'https://openobserve.ai/docs/user-guide/account-administration/identity-and-access-management/service-accounts/'
 const inputClass = 'block w-full min-w-0 px-3 py-2 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500'
 
 interface Draft {
@@ -28,7 +29,7 @@ interface Draft {
 
 const draftFrom = (connection: OpenObserveConnection | null): Draft => ({
   baseUrl: connection?.baseUrl ?? '',
-  org: connection?.org ?? 'default',
+  org: connection?.org ?? '',
   user: connection?.user ?? '',
   token: '',
   caCertFile: connection?.caCertFile ?? '',
@@ -61,7 +62,6 @@ export function OpenObserveSetup({
   status,
   onStateChange,
   onChanged,
-  onUsePrometheus,
   onDirtyChange,
   onBusyChange,
 }: {
@@ -70,14 +70,12 @@ export function OpenObserveSetup({
   status?: ReactNode
   onStateChange: (state: OpenObserveState) => void
   onChanged: () => void
-  onUsePrometheus: () => Promise<void>
   onDirtyChange?: (dirty: boolean) => void
   onBusyChange?: (busy: boolean) => void
 }) {
   const id = useId()
   const { connection, cluster } = state
   const match = cluster.match
-  const [editing, setEditing] = useState(false)
   const baseline = useMemo(() => draftFrom(connection), [connection])
   const [draft, setDraft] = useState<Draft>(baseline)
   const [busy, setBusy] = useState(false)
@@ -89,17 +87,26 @@ export function OpenObserveSetup({
     return () => { mounted.current = false }
   }, [])
 
-  const showForm = !locked && (!connection || editing)
   // A token from an environment variable is kept only for the same address,
   // organization and user; the server never sends a saved secret elsewhere.
   const envToken = !!connection && connection.tokenSource === 'env' && sameTarget(draft, baseline)
-  const dirty = showForm && !sameDraft(draft, baseline)
+  const dirty = !locked && !sameDraft(draft, baseline)
   useEffect(() => onDirtyChange?.(dirty), [dirty, onDirtyChange])
   useEffect(() => onBusyChange?.(busy), [busy, onBusyChange])
   useEffect(() => () => {
     onDirtyChange?.(false)
     onBusyChange?.(false)
   }, [onDirtyChange, onBusyChange])
+
+  // Switching this cluster back to Prometheus happens outside this form.
+  useEffect(() => {
+    if (!match) setResult((current) => current?.kind === 'saved' ? null : current)
+  }, [match])
+
+  // Switching this cluster back to Prometheus happens outside this form.
+  useEffect(() => {
+    if (!match) setResult((current) => current?.kind === 'saved' ? null : current)
+  }, [match])
 
   const update = (changes: Partial<Draft>) => {
     setDraft((value) => ({ ...value, ...changes }))
@@ -132,7 +139,6 @@ export function OpenObserveSetup({
     if (!mounted.current) return
     if (response.outcome === 'saved') {
       setResult({ kind: 'saved', notes: response.notes })
-      setEditing(false)
       onChanged()
       let next: OpenObserveState
       try {
@@ -153,7 +159,7 @@ export function OpenObserveSetup({
 
   const testAndSave = () => {
     if (result?.kind === 'confirm') void submit({ ...result.body, confirm: result.suggestion })
-    else void submit(showForm ? formBody() : { useSaved: true })
+    else void submit(dirty || !connection ? formBody() : { useSaved: true })
   }
 
   const removeAll = () => {
@@ -162,22 +168,15 @@ export function OpenObserveSetup({
       setResult(null)
       const next = await removeOpenObserveConnection()
       if (!mounted.current) return
-      setEditing(false)
       setDraft(draftFrom(next.connection))
       onStateChange(next)
       onChanged()
     })
   }
 
-  const startEditing = () => {
+  const discard = () => {
     setDraft(baseline)
     setResult(null)
-    setEditing(true)
-  }
-  const cancelEditing = () => {
-    setDraft(baseline)
-    setResult(null)
-    setEditing(false)
   }
 
   const shared = connection && connection.clusters.length > 1
@@ -209,10 +208,8 @@ export function OpenObserveSetup({
     result.reloadFailed && "Saved, but Radar couldn't reload this page. Reopen Settings to see the match.",
   ].filter((note): note is string => !!note) : []
 
-  const outcome = result && result.kind !== 'saved' ? (
-    result.kind === 'error' ? (
-      <p role="alert" className="text-xs text-semantic-error">{result.message}</p>
-    ) : result.kind === 'confirm' ? (
+  const outcome = result && result.kind !== 'saved' && result.kind !== 'error' ? (
+    result.kind === 'confirm' ? (
       <p role="status" className="text-xs text-warning-text">
         {result.reason ?? `OpenObserve has metrics for ${pair(result.suggestion)}, matched only by name.`}
       </p>
@@ -229,115 +226,89 @@ export function OpenObserveSetup({
     )
   ) : null
 
-  const saveButton = (
-    <button type="button" onClick={testAndSave} disabled={busy} className="btn-brand min-w-28 px-3 py-2 text-xs">
-      {busy ? 'Testing…' : result?.kind === 'confirm' ? `Confirm '${result.suggestion.value}' and save` : 'Test and save'}
-    </button>
-  )
-
   return (
     <fieldset disabled={busy} aria-label="OpenObserve connection settings" className="min-w-0 space-y-4">
       {statusRow}
       {cluster.error && <p className="text-xs text-warning-text">{cluster.error}</p>}
-      {showForm ? (
-        <div className="space-y-4">
-          {shared}
-          <div className="space-y-1">
-            <label htmlFor={`${id}-url`} className="block text-sm font-medium text-theme-text-primary">Address</label>
-            <Input id={`${id}-url`} value={draft.baseUrl} onChange={(e) => update({ baseUrl: e.target.value })} placeholder="https://openobserve.example.com" spellCheck={false} className={inputClass} />
-          </div>
-          <div className="space-y-1">
-            <label htmlFor={`${id}-org`} className="block text-sm font-medium text-theme-text-primary">Organization</label>
-            <Input id={`${id}-org`} value={draft.org} onChange={(e) => update({ org: e.target.value })} spellCheck={false} className={inputClass} />
-          </div>
-          <div className="space-y-1">
-            <label htmlFor={`${id}-user`} className="block text-sm font-medium text-theme-text-primary">User or service account email</label>
-            <Input id={`${id}-user`} value={draft.user} onChange={(e) => update({ user: e.target.value })} autoComplete="off" spellCheck={false} className={inputClass} />
-            <a href={SERVICE_ACCOUNT_DOCS} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-xs text-accent-text hover:underline">
-              Create a service account in OpenObserve
-              <ExternalLink aria-hidden="true" className="h-3 w-3" />
-            </a>
-          </div>
-          <div className="space-y-1">
-            <label htmlFor={`${id}-token`} className="block text-sm font-medium text-theme-text-primary">Token</label>
-            {envToken ? (
-              <p id={`${id}-token`} className="text-sm text-theme-text-secondary">Token from ${connection.tokenEnv}</p>
-            ) : (
-              <Input
-                id={`${id}-token`}
-                type="password"
-                autoComplete="new-password"
-                spellCheck={false}
-                value={draft.token}
-                onChange={(e) => update({ token: e.target.value })}
-                placeholder={connection?.tokenSource === 'saved' && sameTarget(draft, baseline) ? 'Saved — leave empty to keep' : undefined}
-                className={inputClass}
-              />
-            )}
-            {connection && connection.tokenSource !== 'none' && !sameTarget(draft, baseline) && (
-              <p className="text-xs text-theme-text-secondary">A new address, organization or user needs its own token.</p>
-            )}
-            <p className="text-xs text-theme-text-tertiary">Saved in ~/.radar/config.json, readable only by you.</p>
-          </div>
-          <Disclosure
-            summary="Advanced"
-            summaryClassName="text-sm font-medium text-theme-text-secondary"
-            defaultOpen={!!(baseline.caCertFile || baseline.clusterLabel)}
-          >
-            <div className="space-y-4 pt-3">
-              <div className="space-y-1">
-                <label htmlFor={`${id}-ca`} className="block text-sm font-medium text-theme-text-primary">CA certificate file</label>
-                <Input id={`${id}-ca`} value={draft.caCertFile} onChange={(e) => update({ caCertFile: e.target.value })} placeholder="/path/to/ca.pem" spellCheck={false} className={inputClass} />
-              </div>
-              <div className="space-y-1">
-                <label htmlFor={`${id}-label`} className="block text-sm font-medium text-theme-text-primary">Cluster label</label>
-                <p className="text-xs text-theme-text-tertiary">Only when OpenObserve names clusters with a label Radar doesn’t know.</p>
-                <Input id={`${id}-label`} value={draft.clusterLabel} onChange={(e) => update({ clusterLabel: e.target.value })} spellCheck={false} className={inputClass} />
-              </div>
+      {match && <p className="text-sm text-theme-text-primary">{matchSummary(match)}</p>}
+      {shared}
+      <div className="space-y-4">
+        <div className="space-y-1">
+          <label htmlFor={`${id}-url`} className="block text-sm font-medium text-theme-text-primary">Address</label>
+          <Input id={`${id}-url`} value={draft.baseUrl} onChange={(e) => update({ baseUrl: e.target.value })} placeholder="https://openobserve.example.com" spellCheck={false} className={inputClass} />
+        </div>
+        <div className="space-y-1">
+          <label htmlFor={`${id}-org`} className="block text-sm font-medium text-theme-text-primary">Organization</label>
+          <Input id={`${id}-org`} value={draft.org} onChange={(e) => update({ org: e.target.value })} placeholder="2Zp8kQ1vXcR7mN4tLwYb9HsA3eD" spellCheck={false} className={inputClass} />
+          <p className="text-xs text-theme-text-tertiary">The organization ID from OpenObserve. Leave empty for default.</p>
+        </div>
+        <div className="space-y-1">
+          <label htmlFor={`${id}-user`} className="block text-sm font-medium text-theme-text-primary">User or service account email</label>
+          <Input id={`${id}-user`} value={draft.user} onChange={(e) => update({ user: e.target.value })} autoComplete="off" spellCheck={false} className={inputClass} />
+          <a href={SERVICE_ACCOUNT_DOCS} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-xs text-accent-text hover:underline">
+            Create a service account in OpenObserve
+            <ExternalLink aria-hidden="true" className="h-3 w-3" />
+          </a>
+        </div>
+        <div className="space-y-1">
+          <label htmlFor={`${id}-token`} className="block text-sm font-medium text-theme-text-primary">Token</label>
+          {envToken ? (
+            <p id={`${id}-token`} className="text-sm text-theme-text-secondary">Token from ${connection.tokenEnv}</p>
+          ) : (
+            <Input
+              id={`${id}-token`}
+              type="password"
+              autoComplete="new-password"
+              spellCheck={false}
+              value={draft.token}
+              onChange={(e) => update({ token: e.target.value })}
+              placeholder={connection?.tokenSource === 'saved' && sameTarget(draft, baseline) ? 'Saved — leave empty to keep' : undefined}
+              className={inputClass}
+            />
+          )}
+          {connection && connection.tokenSource !== 'none' && !sameTarget(draft, baseline) && (
+            <p className="text-xs text-theme-text-secondary">A new address, organization or user needs its own token.</p>
+          )}
+          <p className="text-xs text-theme-text-tertiary">Saved in ~/.radar/config.json, readable only by you.</p>
+        </div>
+        <Disclosure
+          summary="Advanced"
+          summaryClassName="text-sm font-medium text-theme-text-secondary"
+          defaultOpen={!!(baseline.caCertFile || baseline.clusterLabel)}
+        >
+          <div className="space-y-4 pt-3">
+            <div className="space-y-1">
+              <label htmlFor={`${id}-ca`} className="block text-sm font-medium text-theme-text-primary">CA certificate file</label>
+              <Input id={`${id}-ca`} value={draft.caCertFile} onChange={(e) => update({ caCertFile: e.target.value })} placeholder="/path/to/ca.pem" spellCheck={false} className={inputClass} />
             </div>
-          </Disclosure>
-        </div>
-      ) : match && connection ? (
-        <div className="card-inner-lg space-y-2">
-          <p className="text-sm text-theme-text-primary">{matchSummary(match)}</p>
-          <p className="break-words text-xs text-theme-text-secondary">{connectionLine(connection)}</p>
-          {shared}
-        </div>
-      ) : connection ? (
-        <p className="break-words text-sm text-theme-text-secondary">
-          Use the saved OpenObserve connection ({connection.baseUrl}, user {connection.user})
-        </p>
-      ) : null}
-      <div className="space-y-2 border-t border-theme-border pt-4">
-        <div className="flex min-h-8 flex-wrap items-center gap-3">
-          {(showForm || !match) && saveButton}
-          {connection && !editing && (
-            <button type="button" onClick={startEditing} className="text-xs font-medium text-accent-text hover:underline">Edit connection</button>
-          )}
-          {editing && (
-            <button type="button" onClick={cancelEditing} className="text-xs text-theme-text-secondary hover:underline">Cancel</button>
-          )}
-          {match && !editing && (
-            <button type="button" onClick={() => void run(async () => { setResult(null); await onUsePrometheus() })} className="text-xs font-medium text-accent-text hover:underline">
-              Use Prometheus for this cluster
-            </button>
-          )}
-          {result?.kind === 'saved' && (
-            <span role="status" className="flex items-center gap-1.5 text-xs text-theme-text-secondary">
-              <Check aria-hidden="true" className="h-3.5 w-3.5 text-[var(--color-success-dark)] dark:text-[var(--color-success-light)]" />
-              Saved
-            </span>
-          )}
-        </div>
+            <div className="space-y-1">
+              <label htmlFor={`${id}-label`} className="block text-sm font-medium text-theme-text-primary">Cluster label</label>
+              <p className="text-xs text-theme-text-tertiary">Only when OpenObserve names clusters with a label Radar doesn’t know.</p>
+              <Input id={`${id}-label`} value={draft.clusterLabel} onChange={(e) => update({ clusterLabel: e.target.value })} spellCheck={false} className={inputClass} />
+            </div>
+          </div>
+        </Disclosure>
+      </div>
+      <div>
+        <FormSaveActions
+          dirty={dirty}
+          busy={busy}
+          canSave={dirty || result?.kind === 'confirm' || (!!connection && !match)}
+          saveLabel={result?.kind === 'confirm' ? `Confirm '${result.suggestion.value}' and save` : !dirty && connection && !match ? 'Use for this cluster' : 'Save changes'}
+          onSave={testAndSave}
+          onDiscard={discard}
+          feedback={result?.kind === 'saved' ? { tone: 'success', message: 'Saved' } : undefined}
+          error={result?.kind === 'error' ? result.message : undefined}
+        />
         <Collapse open={notes.length > 0}>
-          <ul className="space-y-0.5 text-xs text-theme-text-secondary">
+          <ul className="space-y-0.5 pt-2 text-xs text-theme-text-secondary">
             {notes.map((note) => <li key={note}>{note}</li>)}
           </ul>
         </Collapse>
-        <Collapse open={!!outcome}>{outcome}</Collapse>
-        {connection && !editing && (
-          <button type="button" onClick={() => setConfirmingRemove(true)} className="self-start text-xs font-medium text-semantic-error hover:underline">
-            Remove saved OpenObserve connection
+        <Collapse open={!!outcome}><div className="pt-2">{outcome}</div></Collapse>
+        {connection && (
+          <button type="button" onClick={() => setConfirmingRemove(true)} className="mt-3 text-xs text-accent-text hover:underline">
+            Remove OpenObserve connection
           </button>
         )}
       </div>
@@ -346,11 +317,10 @@ export function OpenObserveSetup({
         onClose={() => setConfirmingRemove(false)}
         onConfirm={removeAll}
         title="Remove the saved OpenObserve connection?"
-        message={contexts.length
-          ? `These clusters go back to their own Prometheus: ${contexts.join(', ')}.`
-          : 'No cluster reads from it yet.'}
-        confirmLabel="Remove"
-        variant="warning"
+        message={`${contexts.length
+          ? `These clusters go back to their Prometheus settings: ${contexts.join(', ')}.`
+          : 'No cluster reads from it yet.'} Nothing is deleted in OpenObserve or Kubernetes.`}
+        confirmLabel="Remove connection"
         showWarning={false}
       />
     </fieldset>

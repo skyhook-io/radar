@@ -3197,20 +3197,21 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 	}
 
 	// Helm releases — sort failed-first before slicing
-	helmClient := helm.GetClient()
+	helmCtx := k8s.CaptureConnection(ctx)
+	helmClient := helm.GetClient(helmCtx)
 	if helmClient == nil {
 		d.HelmReleases.Unavailable = true
 		d.HelmReleases.UnavailableReason = "Helm client not initialized."
 	} else {
-		user := userFromContext(ctx)
+		user := userFromContext(helmCtx)
 		// The scope comes first, as in list_helm_releases: its namespace check
 		// caches the answer the resolver then reads.
-		scope := mcpHelmObjectScope(ctx, namespace)
-		namespaces, checked, unread := resolveHelmStorageScope(ctx, namespace)
+		scope := mcpHelmObjectScope(helmCtx, namespace)
+		namespaces, checked, unread := resolveHelmStorageScope(helmCtx, namespace)
 		if namespaces != nil && len(namespaces) == 0 {
 			// No namespace access: leave the zero-value Helm summary.
 		} else {
-			releases, read, denied, err := helmClient.ListReleasesRecordingAccess(ctx, namespaces, user, scope)
+			releases, read, denied, err := helmClient.ListReleasesRecordingAccess(helmCtx, namespaces, user, scope)
 			if !checked && ((err == nil && len(read) == 0 && len(denied) > 0) || helm.ReleaseReadDeniedForCaller(err)) {
 				// A permission check went unanswered, so the refusal may be of a
 				// cluster-wide fallback the caller can't make even though some
@@ -3519,7 +3520,7 @@ func handleIssuesTool(ctx context.Context, _ *mcp.CallToolRequest, input issuesI
 	composeFilters.Limit = issues.NoLimit
 	composeFilters.Filter = nil
 	out, stats := issues.ComposeWithStats(provider, composeFilters)
-	helmIssues, helmUnchecked, helmIncomplete := nativeHelmIssuesForContext(ctx, allowedNamespaces, filters)
+	helmIssues, helmUnchecked, helmIncomplete := nativeHelmIssuesForContext(ctx, input.Namespace, filters)
 	out, stats = issues.MergeExternalIssues(out, stats, filters, helmIssues)
 	// Shared base response shape (issues.ListResponse), then MCP-specific
 	// enrichments below.
@@ -3586,16 +3587,21 @@ func handleIssuesTool(ctx context.Context, _ *mcp.CallToolRequest, input issuesI
 	return toJSONResult(resp)
 }
 
-func nativeHelmIssuesForContext(ctx context.Context, namespaces []string, filters issues.Filters) (found []issues.Issue, unchecked issuesapi.UncheckedSource, incomplete bool) {
+func nativeHelmIssuesForContext(ctx context.Context, namespace string, filters issues.Filters) (found []issues.Issue, unchecked issuesapi.UncheckedSource, incomplete bool) {
 	if !issues.KindFilterIncludes(filters.Kinds, "HelmRelease", "helmreleases") {
 		return nil, unchecked, false
 	}
-	helmClient := helm.GetClient()
+	ctx = k8s.CaptureConnection(ctx)
+	helmClient := helm.GetClient(ctx)
 	if helmClient == nil {
 		return nil, unchecked, false
 	}
 	user := userFromContext(ctx)
-	helmNamespaces := namespaces
+	var requested []string
+	if namespace != "" {
+		requested = []string{namespace}
+	}
+	helmNamespaces := filterNamespacesForUser(ctx, requested)
 	checked := true
 	var unread []string
 	if helmNamespaces == nil {

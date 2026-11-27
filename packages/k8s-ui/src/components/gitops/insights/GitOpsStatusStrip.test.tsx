@@ -56,3 +56,81 @@ describe('GitOps status timing', () => {
     expect(html).not.toContain('23d ago')
   })
 })
+
+describe('Flux revision chain', () => {
+  beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(new Date('2026-11-10T10:05:00Z')) })
+  afterEach(() => vi.useRealTimers())
+
+  it('says when the source is ahead of the last successful apply', () => {
+    const html = render({ sourceRevision: 'main@sha1:bbbbbbb1234567890', sourceFetchedAt: '2026-11-10T10:04:00Z', appliedRevision: 'main@sha1:aaaaaaa1234567890', pending: true, objects: 3 })
+    expect(html).toContain('Pending: source is ahead of the last successful apply')
+    expect(html).toContain('bbbbbbb')
+    expect(html).toContain('aaaaaaa')
+    expect(html).toContain('3 objects')
+    expect(html).toContain('commit metadata')
+    expect(html).not.toContain('Revision:')
+  })
+
+  it('reads a suspended pending source as expected, not a warning', () => {
+    const html = render({ autoSyncMode: 'Suspended', sourceRevision: 'main@sha1:bbbbbbb1234567890', appliedRevision: 'main@sha1:aaaaaaa1234567890', pending: true })
+    expect(html).toContain('Source is ahead (suspended)')
+    expect(html).not.toContain('Pending: source is ahead')
+    expect(html).not.toContain('amber')
+  })
+
+  it('shortens sha256 digests', () => {
+    const html = render({ kind: 'HelmRelease', sourceRevision: 'latest@sha256:53884aebf2e5aa', appliedRevision: 'sha256:53884aebf2e5aa', pending: false })
+    expect(html).toContain('53884ae')
+    expect(html).not.toContain('53884aebf')
+  })
+
+  it('never claims up to date when the source is unknown', () => {
+    const html = render({ appliedRevision: 'main@sha1:aaaaaaa1234567890' })
+    expect(html).toContain('aaaaaaa')
+    expect(html).not.toContain('Pending')
+    expect(html).not.toMatch(/up to date/i)
+    expect(html).not.toContain('Source')
+  })
+
+  it('shows the fetched source before the first apply', () => {
+    const html = render({ lastRevision: undefined, sourceRevision: 'main@sha1:bbbbbbb1234567890', objects: 2 })
+    expect(html).toContain('bbbbbbb')
+    expect(html).toContain('2 objects')
+    expect(html).not.toContain('Applied')
+    expect(html).not.toContain('Revision:')
+  })
+
+  it('keeps the revision line when Radar cannot read what a HelmRelease deployed', () => {
+    // A deployed release without an OCI digest (ExternalArtifact chart, older release) leaves appliedRevision empty.
+    const html = render({ kind: 'HelmRelease', lastRevision: '5.5.0', sourceRevision: 'latest@sha256:53884aebf2e5aa' })
+    expect(html).toContain('Revision:')
+    expect(html).toContain('5.5.0')
+    expect(html).not.toContain('Pending')
+  })
+
+  it('names the deployed chart beside a HelmRelease digest', () => {
+    const html = render({ kind: 'HelmRelease', lastRevision: '5.5.0', sourceRevision: 'latest@sha256:53884aebf2e5aa', appliedRevision: 'latest@sha256:53884aebf2e5aa', pending: false })
+    expect(html).toContain('5.5.0 (53884ae)')
+  })
+
+  it('keeps an OCI tag in a non-Flux revision', () => {
+    const html = renderToString(<GitOpsStatusStrip insight={{ summary: { tool: 'argocd', kind: 'Application', namespace: 'argocd', name: 'app', lastRevision: '1.0.0@sha256:53884aebf2e5aa' } }} />).replace(/<!-- -->/g, '')
+    expect(html).toContain('1.0.0@sha256:53884aebf2e5aa')
+  })
+
+  it('renders an older Radar summary as before', () => {
+    const html = render()
+    expect(html).toContain('Revision:')
+    expect(html).not.toContain('Applied')
+  })
+
+  it('estimates the next Kustomization run', () => {
+    const base = { appliedRevision: 'main@sha1:aaaaaaa1234567890', interval: '10m', lastApplied: '2026-11-10T10:00:00Z' }
+    expect(render(base)).toContain('next run in ~5m')
+    expect(render({ ...base, autoSyncMode: 'Suspended' })).not.toContain('next run')
+    expect(render({ ...base, lastApplied: '2026-11-10T09:00:00Z' })).not.toContain('next run')
+    expect(render({ ...base, kind: 'HelmRelease' })).not.toContain('next run')
+    expect(render({ ...base, interval: undefined })).not.toContain('next run')
+    expect(render({ ...base, lastApplyAttempt: '2026-11-10T10:04:00Z' })).not.toContain('next run')
+  })
+})

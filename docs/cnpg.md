@@ -187,6 +187,9 @@ Certificate expiry is also an Issues-engine finding. A certificate you renew war
 
 ## Actions
 
+For Radar Cloud, see the [standard Owner grants](../deploy/helm/radar/README.md#cloud-owner-permissions)
+for administering existing CloudNativePG clusters.
+
 Capabilities (`GET .../capabilities` on Clusters, ScheduledBackups and Poolers) return the facts a confirmation is bound to and each action's verdict: allowed, or a reason naming the missing grant or the blocking state. Each action has its own state guard. There is deliberately no shared "no ready instance" refusal: lifting a fence, rehydrating and restarting are the way out of exactly that state. Actions are POSTs to `.../actions/{action}`, made with the caller's impersonated client.
 
 | Action | Write | Grant |

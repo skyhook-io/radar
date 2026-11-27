@@ -29,15 +29,17 @@ func ResolveNoAuthListNamespaces(ctx context.Context) []string {
 // Issues loaded). A namespace granted Secrets after the probe stays skipped
 // until the probe runs again.
 func ResolveNoAuthStorageScope(ctx context.Context) (namespaces, skipped []string) {
+	ctx = k8s.CaptureConnection(ctx)
+	conn := k8s.ConnectionFrom(ctx)
 	accessible, _ := k8s.GetAccessibleNamespaces(ctx)
 	if len(accessible) == 0 {
 		return nil, nil
 	}
-	allowed, apiErr := k8score.CanI(ctx, k8s.GetClient(), "", "", "secrets", "list")
+	allowed, apiErr := k8score.CanI(ctx, conn.Client(), "", "", "secrets", "list")
 	if !apiErr && allowed {
 		return nil, nil
 	}
-	if read, skipped, ok := probedSecretNamespaces(k8s.GetCachedPermissionResult(), accessible); ok {
+	if read, skipped, ok := probedSecretNamespaces(conn.CachedPermissionResult(), accessible); ok {
 		return read, skipped
 	}
 	return accessible, nil

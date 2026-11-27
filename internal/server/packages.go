@@ -212,7 +212,8 @@ func ListPackages(ctx context.Context, p ListPackagesParams) (PackagesResponse, 
 		}, nil
 	}
 
-	cache := k8s.GetResourceCache()
+	ctx = k8s.CaptureConnection(ctx)
+	cache := k8s.ConnectionFrom(ctx).ResourceCache()
 	if cache == nil {
 		return PackagesResponse{}, errResourceCacheUnavailable
 	}
@@ -342,6 +343,7 @@ func (s *Server) handleListPackages(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
 	}
+	r = r.WithContext(k8s.CaptureConnection(r.Context()))
 	namespaces := s.parseNamespacesForUser(r)
 	visible, checkFailed := s.getUserNamespacesWithStatus(r, nil)
 	user, groups := userCredsForPackages(r)
@@ -479,7 +481,8 @@ func collectHelmReleases(ctx context.Context, namespaces []string, user *auth.Us
 	if namespaces != nil && len(namespaces) == 0 {
 		return nil, nil
 	}
-	hClient := helm.GetClient()
+	ctx = k8s.CaptureConnection(ctx)
+	hClient := helm.GetClient(ctx)
 	if hClient == nil {
 		return nil, []SourceError{{
 			Source: packages.SourceHelm,

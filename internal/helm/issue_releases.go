@@ -58,10 +58,11 @@ var secretsResource = schema.GroupVersionResource{Version: "v1", Resource: "secr
 // Unlike ListReleasesAcrossNamespaces, a namespace whose read fails does not
 // discard the others: their releases come back with a *PartialReadError.
 func (c *Client) ListIssueReleasesAcrossNamespaces(ctx context.Context, namespaces []string, user *pkgauth.User) ([]HelmRelease, error) {
+	c, ctx = c.capture(ctx)
 	if namespaces != nil && len(namespaces) == 0 {
 		return []HelmRelease{}, nil
 	}
-	contextName := k8s.GetContextName()
+	contextName := c.conn.ContextName()
 	client, labelsClient, err := c.issueStorageClients(user)
 	if err != nil {
 		return nil, err
@@ -255,15 +256,9 @@ func listIssueReleasesWithClients(ctx context.Context, client kubernetes.Interfa
 
 // issueStorageClients builds the label and Secret clients from one config,
 // so a context switch between the two lists can't send them to different
-// clusters. Like storageClient, it uses c's own rest.Config when it has one,
-// else Radar's current cluster.
+// clusters.
 func (c *Client) issueStorageClients(user *pkgauth.User) (kubernetes.Interface, metadata.Interface, error) {
-	c.mu.RLock()
-	restConfig := c.restConfig
-	c.mu.RUnlock()
-	if restConfig == nil {
-		restConfig = k8s.GetConfig()
-	}
+	restConfig := c.config()
 	if restConfig == nil {
 		return nil, nil, fmt.Errorf("kubernetes config not initialized for release storage lookup")
 	}

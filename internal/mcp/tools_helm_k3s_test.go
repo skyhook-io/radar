@@ -98,6 +98,9 @@ func TestManageHelmRefusesK3sManagedRelease(t *testing.T) {
 		k8s.SetTestConfig(oldConfig)
 		k8s.SetConnectionStatus(oldStatus)
 	}()
+	helm.ResetTestClient()
+	helm.Initialize()
+	t.Cleanup(helm.ResetTestClient)
 
 	ctx := auth.ContextWithUser(t.Context(), &auth.User{Username: "helm-mcp-k3s"})
 	for _, in := range []manageHelmInput{

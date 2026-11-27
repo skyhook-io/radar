@@ -76,6 +76,16 @@ describe('TrafficConnectionsTable', () => {
   })
 })
 
+describe('TrafficConnectionsTable ports taken from a Service', () => {
+  it('says the port was taken from the Service, not observed', () => {
+    const props = { isRateBased: false, selection: null, onSelect: vi.fn(), onFocus: vi.fn() }
+    act(() => root.render(<TrafficConnectionsTable {...props} flows={[{ ...tcp, portSource: 'service' }]} />))
+    expect(container.querySelector('[role="row"]')!.textContent).toContain('5432 (from Service)')
+    act(() => root.render(<TrafficConnectionsTable {...props} flows={[{ ...tcp, port: 0, portSource: 'serviceMultiple' }]} />))
+    expect(container.querySelector('[role="row"]')!.textContent).toContain('multiple (from Service)')
+  })
+})
+
 describe('TrafficConnectionsTable protocol data', () => {
   it('renders compact protocol figures without their mixed sum', () => {
     const mixed = { ...tcp, bytesSent: 38668, bytesRecv: 652404, bytesByProtocol: {

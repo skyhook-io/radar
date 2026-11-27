@@ -140,6 +140,7 @@ func goldenAdmin(t *testing.T) context.Context {
 		}
 	}
 	getPermCache().Set("golden-admin", nil, perms)
+	k8s.PermissionCacheFor(k8s.CaptureConnection(context.Background()), getPermCache()).Set("golden-admin", nil, perms)
 	return pkgauth.ContextWithUser(context.Background(), &pkgauth.User{Username: "golden-admin"})
 }
 
@@ -167,6 +168,7 @@ func goldenRestricted(t *testing.T) context.Context {
 		}
 	}
 	getPermCache().Set("golden-restricted", nil, perms)
+	k8s.PermissionCacheFor(k8s.CaptureConnection(context.Background()), getPermCache()).Set("golden-restricted", nil, perms)
 	return pkgauth.ContextWithUser(context.Background(), &pkgauth.User{Username: "golden-restricted"})
 }
 
@@ -473,9 +475,9 @@ func initGoldenHelm(t *testing.T) {
 	storage.Config.SetKeepAlivesEnabled(false)
 	storage.Start()
 	t.Cleanup(storage.Close)
-	helm.ResetClient()
-	if err := helm.InitializeWithRESTConfig(&rest.Config{Host: storage.URL}); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(helm.ResetClient)
+	helm.ResetTestClient()
+	previousConfig := k8s.SetTestConfig(&rest.Config{Host: storage.URL})
+	t.Cleanup(func() { k8s.SetTestConfig(previousConfig) })
+	helm.Initialize()
+	t.Cleanup(helm.ResetTestClient)
 }
