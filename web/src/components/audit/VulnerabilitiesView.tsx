@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { WithTooltip } from '../ui/Tooltip'
 import { useSearchParams } from 'react-router-dom'
@@ -175,6 +175,13 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
   const tableParams: VulnerabilitiesParams = { view, namespaces, severities, fixableOnly, exposed: exposedOnly, osEndOfLife: eolOnly, kev: kevOnly, query, workload }
   const { data, isLoading, isFetching, isPlaceholderData, error, dataUpdatedAt, refetch } = useVulnerabilities(tableParams, !reportsAbsent)
   const hasReports = !reportsAbsent && (hasVulnerabilityReports(resources) || !!data)
+  // A shared link's Known exploited filter on a Radar without the catalog
+  // (off, unreachable, still loading) is refused with 503 kev_unavailable:
+  // drop the filter so the page shows its rows and the chip says why.
+  const kevRefused = error instanceof ApiError && error.data?.error_code === 'kev_unavailable'
+  useEffect(() => {
+    if (kevRefused) setParams((p) => { const next = new URLSearchParams(p); next.delete('kev'); return next }, { replace: true })
+  }, [kevRefused, setParams])
   const trivySearch = new URLSearchParams({ by: 'cve', q: JAVA4SHELL_CVE })
   for (const key of ['namespace', 'namespaces']) {
     const value = params.get(key)
@@ -418,7 +425,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
           <p className="text-xs text-theme-text-tertiary">{data.coverage.rowsOmitted} more rows not shown. Narrow with a filter or the namespace picker.</p>
         )}
 
-        {!severities.length && !fixableOnly && (view === 'image' || view === 'workload') && (
+        {!severities.length && !fixableOnly && !(kevOnly && data.intel) && (view === 'image' || view === 'workload') && (
           <CleanList data={data} view={view} onOpen={(w) => onNavigateToResource(toResource(w))} />
         )}
         <UnscannedList data={data} onOpen={(w) => onNavigateToResource(toResource(w))} />

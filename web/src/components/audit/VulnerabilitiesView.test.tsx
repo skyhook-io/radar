@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useVulnerabilities, type VulnerabilitiesResponse, type VulnerabilityWorkloadRef } from '../../api/vulnerabilities'
 import { VulnerabilitiesView } from './VulnerabilitiesView'
+import { ApiError } from '../../api/client'
 
 // A Radar with the KEV filter unless a test says otherwise.
 const features = vi.hoisted(() => ({ current: { vulnerabilityFeedRefresh: true } as Record<string, boolean> }))
@@ -229,6 +230,26 @@ describe('VulnerabilitiesView', () => {
     // Nothing on the page reads as a failure, and there is no EPSS to show.
     expect(container.textContent).not.toContain('unavailable')
     expect(container.textContent).not.toContain('EPSS')
+  })
+
+  it('drops a shared Known exploited filter that Radar refuses without the catalog', () => {
+    const unavailable = { kev: { state: 'loading' as const }, epss: { state: 'loading' as const } }
+    vi.mocked(useVulnerabilities).mockImplementation((p) => (p.kev
+      ? { data: undefined, isLoading: false, isFetching: false, isPlaceholderData: false, error: new ApiError('KEV data unavailable', 503, { error_code: 'kev_unavailable' }), dataUpdatedAt: 0, refetch: vi.fn() }
+      : { data: response(p.view, true, unavailable), isLoading: false, isFetching: false, isPlaceholderData: false, error: null, dataUpdatedAt: 0, refetch: vi.fn() }
+    ) as unknown as ReturnType<typeof useVulnerabilities>)
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, enabled: false } } })
+    act(() => root.render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter initialEntries={['/checks/vulnerabilities?by=cve&kev=1']}>
+          <VulnerabilitiesView namespaces={[]} onNavigateToResource={vi.fn()} />
+          <Probe />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    ))
+    expect(urlParams().get('kev')).toBeNull()
+    expect(lastParams().kev).toBe(false)
+    expect(container.textContent).toContain('Loading KEV data')
   })
 
   it('leaves out the KEV chip and EPSS column for a Radar without the feeds', () => {
