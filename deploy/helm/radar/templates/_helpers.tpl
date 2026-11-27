@@ -198,17 +198,23 @@ rolling hub and chart upgrades stay compatible; remove those in v2.
 {{- /*
 The roles and the agent admission list must come from the same chart gates.
 */}}
-{{- define "radar.ownerAccessGrants" -}}
+{{- define "radar.ownerAccessPolicy" -}}
 {{- $grants := dict -}}
+{{- $blocked := dict -}}
 {{- $rbac := .Values.cloud.defaultRbac -}}
-{{- /* Helm can skip schema validation. Strings must never turn a write gate on. */ -}}
-{{- $writeEnabled := ne (include "radar.userTokenMode" .) "true" -}}
-{{- range $gate := list .Values.cloud.enabled .Values.rbac.create $rbac.create $rbac.owner -}}
-{{- $writeEnabled = and $writeEnabled (kindIs "bool" $gate) $gate -}}
-{{- end -}}
-{{- if $writeEnabled -}}
-{{- $policy := .Files.Get "files/integration-write-baseline.yaml" | fromYaml -}}
 {{- $builtInOwner := has $rbac.ownerClusterRole (list "admin" "cluster-admin") -}}
+{{- $mode := "kubernetes" -}}
+{{- /* Helm can skip schema validation. Strings must never turn a write gate on. */ -}}
+{{- $managedRoles := ne (include "radar.userTokenMode" .) "true" -}}
+{{- range $gate := list .Values.cloud.enabled .Values.rbac.create $rbac.create -}}
+{{- $managedRoles = and $managedRoles (kindIs "bool" $gate) $gate -}}
+{{- end -}}
+{{- if and $managedRoles (kindIs "bool" $rbac.owner) (not $rbac.owner) -}}
+{{- $mode = "owner-disabled" -}}
+{{- end -}}
+{{- if and $managedRoles (kindIs "bool" $rbac.owner) $rbac.owner -}}
+{{- $mode = ternary "standard" "custom-owner" $builtInOwner -}}
+{{- $policy := .Files.Get "files/integration-write-baseline.yaml" | fromYaml -}}
 {{- $switches := $rbac.integrationWrite -}}
 {{- $enabled := dict -}}
 {{- if or (kindIs "invalid" $switches) (kindIs "map" $switches) -}}
@@ -225,17 +231,27 @@ The roles and the agent admission list must come from the same chart gates.
 {{- end -}}
 {{- $collections := .Values.rbac.crdGroups -}}
 {{- $all := and (kindIs "map" $collections) (kindIs "bool" $collections.all) $collections.all -}}
-{{- if kindIs "map" $collections -}}
 {{- range $entry := $policy.entries -}}
+{{- $collect := false -}}
+{{- if kindIs "map" $collections -}}
 {{- $collection := index $collections $entry.collection -}}
-{{- $collect := or $all (and (kindIs "bool" $collection) $collection) -}}
-{{- $veleroScope := and (empty $.Values.rbac.namespaces) $builtInOwner -}}
-{{- if and (index $enabled $entry.capability) $collect (or (ne $entry.collection "velero") $veleroScope) -}}
+{{- $collect = or $all (and (kindIs "bool" $collection) $collection) -}}
+{{- end -}}
+{{- if and (eq $entry.collection "velero") (or (not (empty $.Values.rbac.namespaces)) (not $builtInOwner)) -}}
+{{- $_ := set $blocked $entry.capability "velero-scope" -}}
+{{- else if not $collect -}}
+{{- $_ := set $blocked $entry.capability "collection" -}}
+{{- else if not (index $enabled $entry.capability) -}}
+{{- $_ := set $blocked $entry.capability "helm" -}}
+{{- else -}}
 {{- $rule := dict "apiGroups" (list $entry.group) "resources" $entry.resources "verbs" $entry.verbs -}}
 {{- $_ := set $grants $entry.capability (append (index $grants $entry.capability | default list) $rule) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}
+{{- toJson (dict "grants" $grants "setup" (dict "mode" $mode "blocked" $blocked)) -}}
 {{- end -}}
-{{- toJson $grants -}}
+
+{{- define "radar.ownerAccessGrants" -}}
+{{- toJson ((include "radar.ownerAccessPolicy" . | fromJson).grants) -}}
 {{- end -}}

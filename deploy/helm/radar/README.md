@@ -320,8 +320,11 @@ before upgrading if the added visibility is unwanted.
 
 Helm approves the grants available on each cluster. Organization Owners turn
 those grants on or off in **Settings → Access**. Changes apply on the next
-request without a Helm upgrade. Turning a grant off leaves access from other
-Kubernetes role bindings in place.
+request without a Helm upgrade. Access verifies the permissions of each grant
+in its reported scope. **Check my access** previews the effect for the signed-in
+Owner. Turning a grant off leaves access from other Kubernetes role bindings
+in place. These switches apply only to Owners. Access reports whether Kubernetes
+serves the Velero API separately from whether the install approves Velero grants.
 
 | Grant | Active by default | What it allows |
 |---|---|---|
@@ -334,10 +337,16 @@ Kubernetes role bindings in place.
 **Approve or remove a grant.** Set
 `cloud.defaultRbac.integrationWrite.<grant>.owner` to `true` or `false` and
 apply the chart. For Velero data access and deletion, also turn on the grant
-in **Settings → Access**. If Access says **Requires cluster setup**, check
-that chart-managed Owner RBAC and the matching collection
+in **Settings → Access**. If Access says the cluster does not accept a
+permission, check that chart-managed Owner RBAC and the matching collection
 (`rbac.crdGroups.argo`, `rbac.crdGroups.cloudnativePg` or
 `rbac.crdGroups.velero`) are enabled. `rbac.crdGroups.all=true` also enables them.
+
+If Access can change a grant but cannot verify it on an older Radar version,
+update the agent. If the cluster already approves the grant and Kubernetes
+reports missing permissions, check the installed Radar role bindings.
+You can also give people access directly through Kubernetes role bindings.
+Access switches apply only to the managed grants.
 
 **Check the scope.** Argo CD defaults on for chart-managed Owner roles,
 including custom roles. CloudNativePG defaults on for the built-in `admin` and
