@@ -42,6 +42,12 @@ func PlannedInClusterRoutes(t *Trace) []RouteResult {
 			rules = []ruleRoute{{label: backend.Resource.Name, ports: backendDeclaredPorts(entry, backend.Resource.Name, backend.Resource.Namespace, backend.Config)}}
 		}
 		for _, rr := range rules {
+			// A port the rule names that the Service doesn't have (renamed or
+			// removed) leaves the rule with none: it gets no request rather
+			// than every port, one of which could answer for a broken route.
+			if len(rr.ports) == 0 && backendNamesPort(entry, backend.Resource.Name, backend.Resource.Namespace) {
+				continue
+			}
 			routes := declaredPortRoutes(rr.label, backend.Resource.Name, hopPorts(backend), rr.ports)
 			setTargetNamespace(routes, backend.Resource.Namespace)
 			markBenignScaleZero(routes, backend)
@@ -50,6 +56,22 @@ func PlannedInClusterRoutes(t *Trace) []RouteResult {
 		}
 	}
 	return out
+}
+
+// backendNamesPort is whether a rule of the entry names a port for the
+// backend Service.
+func backendNamesPort(entry Hop, backendName, backendNS string) bool {
+	if entry.Config == nil {
+		return false
+	}
+	for _, r := range entry.Config.Rules {
+		for _, b := range r.Backends {
+			if b.Port != "" && backendRefMatches(b, backendName, entry.Resource.Namespace, backendNS) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // declaredPortRoutes is one not-yet-tested route per declared port of a

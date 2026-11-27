@@ -46,6 +46,12 @@ func TestPlannedInClusterRoutes(t *testing.T) {
 	if r := got[0].InClusterRequest; r == nil || r.Host != "shop.example.com" || r.Path != "/api" {
 		t.Fatalf("ingress request: %+v", r)
 	}
+	// The rule names a port the Service no longer has: no request, not
+	// every port.
+	ing.Downstream[0].Config.Rules[0].Backends[0].Port = "gone"
+	if got := PlannedInClusterRoutes(ing); len(got) != 0 {
+		t.Fatalf("a stale backend port: %+v", got)
+	}
 	if PlannedInClusterRoutes(nil) != nil || PlannedInClusterRoutes(&Trace{}) != nil {
 		t.Fatal("an empty trace plans nothing")
 	}

@@ -7,6 +7,7 @@ import { WithTooltip } from '../ui/Tooltip'
 import { getApiBase } from '../../api/config'
 import {
   fetchVulnerabilityReachabilityPlan,
+  normalizeReachability,
   reachabilityRequestKeys,
   runVulnerabilityReachability,
   useVulnerabilityReachabilityCapability,
@@ -42,7 +43,7 @@ function loadKept(): Map<string, Entry> {
   try {
     const raw = sessionStorage.getItem(STORAGE_KEY)
     const kept = raw ? JSON.parse(raw) as [string, VulnerabilityReachability][] : []
-    if (Array.isArray(kept)) for (const [key, result] of kept) if (typeof key === 'string' && result) out.set(key, { state: 'done', result })
+    if (Array.isArray(kept)) for (const [key, result] of kept) if (typeof key === 'string' && result) out.set(key, { state: 'done', result: normalizeReachability(result) })
   } catch {
     // Storage blocked or unreadable: results last until the page reloads.
   }

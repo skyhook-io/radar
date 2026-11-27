@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { REACHABILITY, reachabilitySummary, scopeOf } from './reachability'
-import { reachabilityRequestKeys, type VulnerabilityReachability, type VulnerabilityReachabilityOutcome } from '../../api/vulnerabilities'
+import { normalizeReachability, reachabilityRequestKeys, type VulnerabilityReachability, type VulnerabilityReachabilityOutcome } from '../../api/vulnerabilities'
 
 function run(...outcomes: VulnerabilityReachabilityOutcome[]): VulnerabilityReachability {
   return {
@@ -67,5 +67,14 @@ describe('reachabilityRequestKeys', () => {
       ] }],
     }
     expect(reachabilityRequestKeys(plan)).toEqual(['a\x1fweb:80\x1fhttp\x1fhttp\x1f\x1f/'])
+  })
+})
+
+describe('normalizeReachability', () => {
+  it('reads a route with null checks as one with none', () => {
+    const raw = { allowed: true, namespace: 'prio', maxProbes: 5, routes: [{ route: { via: 'Ingress', namespace: 'prio', name: 'old' }, note: 'stale', checks: null }] } as unknown as VulnerabilityReachability
+    const r = normalizeReachability(raw)
+    expect(r.routes![0].checks).toEqual([])
+    expect(reachabilitySummary(r).text).toBe('Reachability not checked')
   })
 })

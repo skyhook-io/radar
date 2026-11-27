@@ -539,8 +539,8 @@ export function useVulnerabilityReachabilityCapability(w: VulnerabilityWorkloadR
 }
 
 /** The requests a run would send, for the consent screen, from the routes' and Services' specs. Creates and sends nothing. */
-export function fetchVulnerabilityReachabilityPlan(w: VulnerabilityWorkloadRef, routes: VulnerabilityRoute[]): Promise<VulnerabilityReachability> {
-  return fetchJSON<VulnerabilityReachability>(reachabilityQuery(w, routes, true))
+export async function fetchVulnerabilityReachabilityPlan(w: VulnerabilityWorkloadRef, routes: VulnerabilityRoute[]): Promise<VulnerabilityReachability> {
+  return normalizeReachability(await fetchJSON<VulnerabilityReachability>(reachabilityQuery(w, routes, true)))
 }
 
 /**
@@ -574,5 +574,10 @@ export async function runVulnerabilityReachability(w: VulnerabilityWorkloadRef, 
     const { body, unknownRoute } = await readErrorResponse(response)
     throw new ApiError(body.error || httpStatusMessage(response.status, response.statusText), response.status, body, { unknownRoute })
   }
-  return response.json()
+  return normalizeReachability(await response.json())
+}
+
+/** A route's checks as a list even where an answer (or a kept one) says null. */
+export function normalizeReachability(r: VulnerabilityReachability): VulnerabilityReachability {
+  return { ...r, routes: (r.routes ?? []).map((route) => ({ ...route, checks: route.checks ?? [] })) }
 }
