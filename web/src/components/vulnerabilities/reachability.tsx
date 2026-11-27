@@ -195,7 +195,11 @@ export function ReachabilityCheck({ workload, routes, routesTotal }: {
   const requests = useMemo(() => {
     if (plan?.state !== 'ready') return []
     const seen = new Set<string>()
-    return consentRequestRows((plan.plan.routes ?? []).flatMap((r) => r.checks), '').filter((row) => {
+    // In the order the server runs them (by request), so the ones past
+    // the Pod limit are the ones the dialog shows past it.
+    const key = (c: VulnerabilityReachabilityCheck) => [c.route, c.target ?? '', c.inClusterRequest?.protocol ?? '', c.inClusterRequest?.scheme ?? '', c.inClusterRequest?.host ?? '', c.inClusterRequest?.path ?? ''].join('\x1f')
+    const checks = (plan.plan.routes ?? []).flatMap((r) => r.checks).sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0))
+    return consentRequestRows(checks, '').filter((row) => {
       const id = `${row.route}\x00${row.request}`
       if (seen.has(id)) return false
       seen.add(id)

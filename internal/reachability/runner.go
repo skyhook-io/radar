@@ -454,6 +454,9 @@ func podCreationRefused(ctx context.Context, client kubernetes.Interface, namesp
 	if job.name == "" {
 		return "", false
 	}
+	// Best effort, so it never holds up the wait for the pod.
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
 	events, err := client.CoreV1().Events(namespace).List(ctx, metav1.ListOptions{
 		FieldSelector: "involvedObject.kind=Job,involvedObject.name=" + job.name + ",reason=FailedCreate",
 	})
