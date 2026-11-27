@@ -21,6 +21,8 @@ describe('reachabilitySummary', () => {
   it('names a failed connection and a run that tested nothing', () => {
     expect(reachabilitySummary(run('no_answer')).text).toBe('No answer inside the cluster')
     expect(reachabilitySummary(run('degraded')).text).toBe('Answers inside the cluster, with a problem')
+    expect(reachabilitySummary(run('answered', 'degraded')).text).toBe('Answers inside the cluster, with a problem')
+    expect(reachabilitySummary(run('degraded', 'no_answer'))).toEqual({ text: '1 of 2 answer inside the cluster', outcome: 'degraded' })
     expect(reachabilitySummary(run('not_run')).text).toBe('Reachability not checked')
     expect(reachabilitySummary({ allowed: true, namespace: 'prio', maxProbes: 5, routes: [] }).outcome).toBe('not_run')
   })

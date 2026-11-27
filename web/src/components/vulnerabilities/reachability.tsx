@@ -4,6 +4,7 @@ import { CheckCircle2, CircleDashed, Loader2, TriangleAlert, XCircle } from 'luc
 import { InClusterConsentDialog, consentRequestRows, inClusterConsentGiven } from '@skyhook-io/k8s-ui'
 import { SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-colors'
 import { WithTooltip } from '../ui/Tooltip'
+import { getApiBase } from '../../api/config'
 import {
   fetchVulnerabilityReachabilityPlan,
   runVulnerabilityReachability,
@@ -19,8 +20,9 @@ import { routeText } from './parts'
 /*
  * The in-cluster reachability check for an exposed workload. It runs only on
  * a click (it creates probe Pods), never fills a column and never reaches a
- * CSV. Its last result stays for the browser tab's session, per cluster and
- * workload, so it can be read again from every view that marks the workload.
+ * CSV. Its last result stays for the browser tab's session (a reload
+ * included), per cluster and workload, so it can be read again from every
+ * view that marks the workload.
  */
 
 type Entry =
@@ -28,11 +30,40 @@ type Entry =
   | { state: 'done'; result: VulnerabilityReachability }
   | { state: 'failed'; error: string }
 
-const results = new Map<string, Entry>()
+const STORAGE_KEY = 'radar-vulnerability-reachability'
+// The most results a tab keeps across a reload, newest kept.
+const MAX_KEPT = 50
+
+// Finished results only: a run in flight ends with the page, and a failure
+// is for the moment it happened.
+function loadKept(): Map<string, Entry> {
+  const out = new Map<string, Entry>()
+  try {
+    const raw = sessionStorage.getItem(STORAGE_KEY)
+    const kept = raw ? JSON.parse(raw) as [string, VulnerabilityReachability][] : []
+    if (Array.isArray(kept)) for (const [key, result] of kept) if (typeof key === 'string' && result) out.set(key, { state: 'done', result })
+  } catch {
+    // Storage blocked or unreadable: results last until the page reloads.
+  }
+  return out
+}
+
+function saveKept() {
+  try {
+    const done = [...results].flatMap(([key, e]) => (e.state === 'done' ? [[key, e.result] as const] : [])).slice(-MAX_KEPT)
+    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(done))
+  } catch {
+    // As above.
+  }
+}
+
+const results = loadKept()
 const listeners = new Set<() => void>()
 
 function setEntry(key: string, entry: Entry) {
+  results.delete(key)
   results.set(key, entry)
+  if (entry.state !== 'running') saveKept()
   for (const l of listeners) l()
 }
 
@@ -50,7 +81,7 @@ export function ReachabilityScope({ scope, children }: { scope: string; children
 
 function useEntry(w: VulnerabilityWorkloadRef): [string, Entry | undefined] {
   const scope = useContext(ScopeContext)
-  const key = `${scope}\x00${w.namespace}/${w.kind}/${w.name}`
+  const key = `${getApiBase()}\x00${scope}\x00${w.group ?? ''}/${w.kind}/${w.namespace}/${w.name}`
   const entry = useSyncExternalStore(subscribe, () => results.get(key))
   return [key, entry]
 }
@@ -82,10 +113,13 @@ export function reachabilitySummary(r: VulnerabilityReachability): { text: strin
   const checks = allChecks(r)
   const ran = checks.filter((c) => c.outcome && c.outcome !== 'not_run')
   const answered = ran.filter((c) => c.outcome === 'answered')
+  // A degraded check got an answer too, with a problem.
+  const responded = ran.filter((c) => c.outcome === 'answered' || c.outcome === 'degraded')
   if (ran.length === 0) return { text: 'Reachability not checked', outcome: 'not_run' }
   if (answered.length === ran.length && ran.length === checks.length) return { text: 'Answers inside the cluster', outcome: 'answered' }
-  if (answered.length === 0) return { text: ran.some((c) => c.outcome === 'no_answer') ? 'No answer inside the cluster' : 'Answers inside the cluster, with a problem', outcome: ran.some((c) => c.outcome === 'no_answer') ? 'no_answer' : 'degraded' }
-  return { text: `${answered.length} of ${checks.length} answer inside the cluster`, outcome: 'degraded' }
+  if (responded.length === 0) return { text: 'No answer inside the cluster', outcome: 'no_answer' }
+  if (responded.length === checks.length) return { text: 'Answers inside the cluster, with a problem', outcome: 'degraded' }
+  return { text: `${responded.length} of ${checks.length} answer inside the cluster`, outcome: 'degraded' }
 }
 
 function timeOf(iso?: string): string {

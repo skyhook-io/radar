@@ -656,7 +656,7 @@ function WorkloadLinks({ workloads, onOpen, inline = false, exposure }: { worklo
   return (
     <ul className={clsx('flex min-w-0', inline ? 'flex-wrap gap-x-4 gap-y-0.5' : 'flex-col gap-0.5')}>
       {workloads.map((w) => (
-        <WorkloadLink key={`${w.namespace}/${w.kind}/${w.name}/${w.container ?? ''}`} workload={w} exposed={routesFor(exposure, w)} onOpen={onOpen} />
+        <WorkloadLink key={`${w.group ?? ''}/${w.namespace}/${w.kind}/${w.name}/${w.container ?? ''}`} workload={w} exposed={routesFor(exposure, w)} onOpen={onOpen} />
       ))}
     </ul>
   )
