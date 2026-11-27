@@ -331,3 +331,42 @@ func TestFailingFeedRetriesAlone(t *testing.T) {
 		t.Fatalf("KEV %+v, EPSS %+v", snap.KEVStatus, snap.EPSSStatus)
 	}
 }
+
+// A catalog whose entries all lack a CVE ID is refused, never a ready
+// catalog that lists nothing.
+func TestParseKEVRejectsEntriesWithoutIDs(t *testing.T) {
+	if _, err := ParseKEV(strings.NewReader(`{"vulnerabilities":[{"cveID":" "},{"cveID":""}]}`)); err == nil {
+		t.Fatal("a catalog without CVE IDs parsed")
+	}
+}
+
+// A download may be redirected, but never from https to plain http.
+func TestRedirectFromHTTPSToHTTPIsRefused(t *testing.T) {
+	req := func(u string) *http.Request {
+		r, err := http.NewRequest(http.MethodGet, u, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	from := []*http.Request{req("https://mirror.example/kev.json")}
+	if err := noDowngrade(req("http://mirror.example/kev.json"), from); err == nil {
+		t.Fatal("https to http was followed")
+	}
+	if err := noDowngrade(req("https://cdn.example/kev.json"), from); err != nil {
+		t.Fatalf("https to https: %v", err)
+	}
+}
+
+// Closing a store nothing has read doesn't leave a later wait hanging.
+func TestWaitLoadedReturnsAfterClose(t *testing.T) {
+	s := NewStore(Config{KEVSource: "off", EPSSSource: "off"})
+	s.Close()
+	done := make(chan struct{})
+	go func() { s.WaitLoaded(context.Background()); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("WaitLoaded hung after Close")
+	}
+}
