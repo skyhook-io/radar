@@ -152,6 +152,7 @@ func TestNodeMatcher(t *testing.T) {
 		{traffic.Endpoint{Name: "world", Kind: traffic.EndpointKindExternal, IP: "10.244.0.1"}, true},
 		{traffic.Endpoint{Namespace: "external", Name: "203.0.113.9", Kind: "external"}, false},
 		{traffic.Endpoint{Namespace: "shop", Name: "10.244.0.7", Kind: traffic.EndpointKindPod}, false},
+		{traffic.Endpoint{Namespace: "external", Name: "api-1-x", Kind: traffic.EndpointKindPod, IP: "10.244.0.9", Workload: "api"}, false},
 	} {
 		if got := isNode(tc.e); got != tc.want {
 			t.Errorf("%+v: isNode %v, want %v", tc.e, got, tc.want)

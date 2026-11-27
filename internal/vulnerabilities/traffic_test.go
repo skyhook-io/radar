@@ -75,6 +75,8 @@ func TestTrafficReceiver(t *testing.T) {
 		{"caretta: names the workload kind", flow(metricsPod("shop", "checkout"), pkgtraffic.Endpoint{Namespace: "shop", Name: "frontend", Kind: "Deployment", Workload: "frontend"}), false, "shop/frontend/Deployment"},
 		{"caretta: to an outside address", flow(metricsPod("shop", "frontend"), pkgtraffic.Endpoint{Namespace: "external", Name: "203.0.113.9", Kind: "external"}), false, ""},
 		{"caretta: to a node", flow(metricsPod("shop", "frontend"), pkgtraffic.Endpoint{Namespace: "node", Name: "n1", Kind: "node"}), false, ""},
+		{"a real namespace named external receives", flow(metricsPod("shop", "checkout"), flowPod("external", "api-1-x", "api", "Deployment")), false, "external/api/Deployment"},
+		{"a real namespace named node calls", flow(flowPod("node", "client-1-x", "client", "Deployment"), metricsPod("shop", "frontend")), false, "shop/frontend/"},
 		{"to a Service, not a workload", flow(metricsPod("shop", "a"), pkgtraffic.Endpoint{Namespace: "shop", Name: "svc", Kind: "Service"}), false, ""},
 	} {
 		ns, name, kind, ok := receiver(tc.f, tc.fromOutside, isNode)

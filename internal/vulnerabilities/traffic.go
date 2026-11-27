@@ -202,12 +202,13 @@ func notWorkload(e pkgtraffic.Endpoint) bool {
 			return true
 		}
 	}
-	return e.Namespace == carettaNode || e.Namespace == carettaExternal
+	// Only an endpoint of no kind: a real namespace may be named either.
+	return e.Kind == "" && (e.Namespace == carettaNode || e.Namespace == carettaExternal)
 }
 
 // nodeLike is whether the source itself identified an endpoint as a node.
 func nodeLike(e pkgtraffic.Endpoint) bool {
-	return e.Kind == pkgtraffic.EndpointKindHost || strings.EqualFold(e.Kind, carettaNode) || e.Namespace == carettaNode
+	return e.Kind == pkgtraffic.EndpointKindHost || strings.EqualFold(e.Kind, carettaNode) || (e.Kind == "" && e.Namespace == carettaNode)
 }
 
 // trafficIndex answers whether the source saw a workload receive.

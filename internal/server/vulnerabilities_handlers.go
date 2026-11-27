@@ -234,7 +234,7 @@ func (s *Server) readVulnerabilities(w http.ResponseWriter, r *http.Request, exp
 		}
 		return vulnerabilities.Response{}, false
 	}
-	if traffic != nil && k8s.GetResourceCache() != connection {
+	if traffic != nil && (k8s.GetResourceCache() != connection || trafficSourceSwitched(traffic)) {
 		s.writeErrorCode(w, http.StatusConflict, string(readreason.ConnectionChanged), vulnerabilities.ErrConnectionChanged.Error())
 		return vulnerabilities.Response{}, false
 	}

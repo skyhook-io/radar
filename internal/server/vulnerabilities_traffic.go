@@ -164,6 +164,18 @@ func (m *vulnTrafficMemo) get(ctx context.Context, mgr *traffic.Manager, active 
 	}
 }
 
+// trafficSourceSwitched is whether Live Traffic's active source changed
+// since ev was read, as a read of the reports can take a while. A busy
+// manager (detecting sources) can't say, and isn't waited on.
+func trafficSourceSwitched(ev *vulnerabilities.TrafficEvidence) bool {
+	mgr := traffic.GetManager()
+	if mgr == nil {
+		return true
+	}
+	name, idle := mgr.ActiveSourceNameIfIdle()
+	return idle && name != ev.Source
+}
+
 // standing is the answer while it is younger than vulnTrafficStale. Callers
 // hold mu.
 func (m *vulnTrafficMemo) standing() *vulnerabilities.TrafficEvidence {
@@ -316,6 +328,10 @@ func nodeMatcher(nodes []*corev1.Node) func(traffic.Endpoint) bool {
 		return false
 	}
 	return func(e traffic.Endpoint) bool {
+		// A Pod or workload is never a node, whatever its namespace is called.
+		if e.Workload != "" || strings.EqualFold(e.Kind, traffic.EndpointKindPod) || strings.EqualFold(e.Kind, traffic.EndpointKindWorkload) {
+			return false
+		}
 		// Caretta files nodes and outside addresses under these namespaces.
 		if e.Namespace != "" && e.Namespace != "node" && e.Namespace != "external" {
 			return false
