@@ -114,7 +114,7 @@ With [authentication](authentication.md) enabled, Radar uses the signed-in user'
 
 The UI asks before the first in-cluster run for a cluster and names the requests it will send (unless that consent was previously remembered). MCP has no dialog: callers must explicitly pass `in_cluster: true`, and the same RBAC preflight applies.
 
-The active Kubernetes identity authorizes Job creation, but network and mesh policy see the probe pod, not that identity. The Job runs in the diagnosed resource's namespace; its pod uses that namespace's default ServiceAccount identity but mounts no ServiceAccount token. Each run creates at most five Jobs; their containers run non-root with a read-only filesystem, all capabilities dropped, a 25-second deadline, no retries, and a 60-second TTL backstop.
+The active Kubernetes identity authorizes Job creation, but network and mesh policy see the probe pod, not that identity. The Job runs in the diagnosed resource's namespace; its pod uses that namespace's default ServiceAccount identity but mounts no ServiceAccount token. Each run creates at most five Jobs; their containers run non-root with a read-only filesystem, all capabilities dropped, a 25-second deadline, no retries, and a 60-second TTL backstop. Radar deletes each Job when its run ends, the request is cancelled, or a create the caller abandoned may have gone through; a failed delete is logged and the TTL removes the Job. When the cluster refuses to create the probe pod, the Job controller's `FailedCreate` event names why: a policy's denial (an admission webhook or ValidatingAdmissionPolicy, Pod Security) ends the run at once with that message, while a refusal a retry may get past (a quota, a webhook that couldn't be called) is reported only if no pod appears before the deadline. Reading the event needs `list events`; without it the timeout explains.
 
 The default Helm chart grants neither proxy-subresource access nor Job creation, so those probe paths stay unavailable unless the relevant identity receives the permissions above. Radar running in-cluster can still dial directly from its own pod. The full `/mcp` endpoint also exposes RBAC-bounded write tools; `/mcp-readonly` excludes `apply_resource`, `patch_resource`, and the `manage_*` tools while retaining `diagnose`. On `/mcp-readonly`, the `in_cluster` argument is not exposed and schema validation rejects it.
 
@@ -173,6 +173,18 @@ A real-traffic `reached` non-2xx (e.g. a 404) reads as healthy **coverage** with
 `verdict` is therefore a **coarse rollup**, not a promise of a verified 2xx. `healthy` means "no failing route was found" - it can include routes that were only *reached* (a 3xx/4xx, or a transport-only TCP/TLS connection) rather than verified, and can reflect a static-config-only assessment (`probe=false`) or partial coverage. Agents (and the MCP `diagnose` tool's `verdict` field) that need certainty must read each route's `outcome` (verified vs reached vs not-tested) and `confidence` (real vs indirect) plus the `headline` / `diagnosis` text before keying an action on `verdict` alone.
 
 The UI shows the verdict at the top of the panel with a one-sentence reason. Treat *unknown* as a pause-and-investigate signal - it means the trace can't honestly answer the question, not that everything is fine.
+
+## From the Vulnerabilities page
+
+An exposed workload (one with a LoadBalancer, NodePort, Ingress or Gateway API route) offers **Check reachability** on the Vulnerabilities page. It runs the same in-cluster probe for the Service ports behind the workload's routes, through `GET|POST /api/vulnerabilities/reachability/{kind}/{namespace}/{name}`:
+
+- Only Services that select the workload's Pods are probed, so an Ingress in front of several workloads probes only this one.
+- The consent dialog's requests come from the route's and Services' specs: nothing is sent before the user confirms, and the run sends exactly those requests (a route changed since is a 409).
+- One check runs per workload at a time, and at most 3 across Radar; past that the run is a 429 that says a check is already running.
+- Every probe Pod runs in the workload's namespace, at most 5 for the whole check, under the same permission check and consent dialog as the in-cluster test. A run carries the cluster the user confirmed, and is refused (409, nothing created) if Radar has switched clusters since.
+- A result says what it proves: the Service answers from inside the cluster. The load balancer, node port, Ingress controller and access from the internet are not tested.
+- It runs only on a click. The last result stays for the browser tab's session, a reload included (in `sessionStorage`); it is never stored on the server, shown as a column or exported.
+- Every run is logged by Radar with the workload and how many Service ports it probes, with or without authentication; with authentication it is also audit-logged.
 
 ## MCP
 

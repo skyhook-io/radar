@@ -221,6 +221,7 @@ export interface FeatureCapabilities {
   podFileUpload?: boolean
   vulnerabilities?: boolean
   vulnerabilitiesExport?: boolean // GET /api/vulnerabilities/export
+  vulnerabilityReachability?: boolean // GET + POST /api/vulnerabilities/reachability/{kind}/{namespace}/{name}
   runtimeAdvisoryChecks?: boolean
   runtimeAdvisoryProgress?: boolean
   sealedSecretsController?: boolean // GET /api/sealedsecrets/controller

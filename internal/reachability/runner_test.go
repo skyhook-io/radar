@@ -9,8 +9,10 @@ import (
 	"github.com/skyhook-io/radar/pkg/probe"
 	authzv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 )
@@ -536,5 +538,97 @@ func TestWithProbeMeshMarksSidecarResults(t *testing.T) {
 	}
 	if got := withProbeMesh(results(), radarPod("ns", corev1.Container{Name: "probe"})); got[0].Mesh != "" {
 		t.Errorf("plain probe pod marked with mesh %q", got[0].Mesh)
+	}
+}
+
+// A pod an admission policy refuses never exists, so the wait would only time
+// out with a guess. The Job controller's FailedCreate event names the policy:
+// it is reported at once, and an unreadable event list falls back to the
+// timeout's own explanation.
+func TestWaitNamesAPodCreationRefusal(t *testing.T) {
+	refusal := &corev1.Event{
+		ObjectMeta:     metav1.ObjectMeta{Name: "radar-probe-abc.1", Namespace: "shop"},
+		InvolvedObject: corev1.ObjectReference{Kind: "Job", Name: "radar-probe-abc", Namespace: "shop"},
+		Reason:         "FailedCreate",
+		Message:        `Error creating: pods "radar-probe-abc-x" is forbidden: ValidatingAdmissionPolicy 'require-team' denied request: Pods must carry a team label`,
+	}
+	other := refusal.DeepCopy()
+	other.Name, other.InvolvedObject.Name, other.Message = "radar-probe-other.1", "radar-probe-other", "Error creating: something else"
+
+	client := fake.NewClientset(other, refusal)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	start := time.Now()
+	_, err := waitAndReadProbeJob(ctx, client, "shop", probeJobRef{name: "radar-probe-abc"}, probeRunLabelKey+"=abc", 0)
+	if err == nil || !strings.Contains(err.Error(), "Pods must carry a team label") || strings.Contains(err.Error(), "something else") || strings.Contains(err.Error(), "Error creating:") {
+		t.Fatalf("err = %v", err)
+	}
+	if time.Since(start) > 3*time.Second {
+		t.Fatalf("waited %s for a refusal already recorded", time.Since(start))
+	}
+
+	denied := fake.NewClientset(refusal)
+	denied.PrependReactor("list", "events", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "events"}, "", nil)
+	})
+	short, cancelShort := context.WithTimeout(context.Background(), 1200*time.Millisecond)
+	defer cancelShort()
+	if _, err := waitAndReadProbeJob(short, denied, "shop", probeJobRef{name: "radar-probe-abc"}, probeRunLabelKey+"=abc", 0); err == nil || !strings.Contains(err.Error(), "never saw the probe pod run") {
+		t.Fatalf("without events: %v", err)
+	}
+}
+
+// A refusal the Job controller's retry may get past (a quota) doesn't end the
+// wait: it names the timeout only if no pod ever appears. An event of an
+// earlier Job with the same name (another UID) is not this Job's.
+func TestWaitKeepsWaitingPastARetryableRefusal(t *testing.T) {
+	quota := &corev1.Event{
+		ObjectMeta:     metav1.ObjectMeta{Name: "radar-probe-abc.2", Namespace: "shop"},
+		InvolvedObject: corev1.ObjectReference{Kind: "Job", Name: "radar-probe-abc", Namespace: "shop", UID: "job-uid"},
+		Reason:         "FailedCreate",
+		Message:        `Error creating: pods "radar-probe-abc-y" is forbidden: exceeded quota: compute, requested: pods=1, used: pods=10, limited: pods=10`,
+	}
+	stale := quota.DeepCopy()
+	stale.Name, stale.InvolvedObject.UID = "radar-probe-abc.1", "earlier-uid"
+	stale.Message = `Error creating: pods "radar-probe-abc-x" is forbidden: violates PodSecurity "restricted:latest": runAsNonRoot != true`
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := waitAndReadProbeJob(ctx, fake.NewClientset(stale, quota), "shop", probeJobRef{name: "radar-probe-abc", uid: "job-uid"}, probeRunLabelKey+"=abc", 0)
+	if time.Since(start) < time.Second {
+		t.Fatalf("a quota refusal ended the wait after %s", time.Since(start))
+	}
+	if err == nil || !strings.Contains(err.Error(), "exceeded quota") || strings.Contains(err.Error(), "PodSecurity") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+// A quota refusal whose quota text runs past the shown length is still a
+// quota refusal: the whole message is classified, only the shown one cut.
+func TestLongQuotaRefusalIsNotFinal(t *testing.T) {
+	long := &corev1.Event{
+		ObjectMeta:     metav1.ObjectMeta{Name: "radar-probe-abc.3", Namespace: "shop"},
+		InvolvedObject: corev1.ObjectReference{Kind: "Job", Name: "radar-probe-abc", Namespace: "shop"},
+		Reason:         "FailedCreate",
+		Message:        `Error creating: pods "radar-probe-abc-z" is forbidden: ` + strings.Repeat("x", 320) + ` exceeded quota: compute`,
+	}
+	msg, final := podCreationRefused(context.Background(), fake.NewClientset(long), "shop", probeJobRef{name: "radar-probe-abc"})
+	if final || msg == "" || len(msg) > 310 {
+		t.Fatalf("final %v, msg %d chars", final, len(msg))
+	}
+}
+
+func TestPolicyDenial(t *testing.T) {
+	for msg, want := range map[string]bool{
+		`pods "p" is forbidden: ValidatingAdmissionPolicy 'x' with binding 'y' denied request: no`:             true,
+		`admission webhook "validate.kyverno.svc-fail" denied the request: policy require-labels`:              true,
+		`pods "p" is forbidden: violates PodSecurity "restricted:latest": seccompProfile`:                      true,
+		`pods "p" is forbidden: exceeded quota: compute, requested: cpu=50m`:                                   false,
+		`Internal error occurred: failed calling webhook "x": context deadline exceeded`:                       false,
+		`pods "p" is forbidden: unable to create new content in namespace shop because it is being terminated`: false,
+	} {
+		if got := policyDenial(msg); got != want {
+			t.Errorf("%q: %v, want %v", msg, got, want)
+		}
 	}
 }

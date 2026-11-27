@@ -12,8 +12,10 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"strings"
 	"time"
@@ -212,18 +214,16 @@ func Run(ctx context.Context, client kubernetes.Interface, opts RunOptions) (res
 	job := buildProbeJob(opts)
 	created, err := client.BatchV1().Jobs(opts.Namespace).Create(runCtx, job, metav1.CreateOptions{})
 	if err != nil {
+		// A Create cut short (the caller went away, the connection dropped)
+		// may still have been stored, and only an answer from the apiserver
+		// says it wasn't. The name is this run's own, so delete it in case.
+		var status apierrors.APIStatus
+		if runCtx.Err() != nil || !errors.As(err, &status) {
+			deleteProbeJob(client, opts.Namespace, job.Name)
+		}
 		return nil, fallbackCommand, fmt.Errorf("couldn't create the probe Job: %w", err)
 	}
-	defer func() {
-		// Background() so cleanup survives request cancellation / the runCtx
-		// deadline, but BOUNDED so a hung apiserver Delete can't block the handler
-		// goroutine indefinitely. TTLSecondsAfterFinished is the backstop, so a
-		// timeout here is harmless and the error stays intentionally ignored.
-		delCtx, delCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer delCancel()
-		policy := metav1.DeletePropagationBackground
-		_ = client.BatchV1().Jobs(opts.Namespace).Delete(delCtx, created.Name, metav1.DeleteOptions{PropagationPolicy: &policy})
-	}()
+	defer deleteProbeJob(client, opts.Namespace, created.Name)
 
 	// Select the pod by the runner's OWN label (present on every cluster version),
 	// not the k8s-managed job-name label that only exists on >= 1.27.
@@ -231,11 +231,26 @@ func Run(ctx context.Context, client kubernetes.Interface, opts RunOptions) (res
 	if id := created.Labels[probeRunLabelKey]; id != "" {
 		selector = probeRunLabelKey + "=" + id
 	}
-	results, err = waitAndReadProbeJob(runCtx, client, opts.Namespace, selector, grantedBudget)
+	results, err = waitAndReadProbeJob(runCtx, client, opts.Namespace, probeJobRef{name: created.Name, uid: string(created.UID)}, selector, grantedBudget)
 	if err != nil {
 		return nil, fallbackCommand, err
 	}
 	return results, fallbackCommand, nil
+}
+
+// deleteProbeJob removes a probe Job and its pod. Background() so cleanup
+// survives request cancellation / the run's deadline, but BOUNDED so a hung
+// apiserver Delete can't block the handler goroutine indefinitely. The Job's
+// deadline and TTLSecondsAfterFinished are the backstop, so a failure is
+// logged and otherwise harmless.
+func deleteProbeJob(client kubernetes.Interface, namespace, name string) {
+	delCtx, delCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer delCancel()
+	policy := metav1.DeletePropagationBackground
+	err := client.BatchV1().Jobs(namespace).Delete(delCtx, name, metav1.DeleteOptions{PropagationPolicy: &policy})
+	if err != nil && !apierrors.IsNotFound(err) {
+		log.Printf("[reachability] Failed to delete probe Job %s/%s, its TTL removes it: %v", namespace, name, err)
+	}
 }
 
 func canI(ctx context.Context, client kubernetes.Interface, namespace string, c capabilityCheck) (bool, error) {
@@ -335,11 +350,17 @@ func buildProbeJob(opts RunOptions) *batchv1.Job {
 // guaranteed label (radar.skyhook.io/probe-run=<id>), not the k8s-managed
 // job-name label that only exists on clusters >= 1.27. grantedBudget > 0 means
 // the run started with less than jobTimeout of request budget - an expiry then
-// names the budget, not the cluster.
-func waitAndReadProbeJob(ctx context.Context, client kubernetes.Interface, namespace, selector string, grantedBudget time.Duration) ([]probe.Result, error) {
+// names the budget, not the cluster. While no pod exists it also looks for
+// the Job controller's FailedCreate event: a policy that denies the pod is
+// named at once rather than after the deadline, and a refusal the controller
+// may still get past on a retry (a quota, a webhook that didn't answer) names
+// the timeout if no pod ever appears.
+func waitAndReadProbeJob(ctx context.Context, client kubernetes.Interface, namespace string, job probeJobRef, selector string, grantedBudget time.Duration) ([]probe.Result, error) {
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 	var lastPod *corev1.Pod
+	var refusal string
+	var refusalChecked time.Time
 	// The most informative snapshot seen, not just the last: a pull-failing pod
 	// oscillates ErrImagePull → ImagePullBackOff → ContainerCreating, and a
 	// timeout that samples only the final state reports the uninformative
@@ -360,6 +381,9 @@ func waitAndReadProbeJob(ctx context.Context, client kubernetes.Interface, names
 			if pullFailedPod != nil {
 				attributed = pullFailedPod
 			}
+			if lastPod == nil && refusal != "" {
+				return nil, podRefusedError(refusal)
+			}
 			return nil, probeTimeoutError(attributed, lastListErr, budget)
 		case <-ticker.C:
 			pods, err := client.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
@@ -376,6 +400,14 @@ func waitAndReadProbeJob(ctx context.Context, client kubernetes.Interface, names
 				continue
 			}
 			if len(pods.Items) == 0 {
+				if time.Since(refusalChecked) >= time.Second {
+					refusalChecked = time.Now()
+					if msg, final := podCreationRefused(ctx, client, namespace, job); final {
+						return nil, podRefusedError(msg)
+					} else if msg != "" {
+						refusal = msg
+					}
+				}
 				continue
 			}
 			pod := pods.Items[0]
@@ -402,6 +434,75 @@ func waitAndReadProbeJob(ctx context.Context, client kubernetes.Interface, names
 			}
 		}
 	}
+}
+
+// probeJobRef names the probe Job whose events podCreationRefused reads.
+type probeJobRef struct{ name, uid string }
+
+func podRefusedError(msg string) error {
+	return fmt.Errorf("in-cluster test couldn't run - the cluster refused to create the probe pod, so the target was NOT tested: %s", msg)
+}
+
+// podCreationRefused returns the Job controller's latest FailedCreate message
+// for the probe Job (an admission policy, Pod Security or a quota refusing
+// the pod), or "" when there is none or events can't be read. final is true
+// for a policy's denial, which the controller's retries won't get past; a
+// quota or a webhook that couldn't be called may clear. Best effort: reading
+// events is not part of the capability check, so a denial just leaves the
+// timeout message to explain.
+func podCreationRefused(ctx context.Context, client kubernetes.Interface, namespace string, job probeJobRef) (msg string, final bool) {
+	if job.name == "" {
+		return "", false
+	}
+	// Best effort, so it never holds up the wait for the pod.
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	events, err := client.CoreV1().Events(namespace).List(ctx, metav1.ListOptions{
+		FieldSelector: "involvedObject.kind=Job,involvedObject.name=" + job.name + ",reason=FailedCreate",
+	})
+	if err != nil {
+		return "", false
+	}
+	var latest *corev1.Event
+	for i := range events.Items {
+		e := &events.Items[i]
+		if e.InvolvedObject.Name != job.name || e.Reason != "FailedCreate" || e.Message == "" {
+			continue
+		}
+		if job.uid != "" && e.InvolvedObject.UID != "" && string(e.InvolvedObject.UID) != job.uid {
+			continue
+		}
+		if latest == nil || eventTime(e).After(eventTime(latest)) {
+			latest = e
+		}
+	}
+	if latest == nil {
+		return "", false
+	}
+	full := strings.TrimPrefix(latest.Message, "Error creating: ")
+	return truncate(full, 300), policyDenial(full)
+}
+
+// policyDenial is whether a pod creation refusal is a policy's verdict on
+// the pod: an admission webhook or ValidatingAdmissionPolicy denying it, or
+// Pod Security. Anything else (a quota, a webhook that couldn't be called, a
+// namespace being deleted) is left for the Job controller's retry.
+func policyDenial(msg string) bool {
+	lower := strings.ToLower(msg)
+	if strings.Contains(lower, "exceeded quota") || strings.Contains(lower, "failed calling webhook") {
+		return false
+	}
+	return strings.Contains(lower, "denied") || strings.Contains(lower, "violates podsecurity")
+}
+
+func eventTime(e *corev1.Event) time.Time {
+	switch {
+	case !e.LastTimestamp.IsZero():
+		return e.LastTimestamp.Time
+	case !e.EventTime.IsZero():
+		return e.EventTime.Time
+	}
+	return e.CreationTimestamp.Time
 }
 
 // withProbeMesh records a sidecar proxy in the probe pod on its results: the
