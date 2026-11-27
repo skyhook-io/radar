@@ -412,27 +412,14 @@ func (m *Manager) SetConfig(url, token string, insecureTLS bool, tokenIsFresh bo
 	m.bumpAndReset()
 }
 
-// SeedFromEnv provisions the manager from an environment-provided token. Like a
-// fresh SetConfig it binds the token to the current source (so the
-// auto-discovery cross-cluster guard accepts it for the cluster it's deployed
-// in), and additionally marks the integration environment-managed: the apply
-// handler refuses UI changes and the token is never written to disk. Runs at
-// startup before the first Get, so the lazy config seed won't override it.
-func (m *Manager) SeedFromEnv(url, token string, insecureTLS bool) {
-	normalizedURL := strings.TrimRight(strings.TrimSpace(url), "/")
-	tokenContext := ""
-	tokenBinding := ""
-	if normalizedURL == "" && token != "" {
-		tokenBinding = m.contextBindingForConfig()
-		if tokenBinding != "" {
-			tokenContext = m.currentContextName()
-		}
-	}
+// SeedFromEnv uses the binding captured at launch, since a replacement manager
+// can belong to a different cluster. Explicit URLs use the origin guard.
+func (m *Manager) SeedFromEnv(url, token string, insecureTLS bool, tokenContext, tokenBinding string) {
 	m.mu.Lock()
 	m.seeded = true
 	m.envManaged = true
 	m.envError = ""
-	m.manualURL = normalizedURL
+	m.manualURL = strings.TrimRight(strings.TrimSpace(url), "/")
 	m.token = token
 	m.insecureTLS = insecureTLS
 	m.tokenContext = tokenContext
@@ -1188,6 +1175,9 @@ func (m *Manager) connectedClient(allowUnconfigured bool) (*argoapi.Client, uint
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	gen := m.generation
+	if m.closed {
+		return nil, gen, portforward.ErrClosed
+	}
 	m.lastDemand = time.Now()
 	m.lastRead = m.lastDemand
 	if m.client != nil {
@@ -1371,6 +1361,9 @@ func (m *Manager) ApplicationHealthCached(ctx context.Context, q argoapi.Applica
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.closed {
+		return nil, portforward.ErrClosed
+	}
 	// A SetConfig/Reset during the fetch bumps the generation: the answer
 	// (or the failure) is for a superseded connection and must neither be
 	// served nor cached under the new one — a changed token against the same

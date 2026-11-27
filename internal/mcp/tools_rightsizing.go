@@ -452,14 +452,14 @@ func rightsizingScanScope(ctx context.Context, input getRightsizingInput, scope 
 		setRightsizingScanGuidance(&out, input)
 		return toJSONResult(out)
 	}
-	if (set.Metrics != nil && set.Metrics.Closed()) || manager.Generation() != generation {
-		return nil, nil, prometheuspkg.ErrRightsizingScanScopeChanged
-	}
 	snapshot, err := manager.Resolve(scanCtx, prometheuspkg.RightsizingScanRequest{
 		Generation: generation, Namespaces: allowed, Scope: scanScope, ID: input.ScanID,
 		Start: input.ScanID == "", Refresh: input.Refresh, Wait: rightsizingScanBudget,
 	})
 	if err != nil {
+		if portforward.IsMemberClosed(scanCtx, err) {
+			return nil, nil, errMetricsConnectionClosed
+		}
 		return nil, nil, err
 	}
 	scan := *snapshot

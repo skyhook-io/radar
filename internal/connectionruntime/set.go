@@ -137,7 +137,7 @@ func build(conn *k8s.Connection, settings Settings, previous *Set, rebuild []con
 		case settings.ArgoError != nil:
 			s.ArgoCD.SeedFromEnvFailed(settings.ArgoError.Error())
 		case settings.ArgoEnv:
-			s.ArgoCD.SeedFromEnv(settings.ArgoCD.URL, settings.ArgoCD.Token, settings.ArgoCD.InsecureTLS)
+			s.ArgoCD.SeedFromEnv(settings.ArgoCD.URL, settings.ArgoCD.Token, settings.ArgoCD.InsecureTLS, settings.ArgoTokenContext, settings.ArgoTokenBinding)
 		default:
 			s.ArgoCD.RestoreConfig(settings.ArgoCD.URL, settings.ArgoCD.Token, settings.ArgoCD.InsecureTLS, settings.ArgoTokenContext, settings.ArgoTokenBinding)
 		}

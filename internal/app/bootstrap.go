@@ -378,6 +378,9 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) App
 			ClusterID: cfg.KubecostClusterID, ClusterIDContext: cfg.KubecostClusterIDContext,
 		})
 		startup.ArgoCD, startup.ArgoEnv, startup.ArgoError = argocd.EnvironmentConfiguration()
+		if startup.ArgoError != nil {
+			log.Printf("[argocd] ERROR: ignoring the environment Argo CD config: %v", startup.ArgoError)
+		}
 		if !startup.ArgoEnv {
 			file := config.Load()
 			startup.ArgoCD = argoapi.Connection{URL: file.ArgoCDURL, Token: file.ArgoCDToken, InsecureTLS: file.ArgoCDInsecureTLS}

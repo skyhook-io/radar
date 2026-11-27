@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"sync/atomic"
 
+	"github.com/skyhook-io/radar/internal/argocd"
 	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/connections"
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -32,7 +33,17 @@ func (s *Settings) SetMetrics(metrics prom.Connection) {
 }
 
 func New(resolver *connections.Resolver, startup Settings) *Runtime {
-	r := &Runtime{Resolver: resolver, launchBinding: k8s.Current().ContextBinding(), scopeConfigured: startup.Scope.SingleCluster || len(startup.Scope.ClusterLabels) != 0}
+	launch := k8s.Current()
+	r := &Runtime{Resolver: resolver, launchBinding: launch.ContextBinding(), scopeConfigured: startup.Scope.SingleCluster || len(startup.Scope.ClusterLabels) != 0}
+	if startup.ArgoEnv && startup.ArgoCD.URL == "" && startup.ArgoCD.Token != "" {
+		startup.ArgoTokenBinding = r.launchBinding
+		if k8s.IsInCluster() {
+			startup.ArgoTokenBinding = argocd.InClusterTokenBinding
+		}
+		if startup.ArgoTokenBinding != "" {
+			startup.ArgoTokenContext = launch.ContextName()
+		}
+	}
 	if r.scopeConfigured {
 		target, _ := k8s.CurrentProfileTarget()
 		r.launchFingerprint = target.Fingerprint

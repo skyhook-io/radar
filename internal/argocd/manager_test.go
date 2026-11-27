@@ -488,7 +488,7 @@ func TestInClusterEnvSeedUsesDeterministicBindingWithoutClusterLookup(t *testing
 		return ""
 	}
 
-	m.SeedFromEnv("", "secret-token", false)
+	m.SeedFromEnv("", "secret-token", false, "in-cluster", InClusterTokenBinding)
 	if m.tokenBinding != InClusterTokenBinding {
 		t.Fatalf("tokenBinding = %q, want %q", m.tokenBinding, InClusterTokenBinding)
 	}
@@ -549,7 +549,7 @@ func TestSeedFromEnvBindsAndMarksManaged(t *testing.T) {
 	m := newTestManager(config.Config{})
 	m.contextName = func() string { return ctx }
 
-	m.SeedFromEnv("", "env-token", false)
+	m.SeedFromEnv("", "env-token", false, ctx, ctx)
 	if !m.envManaged {
 		t.Fatal("SeedFromEnv must mark the manager environment-managed")
 	}
@@ -578,7 +578,7 @@ func TestEnvManagedConfigReflectsEffective(t *testing.T) {
 		t.Fatal("EnvManagedConfig must report ok=false when not env-managed")
 	}
 
-	m.SeedFromEnv("https://argocd.example.com", "env-token", true)
+	m.SeedFromEnv("https://argocd.example.com", "env-token", true, "", "")
 	url, insecure, ok := m.EnvManagedConfig()
 	if !ok || url != "https://argocd.example.com" || !insecure {
 		t.Fatalf("EnvManagedConfig = (%q, %v, %v), want the effective env values", url, insecure, ok)
@@ -745,7 +745,7 @@ func TestSeedFromEnvClearsError(t *testing.T) {
 	m.contextName = func() string { return "in-cluster" }
 
 	m.SeedFromEnvFailed("some reason")
-	m.SeedFromEnv("", "good-token", false)
+	m.SeedFromEnv("", "good-token", false, "in-cluster", "in-cluster")
 	if m.EnvManagedError() != "" || !m.IsEnvManaged() || !m.IsConfigured() {
 		t.Fatal("a successful seed after a failure must clear the error and configure the token")
 	}
@@ -780,6 +780,32 @@ func TestEnvArgoAttempted(t *testing.T) {
 				t.Fatalf("envArgoAttempted(%v) = %v, want %v", c.vars, got, c.want)
 			}
 		})
+	}
+}
+
+func TestClosedArgoManagerReportsMemberClosed(t *testing.T) {
+	m := newTestManager(config.Config{})
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/version", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"Version":"v3.5.2"}`))
+	})
+	mux.HandleFunc("/api/v1/applications/billing", func(w http.ResponseWriter, r *http.Request) {
+		_ = m.Close()
+		_, _ = w.Write([]byte(`{"metadata":{"uid":"u1"},"status":{"resources":[{"kind":"Deployment","name":"web","health":{"status":"Degraded"}}]}}`))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	m.SetConfig(srv.URL, "", false, false)
+	mustConnect(t, m)
+	ctx := t.Context()
+	if _, err := m.ApplicationHealthCached(ctx, argoapi.ApplicationQuery{AppName: "billing"}); !errors.Is(err, portforward.ErrClosed) {
+		t.Fatalf("health read closed during fetch: %v", err)
+	}
+	if _, err := m.ManagedResourcesCached(ctx, argoapi.ManagedResourcesQuery{AppName: "billing"}); !errors.Is(err, portforward.ErrClosed) {
+		t.Fatalf("managed resources after close: %v", err)
+	}
+	if _, err := m.RevisionMetadataCached(ctx, argoapi.RevisionMetadataQuery{AppName: "billing"}); !errors.Is(err, portforward.ErrClosed) {
+		t.Fatalf("revision metadata after close: %v", err)
 	}
 }
 

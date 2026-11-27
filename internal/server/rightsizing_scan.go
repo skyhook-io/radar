@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/skyhook-io/radar/internal/portforward"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/internal/readscope"
 )
@@ -36,14 +37,14 @@ func (s *Server) handleRightsizingScan(w http.ResponseWriter, r *http.Request) {
 	manager := set.RightsizingScans()
 	if manager == nil {
 		_, err := set.MetricsClient()
-		s.writeRightsizingScanError(w, err)
+		s.writeRightsizingScanError(w, ctx, err)
 		return
 	}
 	generation := manager.Generation()
 	if id != "" {
 		original, err := manager.Namespaces(ctx, id, generation)
 		if err != nil {
-			s.writeRightsizingScanError(w, err)
+			s.writeRightsizingScanError(w, ctx, err)
 			return
 		}
 		namespaces = s.getUserNamespaces(r, original)
@@ -59,21 +60,20 @@ func (s *Server) handleRightsizingScan(w http.ResponseWriter, r *http.Request) {
 	if request.Cancel {
 		request.Wait = 5 * time.Second
 	}
-	if (set.Metrics != nil && set.Metrics.Closed()) || manager.Generation() != generation {
-		s.writeRightsizingScanError(w, prometheuspkg.ErrRightsizingScanScopeChanged)
-		return
-	}
 	result, err := manager.Resolve(ctx, request)
 	if err != nil {
-		s.writeRightsizingScanError(w, err)
+		s.writeRightsizingScanError(w, ctx, err)
 		return
 	}
 	s.writeJSON(w, result)
 }
 
-func (s *Server) writeRightsizingScanError(w http.ResponseWriter, err error) {
+func (s *Server) writeRightsizingScanError(w http.ResponseWriter, ctx context.Context, err error) {
 	status := http.StatusServiceUnavailable
 	switch {
+	case portforward.IsMemberClosed(ctx, err):
+		s.writeError(w, status, prometheuspkg.ConnectionClosedMessage)
+		return
 	case errors.Is(err, prometheuspkg.ErrRightsizingScanNotFound):
 		status = http.StatusNotFound
 	case errors.Is(err, prometheuspkg.ErrRightsizingScanScopeChanged):

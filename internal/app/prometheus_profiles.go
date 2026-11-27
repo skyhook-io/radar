@@ -67,6 +67,9 @@ func preparePrometheusConfiguration(cfg AppConfig) (AppConfig, error) {
 		launches[config.IntegrationMetrics] = connections.Bundle{Settings: config.IntegrationSettings{Prometheus: launch}}
 	}
 	argo, argoManaged, err := argocd.EnvironmentConfiguration()
+	if err != nil {
+		log.Printf("[argocd] ERROR: ignoring the environment Argo CD config: %v", err)
+	}
 	if argoManaged {
 		launches[config.IntegrationArgoCD] = connections.Bundle{Settings: config.IntegrationSettings{ArgoCD: &argo}, Err: err}
 	}

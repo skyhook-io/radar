@@ -6,11 +6,13 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/argocd"
 	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/connections"
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -408,6 +410,47 @@ func TestSwitchDoesNotCarryManualMetricsConfigurationToAnotherCluster(t *testing
 	t.Cleanup(k8s.RetireServingConnection)
 	if got, headers := second.Metrics.CurrentConfig(); !first.Metrics.Closed() || got != "" || len(headers) != 0 {
 		t.Fatal("switch failed to retire the first Metrics member or isolate its manual settings")
+	}
+}
+
+func TestArgoEnvDiscoveryTokenStaysBoundToLaunchConnection(t *testing.T) {
+	t.Cleanup(k8s.SnapshotTestConnection())
+	t.Cleanup(k8s.SetTestLocalMode())
+	t.Setenv("RADAR_ARGOCD_TOKEN", "env-token")
+	t.Setenv("RADAR_ARGOCD_TOKEN_FILE", "")
+	t.Setenv("RADAR_ARGOCD_URL", "")
+	t.Setenv("RADAR_ARGOCD_INSECURE_TLS", "")
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"kind":"ServiceList","apiVersion":"v1","items":[]}`)
+	}))
+	t.Cleanup(api.Close)
+	t.Cleanup(k8s.SetTestProfileSource("/test/kubeconfig", "cluster-a", "user"))
+	installTestBuild(t, &rest.Config{Host: api.URL})
+	t.Cleanup(k8s.RetireServingConnection)
+	argo, managed, err := argocd.EnvironmentConfiguration()
+	if err != nil || !managed {
+		t.Fatalf("could not resolve the environment token: %v", err)
+	}
+	runtime := New(nil, Settings{ArgoCD: argo, ArgoEnv: managed})
+	for _, cluster := range []string{"cluster-a", "cluster-b", "cluster-a"} {
+		t.Run(cluster, func(t *testing.T) {
+			t.Cleanup(k8s.SetTestProfileSource("/test/kubeconfig", cluster, "user"))
+			member, _ := runtime.Build(t.Context(), k8s.Current())
+			defer member.Close()
+			manager := member.(*Set).ArgoCD
+			if !manager.IsEnvManaged() || !manager.IsConfigured() {
+				t.Fatal("replacement lost the environment configuration")
+			}
+			err := manager.Probe(t.Context())
+			if cluster == "cluster-b" {
+				if !errors.Is(err, argocd.ErrTokenInvalid) || !strings.Contains(err.Error(), "token not valid for the current cluster context") {
+					t.Fatalf("Probe = %v, want token context mismatch", err)
+				}
+			} else if !errors.Is(err, argocd.ErrUnreachable) || !strings.Contains(err.Error(), "no Service labeled") {
+				t.Fatalf("Probe = %v, want discovery to reach the empty fixture", err)
+			}
+		})
 	}
 }
 

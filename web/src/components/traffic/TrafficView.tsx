@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
-import { useTrafficSources, useTrafficFlows, useTrafficRecords, useTrafficConnect, useSetTrafficSource } from '../../api/traffic'
+import { useTrafficSources, useTrafficFlows, useTrafficRecords, useTrafficConnect, useTrafficConnectionStatus, useSetTrafficSource } from '../../api/traffic'
 import { useClusterInfo, useNamespaceScope } from '../../api/client'
 import { useSearchParams } from 'react-router-dom'
 import type { TrafficWizardState, AggregatedFlow, TrafficFlow } from '../../types'
@@ -472,10 +472,13 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
   const [isConnecting, setIsConnecting] = useState(false)
   const [connectionError, setConnectionError] = useState<string | null>(null)
   const queryClient = useQueryClient()
-  const connectMutation = useTrafficConnect()
+  const { mutate: connectTraffic } = useTrafficConnect()
+  const checkTrafficStatus = wizardState === 'ready' && !isConnecting
+  const trafficStatus = useTrafficConnectionStatus(checkTrafficStatus)
   const setSourceMutation = useSetTrafficSource()
   const hasAutoConnectedRef = useRef(false)
-  const canAutoReconnectRef = useRef(false)
+  const reconnectStateRef = useRef<'idle' | 'armed' | 'awaiting-status'>('idle')
+  const connectAttemptRef = useRef(0)
 
   // Track cluster context to reset state on cluster change
   const { data: clusterInfo } = useClusterInfo()
@@ -486,10 +489,12 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
     const currentCluster = clusterInfo?.context || null
     if (lastClusterRef.current !== null && lastClusterRef.current !== currentCluster) {
       // Cluster changed - reset wizard state and invalidate traffic queries
+      connectAttemptRef.current++
       setWizardState('detecting')
+      setIsConnecting(false)
       setConnectionError(null)
       hasAutoConnectedRef.current = false
-      canAutoReconnectRef.current = false
+      reconnectStateRef.current = 'idle'
       queryClient.invalidateQueries({ queryKey: ['traffic-sources'] })
       queryClient.invalidateQueries({ queryKey: ['traffic-flows'] })
       queryClient.invalidateQueries({ queryKey: ['traffic-connection'] })
@@ -505,7 +510,6 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
 
   const {
     data: flowsData,
-    error: flowsError,
     isFetching: flowsFetching,
     dataUpdatedAt: flowsUpdatedAt,
     refetch: refetchFlowsRaw,
@@ -1219,13 +1223,15 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
   // also picks another available source, and the first failed connect gets
   // one such retry on its own.
   const handleConnect = useCallback((redetect: boolean, automatic = false) => {
-    canAutoReconnectRef.current = false
+    const attemptId = ++connectAttemptRef.current
+    reconnectStateRef.current = 'idle'
     setIsConnecting(true)
     setConnectionError(null)
     queryClient.removeQueries({ queryKey: ['traffic-flows'] })
 
     const attempt = (fresh: boolean) => {
       const fail = (message: string) => {
+        if (attemptId !== connectAttemptRef.current) return
         if (!fresh) {
           attempt(true)
           return
@@ -1235,25 +1241,36 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
       }
       const detected = fresh ? detectSourcesAgain() : Promise.resolve(undefined)
       detected.then(
-        () => connectMutation.mutate({ automatic }, {
-          onSuccess: (data) => {
-            if (!data.connected && data.error) {
-              fail(data.error)
-              return
-            }
-            canAutoReconnectRef.current = data.connected
-            setIsConnecting(false)
-          },
-          onError: (error) => fail(error.message),
-        }),
+        () => {
+          if (attemptId !== connectAttemptRef.current) return
+          connectTraffic({ automatic }, {
+            onSuccess: (data) => {
+              if (attemptId !== connectAttemptRef.current) return
+              if (!data.connected && data.error) {
+                fail(data.error)
+                return
+              }
+              if (data.connected) {
+                reconnectStateRef.current = automatic && redetect ? 'awaiting-status' : 'armed'
+              }
+              setIsConnecting(false)
+            },
+            onError: (error) => fail(error.message),
+          })
+        },
         (error: Error) => {
+          if (attemptId !== connectAttemptRef.current) return
           setIsConnecting(false)
-          if (!isCancelledError(error)) setConnectionError(error.message)
+          if (isCancelledError(error)) {
+            reconnectStateRef.current = 'armed'
+          } else {
+            setConnectionError(error.message)
+          }
         },
       )
     }
     attempt(redetect)
-  }, [connectMutation, queryClient, detectSourcesAgain])
+  }, [connectTraffic, queryClient, detectSourcesAgain])
 
   // The wizard polls without waiting on the answer; a failed detection shows
   // through the sources query's own state.
@@ -1272,12 +1289,18 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
   }, [wizardState, isConnecting, handleConnect])
 
   // A settings save can replace the traffic manager while this view is open.
+  const trafficConnected = checkTrafficStatus && trafficStatus.isSuccess && !trafficStatus.isFetching
+    ? trafficStatus.data.connected
+    : undefined
   useEffect(() => {
-    if (wizardState === 'ready' && !isConnecting && !connectionError && !flowsFetching &&
-        canAutoReconnectRef.current && flowsError?.message === 'no traffic source available') {
+    if (connectionError) return
+    // A successful reconnect only ends the loss once the status confirms it.
+    if (trafficConnected === true && reconnectStateRef.current === 'awaiting-status') {
+      reconnectStateRef.current = 'armed'
+    } else if (trafficConnected === false && reconnectStateRef.current === 'armed') {
       handleConnect(true, true)
     }
-  }, [wizardState, isConnecting, connectionError, flowsFetching, flowsError, handleConnect])
+  }, [trafficConnected, connectionError, handleConnect])
 
   // Show wizard if no traffic source detected
   if (wizardState !== 'ready') {
@@ -1365,24 +1388,32 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
             const activeSource = availableSources.find(s => s.name === activeName) || availableSources[0]
 
             const handleSwitchSource = (name: string) => {
+              const attemptId = ++connectAttemptRef.current
               setIsConnecting(true)
               setConnectionError(null)
               hasAutoConnectedRef.current = true
-              canAutoReconnectRef.current = false
+              reconnectStateRef.current = 'idle'
+              const fail = (error: Error) => {
+                if (attemptId !== connectAttemptRef.current) return
+                setIsConnecting(false)
+                setConnectionError(error.message)
+              }
               setSourceMutation.mutate(name, {
                 onSuccess: () => {
+                  if (attemptId !== connectAttemptRef.current) return
                   queryClient.invalidateQueries({ queryKey: ['traffic-sources'] })
-                  connectMutation.mutate(undefined, {
+                  connectTraffic(undefined, {
                     onSuccess: (data) => {
-                      canAutoReconnectRef.current = data.connected
+                      if (attemptId !== connectAttemptRef.current) return
+                      reconnectStateRef.current = data.connected ? 'armed' : 'idle'
                       setIsConnecting(false)
                       if (!data.connected && data.error) setConnectionError(data.error)
                       queryClient.invalidateQueries({ queryKey: ['traffic-flows'] })
                     },
-                    onError: (error) => { setIsConnecting(false); setConnectionError(error.message) },
+                    onError: fail,
                   })
                 },
-                onError: (error) => { setIsConnecting(false); setConnectionError(error.message) },
+                onError: fail,
               })
             }
 
