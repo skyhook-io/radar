@@ -1186,7 +1186,22 @@ func TestExposedPorts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ports, services := x.exposedPorts(pod); !slices.Equal(ports, []int32{8080}) || !slices.Equal(services, []string{"web"}) {
+	// Its metrics port isn't exposed, so the Service alone (Istio) can't
+	// say a request reached the app.
+	if ports, services := x.exposedPorts(pod); !slices.Equal(ports, []int32{8080}) || len(services) != 0 {
 		t.Fatalf("Ingress to the http port: %v %v", ports, services)
+	}
+	// A stale backend port: still a way in, but no port counts.
+	ing.Spec.DefaultBackend.Service.Port = networkingv1.ServiceBackendPort{Name: "gone"}
+	x, err = indexExposure(context.Background(), routeSources{services: []*corev1.Service{backend}, ingresses: []*networkingv1.Ingress{ing}}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	routes, err := x.routesFor(context.Background(), pod)
+	if err != nil || len(routes) != 1 {
+		t.Fatalf("routes: %v %v", routes, err)
+	}
+	if ports, services := x.exposedPorts(pod); len(ports) != 0 || len(services) != 0 {
+		t.Fatalf("a stale backend port: %v %v", ports, services)
 	}
 }

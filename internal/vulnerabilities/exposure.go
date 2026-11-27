@@ -251,18 +251,14 @@ func indexExposure(ctx context.Context, src routeSources, may func(group, kind, 
 }
 
 // expose records a Service port a route reaches: by number, by name, or
-// every port when the route names neither (or one the Service doesn't have).
+// every port when the route names neither. A port the Service doesn't have
+// (a stale reference) records nothing: the route still counts as a way in,
+// but no traffic counts through it.
 func (s *exposingService) expose(port int32, name string) {
 	for _, p := range s.svc.Spec.Ports {
 		if (port == 0 && name == "") || (port != 0 && p.Port == port) || (name != "" && p.Name == name) {
 			s.ports[p.Port] = true
-			if port != 0 || name != "" {
-				return
-			}
 		}
-	}
-	if port != 0 || name != "" {
-		s.expose(0, "")
 	}
 }
 
@@ -288,9 +284,9 @@ func visitIngressBackends(ing *networkingv1.Ingress, visit func(name string, por
 
 // exposedPorts are the Pod's ports the routes from outside reach: each
 // exposed Service port's target port, a named one resolved on the Pod's own
-// containers, and the names of those Services, for a source that names the
-// Service a request went to rather than a port. Live Traffic counts only
-// connections to these.
+// containers, and the names of those Services whose every port is exposed,
+// for a source that names the Service a request went to rather than a port.
+// Live Traffic counts only connections to these.
 func (x exposureIndex) exposedPorts(pod *corev1.Pod) (out []int32, services []string) {
 	add := func(p int32) {
 		if p > 0 && !slices.Contains(out, p) {
@@ -302,7 +298,12 @@ func (x exposureIndex) exposedPorts(pod *corev1.Pod) (out []int32, services []st
 		if ok, _ := s.selection.Matches(candidate, nil); !ok || len(s.routes) == 0 {
 			continue
 		}
-		services = append(services, s.svc.Name)
+		// A source that names only the Service (Istio) can't say which port
+		// a request reached, so the Service counts only when every one of
+		// its ports is exposed.
+		if !slices.ContainsFunc(s.svc.Spec.Ports, func(p corev1.ServicePort) bool { return !s.ports[p.Port] }) {
+			services = append(services, s.svc.Name)
+		}
 		for _, sp := range s.svc.Spec.Ports {
 			if !s.ports[sp.Port] {
 				continue

@@ -104,9 +104,20 @@ func liveTargets(ctx context.Context, cache *k8s.ResourceCache, namespaces []str
 	add := func(t target) {
 		if i, ok := seen[t.key]; ok {
 			// Another replica of the same container and build: a Service can
-			// select one replica and not another, so its routes count too.
+			// select one replica and not another, so its routes count too,
+			// and the ports they reach.
 			if len(t.routes) == 0 {
 				return
+			}
+			for _, p := range t.exposedPorts {
+				if !slices.Contains(targets[i].exposedPorts, p) {
+					targets[i].exposedPorts = append(targets[i].exposedPorts, p)
+				}
+			}
+			for _, s := range t.exposedServices {
+				if !slices.Contains(targets[i].exposedServices, s) {
+					targets[i].exposedServices = append(targets[i].exposedServices, s)
+				}
 			}
 			u := unions[i]
 			if u == nil {
