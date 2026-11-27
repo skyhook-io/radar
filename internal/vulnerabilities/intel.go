@@ -43,7 +43,7 @@ func IntelSnapshot() *vulnintel.Snapshot {
 	return &snap
 }
 
-// IntelStatus is the feeds' state for the wire, without starting a load.
+// IntelStatus is the feeds' state for the wire.
 func IntelStatus() *Intel {
 	return intelOf(IntelSnapshot())
 }

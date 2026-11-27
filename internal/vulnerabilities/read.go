@@ -71,8 +71,10 @@ type Request struct {
 	// every namespace. MaxFindings still applies. The Response then carries
 	// what WriteCSV needs.
 	Export bool
-	// Intel is the exploit-intelligence feeds to carry; nil leaves
-	// Response.Intel unset.
+	// Intel is the exploit-intelligence feeds to carry. Nil reads the
+	// process's feeds (IntelSnapshot) once the cluster is known to serve
+	// the report kind, so a cluster without Trivy Operator never starts a
+	// download.
 	Intel *vulnintel.Snapshot
 }
 
@@ -98,9 +100,6 @@ func Served() bool {
 // Read rolls up the reports the caller may read, joined with what runs in
 // those namespaces.
 func Read(ctx context.Context, cache *k8s.ResourceCache, req Request) (Response, error) {
-	if req.Filter.KEVOnly && (req.Intel == nil || req.Intel.KEV == nil) {
-		return Response{}, ErrKEVUnavailable
-	}
 	discovery := k8s.GetResourceDiscovery()
 	if discovery == nil {
 		return Response{}, ErrNotReady
@@ -108,6 +107,12 @@ func Read(ctx context.Context, cache *k8s.ResourceCache, req Request) (Response,
 	gvr, ok := discovery.GetGVRWithGroup("VulnerabilityReport", aicontext.TrivyGroup)
 	if !ok {
 		return Response{}, ErrNotInstalled
+	}
+	if req.Intel == nil {
+		req.Intel = IntelSnapshot()
+	}
+	if req.Filter.KEVOnly && (req.Intel == nil || req.Intel.KEV == nil) {
+		return Response{}, ErrKEVUnavailable
 	}
 	dynamic := k8s.GetDynamicResourceCache()
 	if dynamic == nil || cache == nil {

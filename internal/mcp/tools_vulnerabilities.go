@@ -95,7 +95,6 @@ func handleListVulnerabilities(ctx context.Context, _ *mcp.CallToolRequest, inpu
 		CanListPods:          canListPods,
 		View:                 view,
 		Filter:               filter,
-		Intel:                vulnerabilities.IntelSnapshot(),
 	})
 	switch {
 	case errors.Is(err, vulnerabilities.ErrNotInstalled):
