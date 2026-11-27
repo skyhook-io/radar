@@ -7,9 +7,6 @@ import (
 	"log"
 	"sort"
 	"strings"
-	"sync"
-	"sync/atomic"
-	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -17,7 +14,6 @@ import (
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/skyhook-io/radar/internal/portforward"
-	pfpkg "github.com/skyhook-io/radar/pkg/portforward"
 )
 
 const serverLabelSelector = "app.kubernetes.io/name=argocd-server"
@@ -123,12 +119,7 @@ func resolveTargetPort(p *corev1.ServicePort) int {
 //  2. Out-of-cluster only: port-forward candidates in priority order, probing
 //     https then http on the forwarded port (argocd-server serves both on one
 //     port via cmux).
-//
-// The port-forward is owned by this package rather than internal/portforward:
-// that package manages a single shared forward for the metrics stack
-// (Prometheus/traffic), and starting an argocd-server forward through it
-// would tear down the active metrics forward.
-func (m *Manager) discover(ctx context.Context, snap probeSnapshot) (string, *activeForward, error) {
+func (m *Manager) discover(ctx context.Context, snap probeSnapshot) (string, activeForward, error) {
 	// The client is captured in the snapshot, NOT read live — so a context
 	// switch that swaps the live client mid-probe can't redirect this token's
 	// discovery at a different cluster's argocd-server.
@@ -173,6 +164,9 @@ func (m *Manager) discover(ctx context.Context, snap probeSnapshot) (string, *ac
 			start = m.portForward
 		}
 		fwd, pfErr := start(ctx, snap, cand.namespace, cand.name, cand.targetPort)
+		if errors.Is(pfErr, portforward.ErrClosed) {
+			return "", nil, errStaleProbe
+		}
 		if pfErr != nil {
 			lastErr = fmt.Errorf("port-forward to %s/%s failed: %w", cand.namespace, cand.name, pfErr)
 			continue
@@ -180,11 +174,15 @@ func (m *Manager) discover(ctx context.Context, snap probeSnapshot) (string, *ac
 
 		connected := ""
 		for _, scheme := range []string{"https", "http"} {
-			addr := fmt.Sprintf("%s://localhost:%d", scheme, fwd.localPort)
+			addr := fmt.Sprintf("%s://localhost:%d", scheme, fwd.Info().LocalPort)
 			if m.probeEndpoint(ctx, addr, snap) == nil {
 				connected = addr
 				break
 			}
+		}
+		if snap.forwards.Closed() {
+			fwd.Stop()
+			return "", nil, errStaleProbe
 		}
 		if connected != "" {
 			// Not installed here: the probe installs it with the client
@@ -194,101 +192,34 @@ func (m *Manager) discover(ctx context.Context, snap probeSnapshot) (string, *ac
 			return connected, fwd, nil
 		}
 
-		fwd.stop()
+		fwd.Stop()
 		lastErr = fmt.Errorf("argocd-server at %s/%s not responding after port-forward (if it serves a self-signed certificate, set argoCdInsecureTls)", cand.namespace, cand.name)
 	}
 
 	return "", nil, fmt.Errorf("%w: %v", ErrUnreachable, lastErr)
 }
 
-type activeForward struct {
-	localPort int
-	stopCh    chan struct{}
-	cancel    context.CancelFunc
-	stopOnce  sync.Once
-	// exited is set once the tunnel has stopped, before mu is taken, so a
-	// probe never installs a forward that died while it was verified.
-	exited atomic.Bool
+type activeForward interface {
+	Info() *portforward.ConnectionInfo
+	Stop()
+	Alive() bool
 }
 
-func (f *activeForward) stop() {
-	f.stopOnce.Do(func() {
-		f.cancel()
-		close(f.stopCh)
-	})
-}
-
-// watchForwardExit blocks until a live port-forward's RunPortForward returns
-// (the tunnel died or was deliberately stopped), then drops the connection IFF
-// this forward is still the installed one. A deliberate stop() (reconnect,
-// context switch) already replaced m.forward, so the != guard makes those exits
-// a no-op; only an UNEXPECTED death of the current forward drops the connection,
-// which flips Get() to not-connected and lets startBackgroundProbeLocked
-// re-discover and re-establish it instead of every call failing against a dead
-// local port.
-func (m *Manager) watchForwardExit(fwd *activeForward, errCh <-chan error) {
-	err := <-errCh
-	fwd.exited.Store(true)
+func (m *Manager) watchForwardExit(fwd activeForward, done <-chan struct{}) {
+	<-done
 	m.mu.Lock()
-	if m.forward != fwd {
-		m.mu.Unlock()
-		return
+	defer m.mu.Unlock()
+	if m.forward == fwd {
+		m.dropConnectionLocked()
+		log.Printf("[argocd] Port-forward exited; will reprobe on next use")
 	}
-	dropped := m.dropConnectionLocked()
-	m.mu.Unlock()
-	if dropped != nil {
-		dropped.stop()
-	}
-	log.Printf("[argocd] Port-forward on localhost:%d exited (%v); dropped connection, will reprobe on next use", fwd.localPort, err)
 }
 
-func (m *Manager) startPortForward(ctx context.Context, snap probeSnapshot, namespace, service string, targetPort int) (*activeForward, error) {
-	// Use the snapshot's client/config (frozen at probe start), not the live
-	// ones — otherwise a context switch mid-probe would dial the forward through
-	// the NEW cluster, sending this probe's token to a different cluster's Argo.
-	client := snap.k8sClient
-	cfg := snap.k8sConfig
-	if client == nil || cfg == nil {
-		return nil, errors.New("kubernetes client not initialized")
-	}
-
-	podName, err := pfpkg.FindPodForService(ctx, client, namespace, service)
+func (m *Manager) startPortForward(ctx context.Context, snap probeSnapshot, namespace, service string, targetPort int) (activeForward, error) {
+	handle, err := snap.forwards.Start(ctx, portforward.OwnerArgoCD, namespace, service, targetPort)
 	if err != nil {
-		return nil, fmt.Errorf("find pod for service %s/%s: %w", namespace, service, err)
+		return nil, err
 	}
-	localPort, err := pfpkg.FindFreePort()
-	if err != nil {
-		return nil, fmt.Errorf("find free port: %w", err)
-	}
-
-	stopCh := make(chan struct{})
-	readyCh := make(chan struct{})
-	pfCtx, cancel := context.WithCancel(context.Background())
-	fwd := &activeForward{localPort: localPort, stopCh: stopCh, cancel: cancel}
-
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- pfpkg.RunPortForward(pfCtx, client, cfg, namespace, podName, localPort, targetPort, stopCh, readyCh)
-	}()
-
-	select {
-	case <-readyCh:
-		log.Printf("[argocd] Port-forward ready: localhost:%d -> %s/%s:%d", localPort, namespace, service, targetPort)
-		// The forward is live, but RunPortForward keeps running and will return on
-		// errCh if the tunnel later dies (argocd-server pod restart, network drop).
-		// Consume that so the manager doesn't sit "connected" against a dead local
-		// port until a manual reset — on an unexpected exit, drop the connection so
-		// the next Get() reprobes and re-establishes the forward.
-		go m.watchForwardExit(fwd, errCh)
-		return fwd, nil
-	case err := <-errCh:
-		fwd.stop()
-		return nil, fmt.Errorf("port-forward failed: %w", err)
-	case <-time.After(10 * time.Second):
-		fwd.stop()
-		return nil, errors.New("port-forward timed out")
-	case <-ctx.Done():
-		fwd.stop()
-		return nil, ctx.Err()
-	}
+	go m.watchForwardExit(handle, handle.Done())
+	return handle, nil
 }

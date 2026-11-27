@@ -61,7 +61,7 @@ For detailed architecture, API reference, and release process, see [DEVELOPMENT.
 
 ### Prerequisites
 
-- Go 1.26+
+- Go 1.27+
 - Node.js 24+
 - npm
 - Access to a Kubernetes cluster (minikube, kind, or remote)

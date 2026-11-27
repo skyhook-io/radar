@@ -33,6 +33,10 @@ type cloudConnectSelf struct {
 	Release        string `json:"release,omitempty"`
 	DeploymentName string `json:"deploymentName,omitempty"`
 	Chart          string `json:"chart,omitempty"`
+	// Platform is "nkp" on a Nutanix NKP cluster, where Radar comes from
+	// NKP's catalog and is configured in NKP, so the link opens Radar
+	// Cloud's NKP steps.
+	Platform string `json:"platform,omitempty"`
 	// Controller names the GitOps object that owns this install, when one does.
 	Controller    string       `json:"controller,omitempty"`
 	ControllerRef *subject.Ref `json:"controllerRef,omitempty"`
@@ -60,6 +64,7 @@ func (s *Server) handleCloudConnectSelf(w http.ResponseWriter, r *http.Request) 
 	defer cancel()
 
 	self := s.inspectSelfInstall(ctx, r, os.Getenv("MY_POD_NAMESPACE"), os.Getenv("MY_DEPLOYMENT_NAME"))
+	s.routeNKP(ctx, &self)
 	w.Header().Set("Cache-Control", "no-store")
 	s.writeJSON(w, self)
 }
@@ -159,6 +164,28 @@ func (s *Server) inspectSelfInstall(ctx context.Context, r *http.Request, namesp
 		self.WizardURL = generic.WizardURL
 	}
 	return self
+}
+
+// routeNKP sends an NKP cluster's Radar to Radar Cloud's NKP steps, whatever
+// the install inspection found. The NKP check reads as Radar's own
+// ServiceAccount: the signed-in user may not be able to list namespaces, and
+// the dashboard already shows every user the platform.
+func (s *Server) routeNKP(ctx context.Context, self *cloudConnectSelf) {
+	if !k8s.IsNKP(ctx) {
+		return
+	}
+	self.Platform = "nkp"
+	self.WizardURL = s.nkpConnectURL()
+}
+
+// nkpConnectURL opens Radar Cloud's NKP steps: settings pasted into the Radar
+// app's workspace configuration in NKP. They cover the whole workspace, so
+// the link names no namespace or release.
+func (s *Server) nkpConnectURL() string {
+	q := cloudFunnelUTM("wizard-install-link-nkp-install")
+	q.Set("clusters", "many")
+	q.Set("platform", "nkp")
+	return s.cloudConnectCfg.HubAppURL + "/install?" + q.Encode()
 }
 
 // verifiedController returns the candidate whose ownership was confirmed

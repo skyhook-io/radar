@@ -81,6 +81,10 @@ var metricsServiceLocations = []struct {
 
 // CarettaSource implements TrafficSource for Caretta
 type CarettaSource struct {
+	forwards            *portforward.Manager
+	forward             *portforward.Handle
+	reconnectAfter      time.Time // nonzero while recovering a previously bound forward
+	reconnectDelay      time.Duration
 	k8sClient           kubernetes.Interface
 	httpClient          *http.Client
 	prometheusAddr      string
@@ -287,8 +291,6 @@ func (c *CarettaSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsR
 	}
 	c.mu.RLock()
 	connected := c.isConnected
-	promAddr := c.prometheusAddr
-	basePath := c.metricsBasePath
 	c.mu.RUnlock()
 
 	if !connected {
@@ -296,23 +298,10 @@ func (c *CarettaSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsR
 		if err != nil || !result.Available {
 			return nil, fmt.Errorf("Caretta not available: %s", result.Message)
 		}
-		c.mu.RLock()
-		promAddr = c.prometheusAddr
-		basePath = c.metricsBasePath
-		c.mu.RUnlock()
 	}
 
-	// Discover Prometheus if not already found
-	if promAddr == "" {
-		promAddr = c.discoverPrometheus(ctx)
-		if promAddr != "" {
-			c.mu.RLock()
-			basePath = c.metricsBasePath
-			c.mu.RUnlock()
-		}
-	}
-
-	if promAddr == "" {
+	endpoint := c.metricsEndpoint(ctx)
+	if endpoint.url == "" {
 		log.Printf("[caretta] Prometheus not found, returning empty flows")
 		c.mu.RLock()
 		warning := c.backendWarning
@@ -332,7 +321,7 @@ func (c *CarettaSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsR
 	if err != nil {
 		return scopeCheckFailed("caretta"), nil
 	}
-	flows, err := c.queryPrometheusForFlows(ctx, promAddr, basePath, opts, scope)
+	flows, err := c.queryPrometheusForFlows(ctx, endpoint, opts, scope)
 	if err != nil {
 		log.Printf("[caretta] Error querying Prometheus: %v", err)
 		return &FlowsResponse{
@@ -381,30 +370,12 @@ func (c *CarettaSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsR
 	return response, nil
 }
 
-// discoverPrometheus finds and connects to the metrics service.
-// Uses a 3-layer approach:
-//  1. Manual URL override (--prometheus-url flag) — does NOT fall through on failure
-//  2. Well-known service locations (fast direct lookups)
-//  3. Dynamic cluster-wide discovery with scoring
-func (c *CarettaSource) discoverPrometheus(ctx context.Context) string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	// If we have a cached address, verify it's still valid
-	if c.prometheusAddr != "" {
-		testAddr := c.prometheusAddr + c.metricsBasePath
-		if c.revalidateBoundLocked(ctx, testAddr) {
-			return c.prometheusAddr
-		}
-		// Clear stale address
-		c.prometheusAddr = ""
-		c.metricsBasePath = ""
-	}
-
+// discoverPrometheusLocked looks for an endpoint reachable without starting a tunnel.
+func (c *CarettaSource) discoverPrometheusLocked(ctx context.Context) {
 	if prom.HeadersRequireURL(c.metricsURL, c.headers) {
 		log.Printf("[caretta] Discovery skipped: %v", prom.ErrHeadersRequireURL)
 		c.backendWarning = prom.ErrHeadersRequireURL.Error()
-		return ""
+		return
 	}
 
 	// Layer 1: Manual URL override — if set, use it exclusively (don't fall through)
@@ -417,10 +388,16 @@ func (c *CarettaSource) discoverPrometheus(ctx context.Context) string {
 			c.boundIsCarettaStore = false
 			c.backendVerified = c.carettaMetricsPresentLocked(ctx, addr)
 			c.backendWarning = ""
-			return addr
+			return
 		}
 		log.Printf("[caretta] Manual metrics URL %s not reachable", addr)
-		return ""
+		return
+	}
+
+	if !c.inCluster {
+		log.Printf("[caretta] No Caretta-backed metrics service reachable locally. Call Connect() for port-forward.")
+		c.backendWarning = noBackendWarning(nil, nil)
+		return
 	}
 
 	// Layer 2+3: Well-known locations, then dynamic discovery
@@ -428,65 +405,25 @@ func (c *CarettaSource) discoverPrometheus(ctx context.Context) string {
 	if len(candidates) == 0 {
 		log.Printf("[caretta] No Prometheus/VictoriaMetrics service found via any discovery method")
 		c.backendWarning = noBackendWarning(nil, nil)
-		return ""
+		return
 	}
 
 	var noData, unreachable []string
 	for _, info := range candidates {
-		wrongData := false
-
-		if c.inCluster {
-			// In-cluster: the Service address resolves and answers in single-digit
-			// ms. Probe it directly — a managed forward isn't expected here (no
-			// pods/portforward RBAC), so a cluster-address probe is the only path,
-			// and one that can't be reached is a real diagnosis (not the local
-			// "Connect() will port-forward" case), so record it.
-			switch c.acceptBackendLocked(ctx, info, info.clusterAddr+info.basePath) {
-			case backendAccepted:
-				log.Printf("[caretta] Found metrics service at %s (basePath=%q)", info.clusterAddr, info.basePath)
-				c.bindLocked(info.clusterAddr, info)
-				return info.clusterAddr
-			case backendNoCarettaData:
-				wrongData = true
-			case backendUnreachable:
-				unreachable = append(unreachable, fmt.Sprintf("%s/%s", info.namespace, info.name))
-			}
-		} else {
-			// Local: a cluster address can't resolve from here, so only an already
-			// running managed forward is reachable. Reuse one only if it targets the
-			// SAME service we just discovered. A generic reachability probe can't tell
-			// caretta-vm apart from the cluster's general Prometheus (both answer
-			// /api/v1/query), so match on (namespace, service) — otherwise we'd adopt
-			// the general-metrics forward and query it for caretta_links_observed,
-			// which returns 0 flows silently. Starting a new forward is Connect()'s job.
-			if pfAddr := portforward.GetAddressForService(portforward.OwnerTraffic, c.currentContext, info.namespace, info.name); pfAddr != "" {
-				switch c.acceptBackendLocked(ctx, info, pfAddr+info.basePath) {
-				case backendAccepted:
-					log.Printf("[caretta] Using managed port-forward at %s for %s/%s", pfAddr, info.namespace, info.name)
-					c.bindLocked(pfAddr, info)
-					return pfAddr
-				case backendNoCarettaData:
-					wrongData = true
-				}
-			}
-		}
-
-		if wrongData {
+		switch c.acceptBackendLocked(ctx, info, info.clusterAddr+info.basePath) {
+		case backendAccepted:
+			log.Printf("[caretta] Found metrics service at %s (basePath=%q)", info.clusterAddr, info.basePath)
+			c.bindLocked(info.clusterAddr, info, nil)
+			return
+		case backendNoCarettaData:
 			noData = append(noData, fmt.Sprintf("%s/%s", info.namespace, info.name))
+		case backendUnreachable:
+			unreachable = append(unreachable, fmt.Sprintf("%s/%s", info.namespace, info.name))
 		}
 	}
 
-	// Nothing bound. In-cluster, a candidate that couldn't be reached is a real
-	// diagnosis, so name it. Local, a cluster address unreachable here is the
-	// normal case — Connect() port-forwards to the candidates — so nothing is
-	// recorded as unreachable and the warning falls back to the generic message.
-	if c.inCluster {
-		log.Printf("[caretta] No Caretta-backed metrics service reachable in-cluster.")
-	} else {
-		log.Printf("[caretta] No Caretta-backed metrics service reachable locally. Call Connect() for port-forward.")
-	}
+	log.Printf("[caretta] No Caretta-backed metrics service reachable in-cluster.")
 	c.backendWarning = noBackendWarning(noData, unreachable)
-	return ""
 }
 
 // discoverServiceLocked returns candidate metrics backends in Caretta priority
@@ -701,9 +638,29 @@ func (c *CarettaSource) hasSeriesLocked(ctx context.Context, addr, query string)
 	return promResp.Status == "success" && len(promResp.Data.Result) > 0
 }
 
+func (c *CarettaSource) acceptForwardLocked(ctx context.Context, info *metricsServiceInfo, forward *portforward.Handle) backendVerdict {
+	if !forward.Alive() {
+		return backendUnreachable
+	}
+	verdict := c.acceptBackendLocked(ctx, info, forward.Address()+info.basePath)
+	if !forward.Alive() {
+		return backendUnreachable
+	}
+	return verdict
+}
+
+func (c *CarettaSource) clearBindingLocked() {
+	c.forward.Stop()
+	c.forward = nil
+	c.prometheusAddr = ""
+	c.metricsBasePath = ""
+}
+
 // bindLocked records the backend the source will query from now on.
 // Caller must hold lock.
-func (c *CarettaSource) bindLocked(addr string, info *metricsServiceInfo) {
+func (c *CarettaSource) bindLocked(addr string, info *metricsServiceInfo, forward *portforward.Handle) {
+	c.forward.Stop()
+	c.forward = forward
 	c.prometheusAddr = addr
 	c.backendWarning = ""
 	if info != nil {
@@ -722,11 +679,16 @@ func (c *CarettaSource) bindLocked(addr string, info *metricsServiceInfo) {
 // backendVerified stale would suppress the zero-flow warning and put the silence
 // back. Caller must hold lock.
 func (c *CarettaSource) revalidateBoundLocked(ctx context.Context, addr string) bool {
+	if c.forward != nil && !c.forward.Alive() {
+		return false
+	}
 	if !c.tryMetricsEndpointLocked(ctx, addr) {
 		return false
 	}
 	if !c.boundIsCarettaStore {
-		c.backendVerified = c.carettaMetricsPresentLocked(ctx, addr)
+		if verified := c.carettaMetricsPresentLocked(ctx, addr); ctx.Err() == nil {
+			c.backendVerified = verified
+		}
 	}
 	return true
 }
@@ -743,31 +705,16 @@ func (c *CarettaSource) ConnectionInfo() *portforward.ConnectionInfo {
 	if addr == "" {
 		return &portforward.ConnectionInfo{Connected: false}
 	}
-	if c.metricsURL == "" && strings.HasPrefix(addr, "http://localhost:") {
-		// Bound through a managed forward (traffic's own, or a reused peer's) —
-		// alive only while the registry still holds that exact address.
-		if live := portforward.GetAddressForService(portforward.OwnerTraffic, c.currentContext, c.metricsNamespace, c.metricsService); live != addr {
-			return &portforward.ConnectionInfo{Connected: false}
-		}
+	if c.forward != nil && !c.forward.Alive() {
+		return &portforward.ConnectionInfo{}
 	}
+
 	return &portforward.ConnectionInfo{
 		Connected:   true,
 		Address:     addr,
 		Namespace:   c.metricsNamespace,
 		ServiceName: c.metricsService,
 		ContextName: c.currentContext,
-	}
-}
-
-// stopStaleTrafficForward drops the traffic-owned forward when it points at a
-// service other than the one being bound. A candidate refused mid-walk can leave
-// its forward running, which would make the reported connection name a different
-// service than the one being queried.
-func stopStaleTrafficForward(namespace, name string) {
-	pf := portforward.GetConnectionInfo(portforward.OwnerTraffic)
-	if pf.Connected && (pf.Namespace != namespace || pf.ServiceName != name) {
-		log.Printf("[caretta] Dropping refused port-forward to %s/%s", pf.Namespace, pf.ServiceName)
-		portforward.Stop(portforward.OwnerTraffic)
 	}
 }
 
@@ -839,36 +786,10 @@ func (c *CarettaSource) identityRows(ctx context.Context, query string) ([]map[s
 }
 
 // queryPrometheusForFlows queries Prometheus for caretta_links_observed metrics
-func (c *CarettaSource) queryPrometheusForFlows(ctx context.Context, promAddr string, basePath string, opts FlowOptions, sc clusterScope) ([]Flow, error) {
-	query := carettaLinksQuery(opts.Namespace, sc)
-
-	queryURL := fmt.Sprintf("%s%s/api/v1/query?query=%s", promAddr, basePath, url.QueryEscape(query))
-
-	req, err := http.NewRequestWithContext(ctx, "GET", queryURL, nil)
+func (c *CarettaSource) queryPrometheusForFlows(ctx context.Context, endpoint carettaEndpoint, opts FlowOptions, sc clusterScope) ([]Flow, error) {
+	promResp, err := c.queryMetrics(ctx, endpoint, carettaLinksQuery(opts.Namespace, sc))
 	if err != nil {
-		return nil, fmt.Errorf("creating request: %w", err)
-	}
-	if err := c.applyHeaders(req); err != nil {
 		return nil, err
-	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("querying prometheus: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("prometheus returned status %d", resp.StatusCode)
-	}
-
-	var promResp prometheusResponse
-	if err := json.NewDecoder(resp.Body).Decode(&promResp); err != nil {
-		return nil, fmt.Errorf("decoding response: %w", err)
-	}
-
-	if promResp.Status != "success" {
-		return nil, fmt.Errorf("prometheus query failed: %s", promResp.Status)
 	}
 
 	// Parse results into flows
@@ -989,20 +910,20 @@ func (c *CarettaSource) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.isConnected = false
-	c.prometheusAddr = ""
-	c.metricsBasePath = ""
+	c.clearBindingLocked()
 	c.currentContext = ""
 	c.detectedNamespace = ""
 	c.detectedInstance = ""
 	c.boundIsCarettaStore = false
 	c.backendVerified = false
 	c.backendWarning = ""
+	c.reconnectAfter = time.Time{}
+	c.reconnectDelay = 0
 	c.closed = true
 	return nil
 }
 
 // Connect establishes connection to metrics service, starting port-forward if needed
-// contextName is the current K8s context name, used to validate port-forward belongs to right cluster
 func (c *CarettaSource) Connect(ctx context.Context, contextName string) (*portforward.ConnectionInfo, error) {
 	if c.managedMetrics {
 		if err := connections.Refresh(config.IntegrationMetrics); err != nil {
@@ -1012,6 +933,29 @@ func (c *CarettaSource) Connect(ctx context.Context, contextName string) (*portf
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	return c.connectLocked(ctx, contextName), nil
+}
+
+func (c *CarettaSource) connectLocked(ctx context.Context, contextName string) *portforward.ConnectionInfo {
+	recovering := c.currentContext == contextName && (c.forward != nil || !c.reconnectAfter.IsZero())
+	info := c.tryConnectLocked(ctx, contextName)
+	if !recovering || info.Connected {
+		c.reconnectAfter = time.Time{}
+		c.reconnectDelay = 0
+		return info
+	}
+	if ctx.Err() != nil && c.forward.Alive() {
+		return info
+	}
+	c.reconnectAfter = time.Now()
+	if ctx.Err() == nil {
+		c.reconnectDelay = min(max(5*time.Second, 2*c.reconnectDelay), time.Minute)
+		c.reconnectAfter = c.reconnectAfter.Add(c.reconnectDelay)
+	}
+	return info
+}
+
+func (c *CarettaSource) tryConnectLocked(ctx context.Context, contextName string) *portforward.ConnectionInfo {
 	// A Connect that raced Close (context switch) must not resurrect the
 	// source — its forward would point at the previous cluster and outlive
 	// Reset's cleanup.
@@ -1019,30 +963,32 @@ func (c *CarettaSource) Connect(ctx context.Context, contextName string) (*portf
 		return &portforward.ConnectionInfo{
 			Connected: false,
 			Error:     "traffic source closed (context switched)",
-		}, nil
+		}
 	}
 
 	// If already connected to the same context, check if still valid
 	if c.prometheusAddr != "" && c.currentContext == contextName {
 		testAddr := c.prometheusAddr + c.metricsBasePath
-		if c.revalidateBoundLocked(ctx, testAddr) {
+		valid := c.revalidateBoundLocked(ctx, testAddr)
+		if err := ctx.Err(); err != nil {
+			return &portforward.ConnectionInfo{Error: err.Error(), ContextName: contextName}
+		}
+		if valid {
 			return &portforward.ConnectionInfo{
 				Connected:   true,
 				Address:     c.prometheusAddr,
 				Namespace:   c.metricsNamespace,
 				ServiceName: c.metricsService,
 				ContextName: contextName,
-			}, nil
+			}
 		}
 		// Connection lost, clear it
-		c.prometheusAddr = ""
-		c.metricsBasePath = ""
+		c.clearBindingLocked()
 	}
 
 	// Clear stale state if context changed
 	if c.currentContext != contextName {
-		c.prometheusAddr = ""
-		c.metricsBasePath = ""
+		c.clearBindingLocked()
 		c.currentContext = contextName
 	}
 
@@ -1053,7 +999,7 @@ func (c *CarettaSource) Connect(ctx context.Context, contextName string) (*portf
 			Connected:   false,
 			ContextName: contextName,
 			Error:       prom.ErrHeadersRequireURL.Error(),
-		}, nil
+		}
 	}
 
 	// Layer 1: Manual URL override — if set, use it exclusively (don't fall through)
@@ -1070,12 +1016,12 @@ func (c *CarettaSource) Connect(ctx context.Context, contextName string) (*portf
 				Connected:   true,
 				Address:     addr,
 				ContextName: contextName,
-			}, nil
+			}
 		}
 		return &portforward.ConnectionInfo{
 			Connected: false,
 			Error:     fmt.Sprintf("Manual metrics URL %s is not reachable. Check the URL and ensure the service is running.", addr),
-		}, nil
+		}
 	}
 
 	// Layer 2+3: Well-known locations, then dynamic discovery
@@ -1084,7 +1030,7 @@ func (c *CarettaSource) Connect(ctx context.Context, contextName string) (*portf
 		return &portforward.ConnectionInfo{
 			Connected: false,
 			Error:     "No Prometheus/VictoriaMetrics service found. Use --prometheus-url to specify manually.",
-		}, nil
+		}
 	}
 
 	// Walk the candidates in Caretta priority order. Existence is not proof: the
@@ -1103,19 +1049,14 @@ func (c *CarettaSource) Connect(ctx context.Context, contextName string) (*portf
 			switch c.acceptBackendLocked(ctx, info, info.clusterAddr+info.basePath) {
 			case backendAccepted:
 				log.Printf("[caretta] Connected to metrics service at %s (basePath=%q)", info.clusterAddr, info.basePath)
-				// Queries go to the cluster address from here, so the traffic module needs
-				// no forward of its own. An earlier candidate in this same walk may have
-				// left one up after being refused — keeping it would make the reported
-				// connection name a different service than the one being queried.
-				portforward.Stop(portforward.OwnerTraffic)
-				c.bindLocked(info.clusterAddr, info)
+				c.bindLocked(info.clusterAddr, info, nil)
 				return &portforward.ConnectionInfo{
 					Connected:   true,
 					Address:     info.clusterAddr,
 					Namespace:   info.namespace,
 					ServiceName: info.name,
 					ContextName: contextName,
-				}, nil
+				}
 			case backendNoCarettaData:
 				noData = append(noData, target)
 			case backendUnreachable:
@@ -1128,31 +1069,6 @@ func (c *CarettaSource) Connect(ctx context.Context, contextName string) (*portf
 		// guaranteed multi-second dead-wait per candidate — so skip it and go
 		// straight to a port-forward.
 
-		// Check if there's already a valid managed port-forward for this context that
-		// targets the SAME service we discovered. Matching on (namespace, service)
-		// stops the traffic source from adopting the general-metrics forward (owner=
-		// prometheus, e.g. prometheus-operated:9090): it answers the generic probe but
-		// holds no caretta_links_observed, so flows would come back empty. On no match
-		// we fall through and start the dedicated forward below.
-		if pfAddr := portforward.GetAddressForService(portforward.OwnerTraffic, contextName, info.namespace, info.name); pfAddr != "" {
-			switch c.acceptBackendLocked(ctx, info, pfAddr+info.basePath) {
-			case backendAccepted:
-				log.Printf("[caretta] Using existing port-forward at %s", pfAddr)
-				stopStaleTrafficForward(info.namespace, info.name)
-				c.bindLocked(pfAddr, info)
-				return &portforward.ConnectionInfo{
-					Connected:   true,
-					Address:     pfAddr,
-					Namespace:   info.namespace,
-					ServiceName: info.name,
-					ContextName: contextName,
-				}, nil
-			case backendNoCarettaData:
-				noData = append(noData, target)
-				continue
-			}
-		}
-
 		if portforward.AutoDisabled() {
 			lastErr = "Automatic port-forwarding is turned off, so Radar can't reach Caretta's metrics store from this machine. Set a metrics URL for this cluster in Settings → Metrics."
 			log.Printf("[caretta] %s", lastErr)
@@ -1161,30 +1077,26 @@ func (c *CarettaSource) Connect(ctx context.Context, contextName string) (*portf
 
 		// Start a new managed port-forward
 		log.Printf("[caretta] Starting port-forward to %s/%s:%d (targetPort=%d)", info.namespace, info.name, info.port, info.targetPort)
-		connInfo, err := portforward.Start(portforward.OwnerTraffic, ctx, info.namespace, info.name, info.targetPort, contextName)
+		forward, err := c.forwards.Start(ctx, portforward.OwnerTraffic, info.namespace, info.name, info.targetPort)
 		if err != nil {
 			lastErr = fmt.Sprintf("Failed to start port-forward to %s/%s: %v", info.namespace, info.name, err)
 			log.Printf("[caretta] %s", lastErr)
 			continue
 		}
 
-		switch c.acceptBackendLocked(ctx, info, connInfo.Address+info.basePath) {
+		switch c.acceptForwardLocked(ctx, info, forward) {
 		case backendAccepted:
-			c.bindLocked(connInfo.Address, info)
-			log.Printf("[caretta] Connected via port-forward at %s (basePath=%q)", connInfo.Address, info.basePath)
-			return connInfo, nil
+			c.bindLocked(forward.Address(), info, forward)
+			log.Printf("[caretta] Connected via port-forward at %s (basePath=%q)", forward.Address(), info.basePath)
+			return forward.Info()
 		case backendNoCarettaData:
 			noData = append(noData, target)
 		case backendUnreachable:
 			unreachable = append(unreachable, target)
 		}
+		forward.Stop()
 	}
 
-	// Every candidate was rejected. Leaving the last forward up would point the
-	// traffic module at a backend it just refused, so drop it and fail closed with
-	// a message naming what was tried — silently returning zero flows is what made
-	// this class of bug invisible.
-	portforward.Stop(portforward.OwnerTraffic)
 	errMsg := noBackendWarning(noData, unreachable)
 	if portforward.AutoDisabled() && len(noData) == 0 && len(unreachable) == 0 && lastErr != "" {
 		// The turned-off forward is the whole reason; it already says what to do.
@@ -1195,12 +1107,14 @@ func (c *CarettaSource) Connect(ctx context.Context, contextName string) (*portf
 		// permissions problem rather than "Caretta's metrics store wasn't found".
 		errMsg = fmt.Sprintf("No metrics backend holding Caretta data could be reached. %s", lastErr)
 	}
-	c.backendWarning = errMsg
-	c.backendVerified = false
+	if ctx.Err() == nil {
+		c.backendWarning = errMsg
+		c.backendVerified = false
+	}
 	return &portforward.ConnectionInfo{
 		Connected: false,
 		Error:     errMsg,
-	}, nil
+	}
 }
 
 // metricsServiceInfo holds info about a discovered metrics service
@@ -1529,31 +1443,65 @@ func (c *CarettaSource) queryPrometheusRaw(ctx context.Context, query string) (*
 			return nil, err
 		}
 	}
-	c.mu.RLock()
-	promAddr := c.prometheusAddr
-	basePath := c.metricsBasePath
-	c.mu.RUnlock()
+	return c.queryMetrics(ctx, c.metricsEndpoint(ctx), query)
+}
 
-	if promAddr == "" {
-		promAddr = c.discoverPrometheus(ctx)
-		if promAddr == "" {
+type carettaEndpoint struct {
+	url     string
+	forward *portforward.Handle
+}
+
+func (c *CarettaSource) metricsEndpoint(ctx context.Context) carettaEndpoint {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed || ctx.Err() != nil {
+		return carettaEndpoint{}
+	}
+	if time.Now().Before(c.reconnectAfter) {
+		return carettaEndpoint{}
+	}
+	if !c.reconnectAfter.IsZero() || (c.forward != nil && !c.forward.Alive()) {
+		info := c.connectLocked(ctx, c.currentContext)
+		if !info.Connected {
+			if ctx.Err() == nil {
+				c.backendWarning = info.Error
+			}
+			return carettaEndpoint{}
+		}
+	} else if c.prometheusAddr == "" {
+		c.discoverPrometheusLocked(ctx)
+	}
+	if c.prometheusAddr == "" {
+		return carettaEndpoint{}
+	}
+	return carettaEndpoint{c.prometheusAddr + c.metricsBasePath, c.forward}
+}
+
+func (c *CarettaSource) queryMetrics(ctx context.Context, endpoint carettaEndpoint, query string) (*prometheusResponse, error) {
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if endpoint.url == "" {
 			return nil, fmt.Errorf("prometheus not found")
 		}
-		c.mu.RLock()
-		basePath = c.metricsBasePath
-		c.mu.RUnlock()
+		queryURL := fmt.Sprintf("%s/api/v1/query?query=%s", endpoint.url, url.QueryEscape(query))
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, queryURL, nil)
+		if err != nil {
+			return nil, fmt.Errorf("creating request: %w", err)
+		}
+		if err := c.applyHeaders(req); err != nil {
+			return nil, err
+		}
+		if endpoint.forward != nil && !endpoint.forward.Alive() {
+			endpoint = c.metricsEndpoint(ctx)
+			continue
+		}
+		return c.readMetrics(req)
 	}
+}
 
-	queryURL := fmt.Sprintf("%s%s/api/v1/query?query=%s", promAddr, basePath, url.QueryEscape(query))
-
-	req, err := http.NewRequestWithContext(ctx, "GET", queryURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("creating request: %w", err)
-	}
-	if err := c.applyHeaders(req); err != nil {
-		return nil, err
-	}
-
+func (c *CarettaSource) readMetrics(req *http.Request) (*prometheusResponse, error) {
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("querying prometheus: %w", err)

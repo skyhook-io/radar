@@ -40,7 +40,7 @@ func TestK3sHelmChartMapReadsTheCache(t *testing.T) {
 			t.Fatalf("%v did not sync: %v", gvr, err)
 		}
 	}
-	got := k3sHelmChartMap(context.Background())
+	got := k3sHelmChartMap(context.Background(), k8s.Current())
 	if owner := got["apps/app"]; owner.chart != "kube-system/app" || owner.config != "kube-system/app" || !owner.configKnown {
 		t.Fatalf("map = %+v", got)
 	}
@@ -84,7 +84,7 @@ func TestK3sHelmChartMapLeavesConfigUnknownUntilItsCacheSyncs(t *testing.T) {
 	if err := dc.EnsureWatching(charts); err != nil || !dc.WaitForSync(charts, 5*time.Second) {
 		t.Fatalf("HelmCharts did not sync: %v", err)
 	}
-	owner := k3sHelmChartMap(context.Background())["apps/app"]
+	owner := k3sHelmChartMap(context.Background(), k8s.Current())["apps/app"]
 	if owner.chart != "kube-system/app" || owner.configExists() != nil {
 		t.Fatalf("before the config cache syncs: owner = %+v, exists = %v", owner, owner.configExists())
 	}
@@ -93,7 +93,7 @@ func TestK3sHelmChartMapLeavesConfigUnknownUntilItsCacheSyncs(t *testing.T) {
 	if !dc.WaitForSync(configs, 5*time.Second) {
 		t.Fatal("HelmChartConfigs did not sync")
 	}
-	owner = k3sHelmChartMap(context.Background())["apps/app"]
+	owner = k3sHelmChartMap(context.Background(), k8s.Current())["apps/app"]
 	if exists := owner.configExists(); exists == nil || !*exists {
 		t.Fatalf("after sync: owner = %+v", owner)
 	}

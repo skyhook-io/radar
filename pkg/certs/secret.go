@@ -26,6 +26,13 @@ func FromTLSSecret(sec *corev1.Secret) (Input, bool) {
 	if _, sealed := sec.Labels[sealedSecretsKeyLabel]; sealed {
 		return Input{}, false
 	}
+	return FromSecretTLSCrt(sec)
+}
+
+// FromSecretTLSCrt parses a Secret's tls.crt whatever its type, for a
+// controller that serves a named Secret's tls.crt without checking the type
+// (Traefik does). Reads only tls.crt — never tls.key.
+func FromSecretTLSCrt(sec *corev1.Secret) (Input, bool) {
 	data := sec.Data["tls.crt"]
 	start := bytes.Index(data, []byte("-----BEGIN CERTIFICATE-----"))
 	if start < 0 {

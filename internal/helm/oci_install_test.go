@@ -39,7 +39,7 @@ func ociInstallTestClient(t *testing.T, locate func(*action.Configuration, strin
 	if err := os.MkdirAll(settings.RepositoryCache, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	return &Client{settings: settings, chartPathLocator: locate}
+	return &Client{repositorySettings: &repositorySettings{settings: settings, chartPathLocator: locate}}
 }
 
 func ociInstallTestChart(t *testing.T, name, version string) string {

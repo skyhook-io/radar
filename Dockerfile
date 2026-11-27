@@ -26,7 +26,7 @@ RUN npm run build --workspace=web
 # =============================================================================
 # Stage 2: Build Go backend
 # =============================================================================
-FROM golang:1.26-alpine AS backend-builder
+FROM golang:1.27-alpine AS backend-builder
 
 # Install build dependencies
 RUN apk add --no-cache git ca-certificates

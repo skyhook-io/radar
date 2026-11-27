@@ -23,6 +23,7 @@ type APIResource struct {
 	Namespaced bool     `json:"namespaced"`
 	IsCRD      bool     `json:"isCrd"`
 	Verbs      []string `json:"verbs"`
+	ShortNames []string `json:"shortNames,omitempty"`
 }
 
 // DiscoveryStats holds read-only stats about API discovery state.
@@ -271,6 +272,7 @@ func (d *ResourceDiscovery) refresh() error {
 				Namespaced: apiRes.Namespaced,
 				IsCRD:      isCRD,
 				Verbs:      apiRes.Verbs,
+				ShortNames: apiRes.ShortNames,
 			}
 
 			d.upsertResourceLocked(resource)

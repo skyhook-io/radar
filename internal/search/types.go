@@ -37,6 +37,10 @@ type Query struct {
 
 	// ips holds the free tokens that are IP addresses, keyed by token.
 	ips map[string]netip.Addr
+
+	// shortNames holds the kubectl short names discovery reports, so a kind:
+	// filter can name a kind by one.
+	shortNames map[shortNameKey]bool
 }
 
 // LabelEq is a label equality or presence filter parsed from "label:k=v" or

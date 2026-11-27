@@ -197,12 +197,12 @@ func usePrometheusVolumeStatsFrom(t *testing.T, used, capacity map[string]float6
 			_, _ = io.WriteString(w, `{"status":"success","data":{"resultType":"vector","result":[]}}`)
 		}
 	}))
-	prometheuspkg.Initialize(nil, nil, "test")
+	prometheuspkg.Initialize(nil, nil, "test", nil)
 	prometheuspkg.SetManualURL(srv.URL)
 	t.Cleanup(func() {
 		srv.Close()
 		prometheuspkg.Reset()
-		prometheuspkg.Initialize(nil, nil, "")
+		prometheuspkg.Initialize(nil, nil, "", nil)
 	})
 }
 
