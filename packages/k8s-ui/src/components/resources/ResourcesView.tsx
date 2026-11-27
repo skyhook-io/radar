@@ -1,5 +1,6 @@
 import { CRDVersionsCell } from './renderers/crd-cells'
 import { getCRDColumnValue } from './resource-utils-crd'
+import { isMac } from '../../utils/platform'
 import { getStrimziConnectorColumnValue, getStrimziClusterColumnValue } from './resource-utils-strimzi'
 import { getVolumeSnapshotColumnValue, getVolumeSnapshotSortValue } from './resource-utils-volumesnapshot'
 import { getMetalLBColumnValue, getMetalLBSortValue } from './resource-utils-metallb'
@@ -3767,6 +3768,10 @@ interface ResourcesViewData {
   auditBadges?: Record<string, { danger: number; warning: number; messages?: AuditBadgeMessage[] }>
   onOpenLogs?: (params: { namespace: string; podName: string; containers: string[]; containerName?: string; initContainers?: string[] }) => void
   onOpenWorkloadLogs?: (params: { namespace: string; workloadKind: string; workloadName: string }) => void
+  onFilterToNamespace?: (namespace: string) => void
+  namespaceHrefFor?: (namespace: string) => string
+  /** The namespace the list is already narrowed to, by the picker or the Namespace filter. */
+  onlyNamespace?: string
 }
 
 export const ResourcesViewDataContext = React.createContext<ResourcesViewData>({})
@@ -6359,11 +6364,6 @@ export function ResourcesView({
   const handleRowMouseEnter = useCallback(() => setHighlightedIndex(-1), [])
 
   // Filter columns by visibility
-  // Namespace says nothing when the namespace picker narrows the list to one,
-  // so it is left out then, whatever the saved choice — which still applies
-  // as soon as more than one namespace is in scope. Read from the pick, not
-  // the rows, so it doesn't come and go as rows stream in.
-  const singleNamespaceInScope = namespaces.length === 1
   const dataShownColumns = useMemo(() => {
     const shown = new Set<string>()
     const kindLower = selectedKind.name.toLowerCase()
@@ -6376,11 +6376,10 @@ export function ResourcesView({
     return new Set([...visibleColumns, ...dataShownColumns])
   }, [visibleColumns, dataShownColumns])
   const visibleTableColumns = useMemo(() => allColumns.filter(c => {
-    if (c.key === 'namespace' && singleNamespaceInScope) return false
     if (dataShownColumns.has(c.key)) return true
     if (visibleColumns.size === 0) return c.defaultVisible !== false
     return visibleColumns.has(c.key)
-  }), [allColumns, visibleColumns, dataShownColumns, singleNamespaceInScope])
+  }), [allColumns, visibleColumns, dataShownColumns])
   const columns = visibleTableColumns
 
   const toggleColumnVisibility = useCallback((colKey: string) => {
@@ -6845,6 +6844,35 @@ export function ResourcesView({
     return labelSelector.split(',').filter(Boolean)
   }, [labelSelector])
 
+  // Clicking a namespace sets this list's Namespace filter, like clicking a
+  // Pod's node; the header picker and other views are left alone. It is its
+  // own history entry, so Back returns to the list as it was.
+  const onFilterToNamespace = useCallback((ns: string) => {
+    shouldPushHistory.current = true
+    setColumnFilters(prev => ({ ...prev, namespace: [ns] }))
+    setColumnFilterExcludes(prev => {
+      if (!prev.namespace) return prev
+      const next = { ...prev }
+      delete next.namespace
+      return next
+    })
+  }, [])
+  // Query-only, so it resolves under whatever base path the host serves the
+  // list from. A modified click opens it in a new tab, without the open drawer.
+  // The search comes from the table, not the URL, whose write is debounced.
+  const currentSearch = locationSearch ?? (typeof window !== 'undefined' ? window.location.search : '')
+  const namespaceHrefFor = useCallback((ns: string) => {
+    const params = new URLSearchParams(currentSearch)
+    params.delete('resource')
+    if (deferredSearchTerm) params.set('search', deferredSearchTerm)
+    else params.delete('search')
+    const excludes = { ...columnFilterExcludes }
+    delete excludes.namespace
+    params.set('filters', columnFiltersParam({ ...columnFilters, namespace: [ns] }, excludes))
+    return `?${params}`
+  }, [currentSearch, deferredSearchTerm, columnFilters, columnFilterExcludes])
+  const filteredToOneNamespace = !columnFilterExcludes.namespace && columnFilters.namespace?.length === 1 ? columnFilters.namespace[0] : undefined
+  const onlyNamespace = namespaces.length === 1 ? namespaces[0] : filteredToOneNamespace
   const resourcesViewDataContextValue = useMemo<ResourcesViewData>(() => ({
     onNavigate,
     certExpiry,
@@ -6854,7 +6882,10 @@ export function ResourcesView({
     operationalIssuesIncomplete,
     onOpenLogs,
     onOpenWorkloadLogs,
-  }), [onNavigate, certExpiry, certExpiryError, auditBadges, operationalIssues, operationalIssuesIncomplete, onOpenLogs, onOpenWorkloadLogs])
+    onFilterToNamespace,
+    namespaceHrefFor,
+    onlyNamespace,
+  }), [onNavigate, certExpiry, certExpiryError, auditBadges, operationalIssues, operationalIssuesIncomplete, onOpenLogs, onOpenWorkloadLogs, onFilterToNamespace, namespaceHrefFor, onlyNamespace])
 
   const renderSidebar = (className?: string, inDrawer = false) => (
     <ResourcesSidebar
@@ -7230,7 +7261,6 @@ export function ResourcesView({
                 </div>
                 <p className="shrink-0 px-3 pt-2 pb-1 text-xs text-theme-text-tertiary">
                   {columnPins.paused.length ? 'Some pins scroll until there is more room.' : 'Pinned columns stay visible as you scroll.'}
-                  {singleNamespaceInScope && allColumns.some(c => c.key === 'namespace') && ' Namespace is left out while one namespace is selected.'}
                 </p>
                 {/* Column list scrolls; the add-column footer stays pinned so
                     its input isn't pushed below the fold on kinds with many columns. */}
@@ -8203,6 +8233,44 @@ function CopyNameButton({ name }: { name: string }) {
   )
 }
 
+function FilterToNamespaceControl({ namespace, href, onFilter }: { namespace: string; href: string; onFilter: (namespace: string) => void }) {
+  const label = `Filter to ${namespace}`
+  const tooltip = (
+    <span className="flex flex-col">
+      <span>{label}</span>
+      <span className="text-theme-text-tertiary">{isMac() ? '⌘' : 'Ctrl'}-click to open in a new tab</span>
+    </span>
+  )
+  return (
+    <a
+      href={href}
+      aria-label={label}
+      className="group/ns block w-fit max-w-full rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent"
+      // The row opens the drawer on click, and the table's own Enter shortcut
+      // listens on the document; neither should see this control's events.
+      onKeyDown={(e) => {
+        if (e.key !== 'Enter' && e.key !== ' ') return
+        e.stopPropagation()
+        if (e.key === ' ') { e.preventDefault(); onFilter(namespace) }
+      }}
+      onAuxClick={(e) => e.stopPropagation()}
+      onClick={(e) => {
+        e.stopPropagation()
+        // A modified click is the browser's: new tab or window at the href.
+        if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return
+        e.preventDefault()
+        onFilter(namespace)
+      }}
+    >
+      <TruncatedText
+        text={namespace}
+        tooltip={tooltip}
+        className="text-sm text-theme-text-secondary underline-offset-2 decoration-theme-text-tertiary group-hover/ns:text-accent-text group-hover/ns:underline group-focus-visible/ns:underline"
+      />
+    </a>
+  )
+}
+
 interface CellContentProps {
   resource: any
   kind: string
@@ -8221,7 +8289,7 @@ interface CellContentProps {
 }
 
 function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, storeProviders, extraColumn, nameHref, findingMatch }: CellContentProps) {
-  const { auditBadges } = useContext(ResourcesViewDataContext)
+  const { auditBadges, onFilterToNamespace, namespaceHrefFor, onlyNamespace } = useContext(ResourcesViewDataContext)
   // Parent-injected extra columns short-circuit the built-in switch.
   // Used by hosts that inject leading columns (e.g. a multi-cluster Cluster column).
   if (extraColumn) {
@@ -8284,6 +8352,9 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
     )
   }
   if (column === 'namespace') {
+    if (onFilterToNamespace && namespaceHrefFor && meta.namespace && meta.namespace !== onlyNamespace) {
+      return <FilterToNamespaceControl namespace={meta.namespace} href={namespaceHrefFor(meta.namespace)} onFilter={onFilterToNamespace} />
+    }
     return <TruncatedText text={meta.namespace || '-'} className="text-sm text-theme-text-secondary" />
   }
   if (column === 'age') {
