@@ -49,10 +49,11 @@ func (s *Server) handleGetOperatorConfig(w http.ResponseWriter, r *http.Request)
 	sort.Strings(keys)
 	cost := opencost.ConfigSnapshot()
 	effective := config.Config{
-		PrometheusURL:     prom.SafeAddress(url),
-		CostSource:        string(cost.Source),
-		KubecostURL:       cost.URL,
-		KubecostClusterID: cost.ClusterID,
+		CertificateWarningPercent: s.certificateExpiryPolicy.Setting(),
+		PrometheusURL:             prom.SafeAddress(url),
+		CostSource:                string(cost.Source),
+		KubecostURL:               cost.URL,
+		KubecostClusterID:         cost.ClusterID,
 	}
 	if s.effectiveConfig != nil {
 		effective.Port = s.effectiveConfig.Port

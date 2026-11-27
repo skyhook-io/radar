@@ -1,6 +1,9 @@
 package k8s
 
-import "sync"
+import (
+	"github.com/skyhook-io/radar/pkg/health"
+	"sync"
+)
 
 // DetectScope holds the cluster-wide lookups that one compose's detector runs
 // share. A namespace-filtered compose runs the detectors once per namespace;
@@ -9,12 +12,17 @@ import "sync"
 // given no scope start their own, so a single call still reads each lookup
 // once.
 type DetectScope struct {
-	mu     sync.Mutex
-	values map[string]any
+	CertificateExpiryPolicy health.CertificateExpiryPolicy
+	mu                      sync.Mutex
+	values                  map[string]any
 }
 
-func NewDetectScope() *DetectScope {
-	return &DetectScope{values: map[string]any{}}
+func NewDetectScope(policies ...health.CertificateExpiryPolicy) *DetectScope {
+	var policy health.CertificateExpiryPolicy
+	if len(policies) > 0 {
+		policy = policies[0]
+	}
+	return &DetectScope{values: map[string]any{}, CertificateExpiryPolicy: policy}
 }
 
 // get returns the value for key, loading it on first use. The lock covers

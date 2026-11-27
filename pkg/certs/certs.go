@@ -13,6 +13,8 @@ import (
 	"math"
 	"sort"
 	"time"
+
+	"github.com/skyhook-io/radar/pkg/health"
 )
 
 // Source identifies which input a cert row came from.
@@ -23,8 +25,8 @@ const (
 	SourceTLSSecret   Source = "tls-secret"
 )
 
-// Health mirrors the k8s-ui cert-expiry vocabulary: healthy ≥30d, degraded
-// 7–29d, unhealthy <7d or expired, unknown when there's no expiry to judge.
+// Health describes expiry against the certificate's resolved warning windows.
+// Unknown means there is no reported expiry to judge.
 type Health string
 
 const (
@@ -32,11 +34,6 @@ const (
 	HealthDegraded  Health = "degraded"
 	HealthUnhealthy Health = "unhealthy"
 	HealthUnknown   Health = "unknown"
-)
-
-const (
-	degradedWithinDays  = 30
-	unhealthyWithinDays = 7
 )
 
 // Input is one certificate normalized from either source. The caller (the
@@ -49,7 +46,7 @@ type Input struct {
 	Issuer    string
 	Domains   []string
 	NotAfter  *time.Time
-	// NotBefore is set only for TLS secrets; cert-manager rows don't carry it.
+	// NotBefore is the issued certificate's validity start when reported.
 	NotBefore *time.Time
 	Source    Source
 	// SecretName is set only for cert-manager Certificates: the Secret the
@@ -60,8 +57,9 @@ type Input struct {
 
 // Sources bundles a cluster's per-source inputs for one Aggregate call.
 type Sources struct {
-	CertManager []Input
-	TLSSecrets  []Input
+	ExpiryPolicy health.CertificateExpiryPolicy
+	CertManager  []Input
+	TLSSecrets   []Input
 	// Now anchors expiry math; zero value falls back to time.Now (tests pin it).
 	Now time.Time
 }
@@ -69,14 +67,15 @@ type Sources struct {
 // Cert is one unified row, ready to serialize. DaysLeft is nil when expiry is
 // unknown; Expiry is RFC3339 and omitted in that case.
 type Cert struct {
-	Name      string `json:"name"`
-	Namespace string `json:"namespace"`
-	Issuer    string `json:"issuer"`
-	Domains   string `json:"domains"`
-	Expiry    string `json:"expiry,omitempty"`
-	DaysLeft  *int   `json:"daysLeft,omitempty"`
-	Health    Health `json:"health"`
-	Source    Source `json:"source"`
+	Name         string                          `json:"name"`
+	Namespace    string                          `json:"namespace"`
+	Issuer       string                          `json:"issuer"`
+	Domains      string                          `json:"domains"`
+	Expiry       string                          `json:"expiry,omitempty"`
+	DaysLeft     *int                            `json:"daysLeft,omitempty"`
+	Health       Health                          `json:"health"`
+	ExpiryPolicy health.CertificateExpiryWindows `json:"expiryPolicy"`
+	Source       Source                          `json:"source"`
 }
 
 // Aggregate merges the two sources into a single most-urgent-first list. A TLS
@@ -91,8 +90,17 @@ func Aggregate(s Sources) []Cert {
 
 	out := make([]Cert, 0, len(s.CertManager)+len(s.TLSSecrets))
 	managed := make(map[string]bool, len(s.CertManager))
+	secrets := make(map[string]Input, len(s.TLSSecrets))
+	for _, in := range s.TLSSecrets {
+		secrets[in.Namespace+"/"+in.Name] = in
+	}
 	for _, in := range s.CertManager {
-		out = append(out, toCert(in, now))
+		// A missing start may be supplied by the same issued certificate.
+		// Matching expiry prevents mixing an old CR with a renewed Secret.
+		if secret, ok := secrets[in.Namespace+"/"+in.SecretName]; ok && in.NotBefore == nil && in.NotAfter != nil && secret.NotAfter != nil && in.NotAfter.Equal(*secret.NotAfter) {
+			in.NotBefore = secret.NotBefore
+		}
+		out = append(out, toCert(in, now, s.ExpiryPolicy))
 		if in.SecretName != "" {
 			managed[in.Namespace+"/"+in.SecretName] = true
 		}
@@ -101,21 +109,23 @@ func Aggregate(s Sources) []Cert {
 		if managed[in.Namespace+"/"+in.Name] {
 			continue
 		}
-		out = append(out, toCert(in, now))
+		out = append(out, toCert(in, now, s.ExpiryPolicy))
 	}
 
 	sort.SliceStable(out, func(i, j int) bool { return less(out[i], out[j]) })
 	return out
 }
 
-func toCert(in Input, now time.Time) Cert {
+func toCert(in Input, now time.Time, policy health.CertificateExpiryPolicy) Cert {
+	thresholds := policy.Resolve(in.NotBefore, in.NotAfter)
 	c := Cert{
-		Name:      in.Name,
-		Namespace: in.Namespace,
-		Issuer:    in.Issuer,
-		Domains:   formatDomains(in.Domains),
-		Health:    HealthUnknown,
-		Source:    in.Source,
+		Name:         in.Name,
+		Namespace:    in.Namespace,
+		Issuer:       in.Issuer,
+		Domains:      formatDomains(in.Domains),
+		Health:       HealthUnknown,
+		ExpiryPolicy: thresholds.Windows(),
+		Source:       in.Source,
 	}
 	if in.NotAfter != nil {
 		c.Expiry = in.NotAfter.UTC().Format(time.RFC3339)
@@ -124,14 +134,7 @@ func toCert(in Input, now time.Time) Cert {
 		// semantics in topology.ParsePEMCertificates.
 		days := int(math.Floor(in.NotAfter.Sub(now).Hours() / 24))
 		c.DaysLeft = &days
-		switch {
-		case days < unhealthyWithinDays:
-			c.Health = HealthUnhealthy
-		case days < degradedWithinDays:
-			c.Health = HealthDegraded
-		default:
-			c.Health = HealthHealthy
-		}
+		c.Health = Health(thresholds.Classify(in.NotAfter, now))
 	}
 	return c
 }

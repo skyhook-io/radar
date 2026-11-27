@@ -1,7 +1,10 @@
+import type { CertificateExpiryWindows } from '../../../types'
+import { useCertificateClock } from '../../../hooks/useCertificateClock'
+import { clsx } from 'clsx'
+import { certificateExpiryHealth } from '../../../utils/certificate-expiry'
 import type React from 'react'
 import { Database, HardDrive, Activity, Clock, Shield, KeyRound } from 'lucide-react'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink } from '../../ui/drawer-components'
-import { pluralize } from '../../../utils/pluralize'
 import {
   getCNPGClusterInstances,
   getCNPGClusterPhase,
@@ -27,7 +30,7 @@ import {
   getCNPGClusterAvailability,
   CNPG_BARMAN_OBJECTSTORE_GROUP,
 } from '../resource-utils-cnpg'
-import { formatAge } from '../resource-utils'
+import { formatAge, formatDuration } from '../resource-utils'
 import { RecoveryTime } from './CNPGShared'
 import { formatRelativeAgeTime } from '../../../utils/format'
 
@@ -36,10 +39,12 @@ interface CNPGClusterRendererProps {
    *  declared against this cluster — a reverse lookup the package cannot do. */
   declared?: React.ReactNode
   data: any
+  certificateExpiryPolicy?: CertificateExpiryWindows
   onNavigate?: (ref: { kind: string; namespace: string; name: string }) => void
 }
 
-export function CNPGClusterRenderer({ data, onNavigate, declared}: CNPGClusterRendererProps) {
+export function CNPGClusterRenderer({ data, onNavigate, declared, certificateExpiryPolicy}: CNPGClusterRendererProps) {
+  useCertificateClock()
   const conditions = data.status?.conditions || []
   const instances = data.spec?.instances ?? 0
   // Presence matters — see getCNPGClusterStatus. A cluster whose status has no
@@ -70,9 +75,12 @@ export function CNPGClusterRenderer({ data, onNavigate, declared}: CNPGClusterRe
   const hasSplitBrain = primariesReported.length > 1
 
   // Certificate expiry warnings
-  const expiredCerts = certExpirations.filter(c => c.daysUntilExpiry < 0)
-  const criticalCerts = certExpirations.filter(c => c.daysUntilExpiry >= 0 && c.daysUntilExpiry <= 7)
-  const warningCerts = certExpirations.filter(c => c.daysUntilExpiry > 7 && c.daysUntilExpiry <= 30)
+  const expiredCerts = certExpirations.filter(c => c.remainingMilliseconds <= 0)
+  const tone = (c: typeof certExpirations[number]) => c.renewal === 'user'
+    ? certificateExpiryHealth(c.remainingMilliseconds, certificateExpiryPolicy)
+    : Number.isFinite(c.remainingMilliseconds) && c.remainingMilliseconds < 86_400_000 ? 'unhealthy' : 'healthy'
+  const criticalCerts = certExpirations.filter(c => c.remainingMilliseconds > 0 && tone(c) === 'unhealthy')
+  const warningCerts = certExpirations.filter(c => c.remainingMilliseconds > 0 && tone(c) === 'degraded')
 
   // Last failed backup
   const lastFailedBackup = data.status?.lastFailedBackup
@@ -203,21 +211,21 @@ export function CNPGClusterRenderer({ data, onNavigate, declared}: CNPGClusterRe
         <AlertBanner
           variant="error"
           title="Certificate Expired"
-          items={expiredCerts.map(c => `${c.secretName} expired ${pluralize(Math.abs(c.daysUntilExpiry), 'day')} ago (${c.expiryDate})`)}
+          items={expiredCerts.map(c => `${c.secretName} expired ${formatDuration(-c.remainingMilliseconds)} ago (${c.expiryDate})`)}
         />
       )}
       {criticalCerts.length > 0 && (
         <AlertBanner
           variant="error"
           title="Certificate Expiring Soon"
-          items={criticalCerts.map(c => `${c.secretName} expires in ${pluralize(c.daysUntilExpiry, 'day')} (${c.expiryDate})`)}
+          items={criticalCerts.map(c => `${c.secretName} expires in ${formatDuration(c.remainingMilliseconds)} (${c.expiryDate})`)}
         />
       )}
       {warningCerts.length > 0 && (
         <AlertBanner
           variant="warning"
           title="Certificate Expiry Warning"
-          items={warningCerts.map(c => `${c.secretName} expires in ${c.daysUntilExpiry} days (${c.expiryDate})`)}
+          items={warningCerts.map(c => `${c.secretName} expires in ${formatDuration(c.remainingMilliseconds)} (${c.expiryDate})`)}
         />
       )}
 
@@ -439,21 +447,14 @@ export function CNPGClusterRenderer({ data, onNavigate, declared}: CNPGClusterRe
               <div key={cert.secretName} className="flex items-center gap-2 text-sm">
                 <span className="text-theme-text-primary font-mono flex-1 break-all">{cert.secretName}</span>
                 <span className="text-xs text-theme-text-tertiary">{cert.expiryDate}</span>
-                {cert.daysUntilExpiry <= 7 && (
-                  <span className="badge-sm bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300">
-                    {cert.daysUntilExpiry}d
-                  </span>
-                )}
-                {cert.daysUntilExpiry > 7 && cert.daysUntilExpiry <= 30 && (
-                  <span className="badge-sm bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
-                    {cert.daysUntilExpiry}d
-                  </span>
-                )}
-                {cert.daysUntilExpiry > 30 && (
-                  <span className="badge-sm bg-theme-elevated text-theme-text-secondary">
-                    {cert.daysUntilExpiry}d
-                  </span>
-                )}
+                <span className={clsx('badge-sm',
+                  tone(cert) === 'unhealthy' ? 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300' :
+                  tone(cert) === 'degraded' ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300' :
+                  'bg-theme-elevated text-theme-text-secondary')}>
+                  {Number.isFinite(cert.remainingMilliseconds)
+                    ? cert.remainingMilliseconds <= 0 ? `Expired ${formatDuration(-cert.remainingMilliseconds)} ago` : formatDuration(cert.remainingMilliseconds)
+                    : 'Unknown'}
+                </span>
               </div>
             ))}
           </div>

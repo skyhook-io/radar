@@ -14,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
+	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/hpadiag"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 	k8score "github.com/skyhook-io/radar/pkg/k8score"
@@ -579,17 +580,18 @@ type Relationships struct {
 
 // CertificateInfo holds parsed X.509 certificate metadata for a single certificate.
 type CertificateInfo struct {
-	Subject       string   `json:"subject"`
-	Organizations []string `json:"organizations,omitempty"`
-	SANs          []string `json:"sans,omitempty"`
-	Issuer        string   `json:"issuer"`
-	SelfSigned    bool     `json:"selfSigned,omitempty"`
-	KeyType       string   `json:"keyType"`
-	SerialNumber  string   `json:"serialNumber"`
-	NotBefore     string   `json:"notBefore"`
-	NotAfter      string   `json:"notAfter"`
-	DaysLeft      int      `json:"daysLeft"`
-	Expired       bool     `json:"expired,omitempty"`
+	ExpiryPolicy  *health.CertificateExpiryWindows `json:"expiryPolicy,omitempty"`
+	Subject       string                           `json:"subject"`
+	Organizations []string                         `json:"organizations,omitempty"`
+	SANs          []string                         `json:"sans,omitempty"`
+	Issuer        string                           `json:"issuer"`
+	SelfSigned    bool                             `json:"selfSigned,omitempty"`
+	KeyType       string                           `json:"keyType"`
+	SerialNumber  string                           `json:"serialNumber"`
+	NotBefore     string                           `json:"notBefore"`
+	NotAfter      string                           `json:"notAfter"`
+	DaysLeft      int                              `json:"daysLeft"`
+	Expired       bool                             `json:"expired,omitempty"`
 }
 
 // SecretCertificateInfo preserves the TLS Secret's tls.crt chain in Certificates.
@@ -817,10 +819,11 @@ type MembersCoverage struct {
 
 // ResourceWithRelationships wraps a K8s resource with computed relationships
 type ResourceWithRelationships struct {
-	Resource        any                    `json:"resource"`
-	Relationships   *Relationships         `json:"relationships,omitempty"`
-	CertificateInfo *SecretCertificateInfo `json:"certificateInfo,omitempty"`
-	HPADiagnosis    *hpadiag.Diagnosis     `json:"hpaDiagnosis,omitempty"`
+	CertificateExpiryPolicy *health.CertificateExpiryWindows `json:"certificateExpiryPolicy,omitempty"`
+	Resource                any                              `json:"resource"`
+	Relationships           *Relationships                   `json:"relationships,omitempty"`
+	CertificateInfo         *SecretCertificateInfo           `json:"certificateInfo,omitempty"`
+	HPADiagnosis            *hpadiag.Diagnosis               `json:"hpaDiagnosis,omitempty"`
 	// RelatedFindings does not affect parent health; absence is not an all-clear.
 	RelatedFindings []issuesapi.RelatedFindingsGroup `json:"relatedFindings,omitempty"`
 }

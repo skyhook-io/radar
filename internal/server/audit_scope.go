@@ -10,7 +10,7 @@ import (
 
 func (s *Server) auditOptions(r *http.Request) *audit.RunOptions {
 	if auth.UserFromContext(r.Context()) == nil {
-		return nil
+		return &audit.RunOptions{CertificateExpiryPolicy: s.certificateExpiryPolicy}
 	}
 	namespaces := s.getUserNamespaces(r, nil)
 	secrets := namespaces
@@ -23,5 +23,5 @@ func (s *Server) auditOptions(r *http.Request) *audit.RunOptions {
 	}
 	secrets = s.secretReadableNamespaces(r, secrets)
 	scope := audit.ResolveReadScope(namespaces, secrets, func(group, resource, ns string) bool { return s.canRead(r, group, resource, ns, "list") })
-	return &audit.RunOptions{Scope: scope}
+	return &audit.RunOptions{Scope: scope, CertificateExpiryPolicy: s.certificateExpiryPolicy}
 }

@@ -1,0 +1,15 @@
+[
+  {"name":"default warning boundary","warningSeconds":0,"highSeconds":0,"remainingNanoseconds":2592000000000000,"health":"healthy"},
+  {"name":"below default warning","warningSeconds":0,"highSeconds":0,"remainingNanoseconds":2591999999999999,"health":"degraded"},
+  {"name":"default high boundary","warningSeconds":0,"highSeconds":0,"remainingNanoseconds":604800000000000,"health":"degraded"},
+  {"name":"below default high","warningSeconds":0,"highSeconds":0,"remainingNanoseconds":604799999999999,"health":"unhealthy"},
+  {"name":"short fresh certificate","warningSeconds":180,"highSeconds":60,"remainingNanoseconds":3600000000000,"health":"healthy"},
+  {"name":"short warning boundary","warningSeconds":180,"highSeconds":60,"remainingNanoseconds":180000000000,"health":"healthy"},
+  {"name":"below short warning","warningSeconds":180,"highSeconds":60,"remainingNanoseconds":179999999999,"health":"degraded"},
+  {"name":"short high boundary","warningSeconds":180,"highSeconds":60,"remainingNanoseconds":60000000000,"health":"degraded"},
+  {"name":"below short high","warningSeconds":180,"highSeconds":60,"remainingNanoseconds":59999999999,"health":"unhealthy"},
+  {"name":"expiry boundary","warningSeconds":180,"highSeconds":60,"remainingNanoseconds":0,"health":"unhealthy"},
+  {"name":"expired second","warningSeconds":180,"highSeconds":60,"remainingNanoseconds":-1000000000,"health":"unhealthy"},
+  {"name":"expired nanosecond","warningSeconds":180,"highSeconds":60,"remainingNanoseconds":-1,"health":"unhealthy"},
+  {"name":"unknown expiry","warningSeconds":180,"highSeconds":60,"remainingNanoseconds":null,"health":"unknown"}
+]

@@ -48,6 +48,7 @@ import { FormSaveActions } from './FormSaveActions'
 export type { SettingsSectionId } from './settings-state'
 
 interface Config {
+  certificateWarningPercent?: string
   kubeconfig?: string
   kubeconfigDirs?: string[]
   namespace?: string

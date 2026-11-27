@@ -29,7 +29,7 @@ import (
 // returns mixed kinds in one response, so a single index can't get
 // both right.
 func newResourceSummaryContextBuilder(ctx context.Context, namespaces []string) summarycontext.Builder {
-	provider := issues.NewCacheProvider()
+	provider := newIssueProvider(ctx)
 	if provider == nil {
 		return nil
 	}
@@ -45,7 +45,7 @@ func newResourceSummaryContextBuilder(ctx context.Context, namespaces []string) 
 // are reachable, so composing the cluster-wide index doesn't leak
 // rows the user can't see.
 func newSearchSummaryContextBuilder(ctx context.Context, scanNamespaces []string) summarycontext.Builder {
-	provider := issues.NewCacheProvider()
+	provider := newIssueProvider(ctx)
 	if provider == nil {
 		return nil
 	}

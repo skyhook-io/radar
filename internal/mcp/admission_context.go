@@ -14,7 +14,7 @@ import (
 )
 
 func mcpTemplateDivergence(ctx context.Context, obj runtime.Object) *resourcecontext.TemplateDivergence {
-	return issues.NewCacheProvider().TemplateDivergence(obj, issueClusterScopedAccess(ctx), issueRelatedResourceAccess(ctx), func(verb, group, resource, namespace string) bool {
+	return newIssueProvider(ctx).TemplateDivergence(obj, issueClusterScopedAccess(ctx), issueRelatedResourceAccess(ctx), func(verb, group, resource, namespace string) bool {
 		return canReadInNamespace(ctx, group, resource, namespace, verb)
 	})
 }

@@ -16,12 +16,16 @@ import (
 )
 
 func expiryTestPEM(t *testing.T, expiry time.Time) []byte {
+	return expiryTestValidityPEM(t, expiry.Add(-90*24*time.Hour), expiry)
+}
+
+func expiryTestValidityPEM(t *testing.T, start, expiry time.Time) []byte {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cert := &x509.Certificate{SerialNumber: big.NewInt(1), NotBefore: expiry.Add(-90 * 24 * time.Hour), NotAfter: expiry}
+	cert := &x509.Certificate{SerialNumber: big.NewInt(1), NotBefore: start, NotAfter: expiry}
 	der, err := x509.CreateCertificate(rand.Reader, cert, cert, &key.PublicKey, key)
 	if err != nil {
 		t.Fatal(err)

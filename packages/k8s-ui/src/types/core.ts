@@ -122,6 +122,7 @@ export interface IntegrationCapability {
 
 // Feature capabilities based on RBAC permissions
 export interface Capabilities {
+  certificateExpiryPolicy?: CertificateExpiryWindows
   configManagement?: 'local' | 'operator' | 'cloud'
   podExecUID?: boolean
   podDebugImage?: string
@@ -884,7 +885,16 @@ export interface ManagerClaim {
 }
 
 // Parsed X.509 certificate metadata (from backend cert parsing)
+export interface CertificateExpiryWindows {
+  warningPercent?: number
+  automatic?: boolean
+  warningSeconds: number
+  highSeconds: number
+  liveWarningSeconds: number
+}
+
 export interface CertificateInfo {
+  expiryPolicy?: CertificateExpiryWindows
   subject: string
   organizations?: string[]
   sans?: string[]
@@ -1029,6 +1039,7 @@ export interface RelatedFindingsGroup {
 
 // Resource with computed relationships and optional certificate info (API response wrapper)
 export interface ResourceWithRelationships<T = unknown> {
+  certificateExpiryPolicy?: CertificateExpiryWindows
   /** Optional association bundle; absence is not an all-clear. */
   relatedFindings?: RelatedFindingsGroup[]
   resource: T

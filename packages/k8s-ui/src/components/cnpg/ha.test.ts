@@ -183,6 +183,16 @@ describe('cnpgPDBFact', () => {
 describe('cnpgCertificateViews', () => {
   const now = Date.parse('2026-09-30T00:00:00Z')
   const at = (days: number) => new Date(now + days * 86_400_000).toISOString()
+  it('uses agent windows for user certificates and keeps operator deadlines independent', () => {
+    const expiryPolicy = { warningSeconds: 180, highSeconds: 60, liveWarningSeconds: 30 }
+    const expiresAt = new Date(now + 3_600_000).toISOString()
+    const views = cnpgCertificateViews([
+      { secret: 'user', raw: '', expiresAt, renewal: 'user', expiryPolicy },
+      { secret: 'operator', raw: '', expiresAt, renewal: 'operator', expiryPolicy },
+      { secret: 'unknown', raw: '', expiresAt: 'invalid', renewal: 'user', expiryPolicy },
+    ], now)
+    expect(views.map(c => c.tone)).toEqual(['healthy', 'unhealthy', 'unknown'])
+  })
   it('uses the issues-engine thresholds and owner', () => {
     const v = cnpgCertificateViews(
       [

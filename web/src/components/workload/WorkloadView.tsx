@@ -1328,6 +1328,7 @@ export function WorkloadView({
         ownershipContext={ownershipContext}
         onOpenApplication={handleOpenApplication}
         certificateInfo={certificateInfo}
+        certificateExpiryPolicy={resourceResponse?.certificateExpiryPolicy}
         certificateSigningRequest={certificateSigningRequest}
         hpaDiagnosis={hpaDiagnosis}
         workloadPods={supportsWorkloadPods ? workloadPodsQuery.data?.pods : undefined}

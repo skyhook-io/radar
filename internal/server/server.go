@@ -69,6 +69,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/argoapi"
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 	"github.com/skyhook-io/radar/pkg/conditions"
+	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/hpadiag"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/ownership"
@@ -84,6 +85,7 @@ import (
 
 // Server is the Explorer HTTP server
 type Server struct {
+	certificateExpiryPolicy health.CertificateExpiryPolicy
 	contextSwitch           k8s.ContextSwitchTracker
 	router                  *chi.Mux
 	broadcaster             *SSEBroadcaster
@@ -219,6 +221,7 @@ type Server struct {
 
 // Config holds server configuration
 type Config struct {
+	CertificateExpiryPolicy health.CertificateExpiryPolicy
 	Port                    int
 	PortFallback            bool // Port is a preference: when it's taken, bind an OS-assigned port instead of failing
 	ListenAddress           string
@@ -265,6 +268,7 @@ func New(cfg Config) *Server {
 		cfg.CloudConnect.HubAppURL = "https://app.radarhq.io"
 	}
 	s := &Server{
+		certificateExpiryPolicy: cfg.CertificateExpiryPolicy,
 		router:                  chi.NewRouter(),
 		broadcaster:             NewSSEBroadcaster(),
 		port:                    cfg.Port,
@@ -276,10 +280,10 @@ func New(cfg Config) *Server {
 		devMode:                 cfg.DevMode,
 		enablePprof:             cfg.EnablePprof,
 		startTime:               time.Now(),
-		mcpHandler:              cfg.MCPHandler,
-		mcpApplyHandler:         cfg.MCPApplyHandler,
-		mcpReadOnlyHandler:      cfg.MCPReadOnlyHandler,
-		mcpInvestigationHandler: cfg.MCPInvestigationHandler,
+		mcpHandler:              certificatePolicyHandler(cfg.MCPHandler, cfg.CertificateExpiryPolicy),
+		mcpApplyHandler:         certificatePolicyHandler(cfg.MCPApplyHandler, cfg.CertificateExpiryPolicy),
+		mcpReadOnlyHandler:      certificatePolicyHandler(cfg.MCPReadOnlyHandler, cfg.CertificateExpiryPolicy),
+		mcpInvestigationHandler: certificatePolicyHandler(cfg.MCPInvestigationHandler, cfg.CertificateExpiryPolicy),
 		mcpExecTools:            cfg.MCPExecTools,
 		mcpHTTPTools:            cfg.MCPHTTPTools,
 		diagConfig:              cfg.DiagConfig,
@@ -1621,6 +1625,8 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	responseCaps := *caps
+	windows := s.certificateExpiryPolicy.Windows()
+	responseCaps.CertificateExpiryPolicy = &windows
 	caps = &responseCaps
 
 	caps.MCPEnabled = s.mcpEnabled()
@@ -3180,7 +3186,8 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 		// Pass the already-fetched resource so ManagedBy synthesis
 		// disambiguates by group (avoids kind/plural collisions like Knative
 		// Service vs core Service).
-		read := topology.ResourceWithRelationships{Resource: resource}
+		certificateWindows := s.certificateExpiryPolicy.Windows()
+		read := topology.ResourceWithRelationships{Resource: resource, CertificateExpiryPolicy: &certificateWindows}
 		if !objectOnly {
 			read.Relationships = s.relationshipsFor(r, resource)
 			read.RelatedFindings = issues.CachedStrimziEvidence(resource, s.issueRelatedResourceAccess(r), func(c *ownership.Catalog) ownership.Access { return s.ownershipAccess(r, c) })
@@ -3420,15 +3427,18 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 
 	// Pass the already-fetched resource so ManagedBy synthesis uses the
 	// authoritative object instead of a group-blind kind/name lookup.
+	certificateWindows := s.certificateExpiryPolicy.Windows()
 	response := topology.ResourceWithRelationships{
-		RelatedFindings: issues.CachedStrimziEvidence(resource, s.issueRelatedResourceAccess(r), func(c *ownership.Catalog) ownership.Access { return s.ownershipAccess(r, c) }),
-		Resource:        resource,
-		Relationships:   s.relationshipsFor(r, resource),
-		HPADiagnosis:    hpaDiagnosisFor(resource),
+		CertificateExpiryPolicy: &certificateWindows,
+		RelatedFindings:         issues.CachedStrimziEvidence(resource, s.issueRelatedResourceAccess(r), func(c *ownership.Catalog) ownership.Access { return s.ownershipAccess(r, c) }),
+		Resource:                resource,
+		Relationships:           s.relationshipsFor(r, resource),
+		HPADiagnosis:            hpaDiagnosisFor(resource),
 	}
 
 	if secret, ok := resource.(*corev1.Secret); ok {
 		response.CertificateInfo = topology.ParseSecretCertificates(secret)
+		s.applyCertificateExpiryPolicy(response.CertificateInfo)
 	}
 
 	if readCache() != cache {
@@ -6385,6 +6395,7 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		resp.File.KubecostClusterID, resp.Effective.KubecostClusterID = cost.ClusterID, cost.ClusterID
 		resp.KubecostAPIKeySet, resp.KubecostEnvManaged, resp.KubecostEnvError = cost.SecretSet, cost.State == "launch", cost.Error
 	}
+	resp.Effective.CertificateWarningPercent = s.certificateExpiryPolicy.Setting()
 	s.writeJSON(w, resp)
 }
 
@@ -6403,6 +6414,10 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	var updated config.Config
 	if err := json.NewDecoder(r.Body).Decode(&updated); err != nil {
 		s.writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if _, err := updated.CertificateExpiryPolicy(); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if err := config.ValidateMCPFile(updated); err != nil {

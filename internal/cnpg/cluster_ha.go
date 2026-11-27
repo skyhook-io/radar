@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/skyhook-io/radar/pkg/health"
 	"log"
 	"slices"
 	"sort"
@@ -188,13 +189,14 @@ type CNPGHAEndpoints struct {
 // spec.certificates). CertManager is set only when the Secret's metadata was
 // read and carries cert-manager's annotations; Metadata says whether it was.
 type CNPGHACertificate struct {
-	Secret      string                  `json:"secret"`
-	Purposes    []string                `json:"purposes,omitempty"`
-	Raw         string                  `json:"raw"`
-	ExpiresAt   string                  `json:"expiresAt,omitempty"`
-	Renewal     string                  `json:"renewal"`
-	Metadata    *integration.ReadSource `json:"metadata,omitempty"`
-	CertManager *CNPGCertManagerRef     `json:"certManager,omitempty"`
+	ExpiryPolicy *health.CertificateExpiryWindows `json:"expiryPolicy,omitempty"`
+	Secret       string                           `json:"secret"`
+	Purposes     []string                         `json:"purposes,omitempty"`
+	Raw          string                           `json:"raw"`
+	ExpiresAt    string                           `json:"expiresAt,omitempty"`
+	Renewal      string                           `json:"renewal"`
+	Metadata     *integration.ReadSource          `json:"metadata,omitempty"`
+	CertManager  *CNPGCertManagerRef              `json:"certManager,omitempty"`
 }
 
 type CNPGCertManagerRef struct {

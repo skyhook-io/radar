@@ -493,7 +493,7 @@ func diagnoseWorkload(ctx context.Context, input diagnoseInput, expectedOwner *o
 	resp.StartupBlockers = startupBlockersForWorkload(cache, kindNorm, canonicalGroup, input.Namespace, input.Name, pods)
 
 	if len(resp.RelatedIssues) > 0 || len(resp.StartupBlockers) > 0 {
-		if p := issues.NewCacheProvider(); p != nil {
+		if p := newIssueProvider(ctx); p != nil {
 			resp.ChangeContext = p.ChangeContextForIssue(issues.Issue{
 				Group:     canonicalGroup,
 				Kind:      canonicalKind,
@@ -684,7 +684,7 @@ func handleGitOpsDiagnose(ctx context.Context, input diagnoseInput, canonicalKin
 	resp := diagnoseResponse{
 		Resource:        minified,
 		GitOpsDiagnosis: gd,
-		RelatedIssues: issues.RelatedIssues(issues.NewCacheProvider(), issues.RelatedIssueOptions{
+		RelatedIssues: issues.RelatedIssues(newIssueProvider(ctx), issues.RelatedIssueOptions{
 			Namespaces:           issueNamespacesForResource(input.Namespace),
 			CanReadClusterScoped: issueClusterScopedAccess(ctx),
 			CanReadRelated:       issueRelatedResourceAccess(ctx),
@@ -1186,7 +1186,7 @@ func handleNetworkTraceDiagnose(ctx context.Context, input diagnoseInput, kind s
 		Cache:     cache,
 		Dynamic:   k8s.GetDynamicResourceCache(),
 		Discovery: k8s.GetResourceDiscovery(),
-		Issues:    issues.NewCacheProvider(),
+		Issues:    newIssueProvider(ctx),
 		IssueAccess: trace.IssueAccess{
 			CanReadClusterScoped: issueClusterScopedAccess(ctx),
 			CanReadRelated:       issueRelatedResourceAccess(ctx),

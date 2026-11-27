@@ -1,6 +1,7 @@
 // KNative cell components for ResourcesView table
 
 import { clsx } from 'clsx'
+import type { CertificateExpiryWindows } from '../../../types'
 import {
   getKnativeConditionStatus,
   getKnativeServiceUrl,
@@ -359,7 +360,7 @@ export function KnativeIngressCell({ resource, column }: { resource: any; column
 // KNATIVE CERTIFICATE
 // ============================================================================
 
-export function KnativeCertificateCell({ resource, column }: { resource: any; column: string }) {
+export function KnativeCertificateCell({ resource, column, certificateExpiryPolicy }: { resource: any; column: string; certificateExpiryPolicy?: CertificateExpiryWindows }) {
   switch (column) {
     case 'status':
       return <StatusCell resource={resource} getStatus={getKnativeConditionStatus} />
@@ -370,7 +371,7 @@ export function KnativeCertificateCell({ resource, column }: { resource: any; co
     case 'secretName':
       return <TextCell value={resource?.spec?.secretName || '-'} />
     case 'expires': {
-      const expiry = getCertificateExpiry(resource)
+      const expiry = getCertificateExpiry(resource, certificateExpiryPolicy)
       // "Expired 365d ago" is far wider than the column; bound it like the
       // other status badges that carry arbitrary-length text.
       return (

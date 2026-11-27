@@ -1,3 +1,6 @@
+import type { CertificateExpiryWindows } from '../../../types'
+import { useCertificateClock } from '../../../hooks/useCertificateClock'
+import { getCertificateExpiry, formatDuration } from '../resource-utils'
 import { Shield, Clock, Globe, Key } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner, useOperationalIssuesShown} from '../../ui/drawer-components'
@@ -5,6 +8,7 @@ import { pluralize } from '../../../utils/pluralize'
 
 interface CertificateRendererProps {
   data: any
+  certificateExpiryPolicy?: CertificateExpiryWindows
 }
 
 function formatDate(dateStr: string): string {
@@ -13,13 +17,8 @@ function formatDate(dateStr: string): string {
   return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
 }
 
-function getDaysUntil(dateStr: string): number {
-  const target = new Date(dateStr).getTime()
-  const now = Date.now()
-  return Math.floor((target - now) / (1000 * 60 * 60 * 24))
-}
-
-export function CertificateRenderer({ data }: CertificateRendererProps) {
+export function CertificateRenderer({ data, certificateExpiryPolicy }: CertificateRendererProps) {
+  const now = useCertificateClock()
   const spec = data.spec || {}
   const status = data.status || {}
   const conditions = status.conditions || []
@@ -40,32 +39,32 @@ export function CertificateRenderer({ data }: CertificateRendererProps) {
   const notBefore = status.notBefore
   const renewalTime = status.renewalTime
 
-  const daysUntilExpiry = notAfter ? getDaysUntil(notAfter) : null
-  const isExpired = daysUntilExpiry !== null && daysUntilExpiry < 0
-  const expiresWithin7Days = daysUntilExpiry !== null && !isExpired && daysUntilExpiry <= 7
-  const expiresWithin30Days = daysUntilExpiry !== null && !isExpired && !expiresWithin7Days && daysUntilExpiry <= 30
+  const remaining = new Date(notAfter ?? '').getTime() - now
+  const expiry = getCertificateExpiry(data, certificateExpiryPolicy)
+  const isExpired = remaining <= 0
+  const expiresHigh = !isExpired && expiry.level === 'unhealthy'
+  const expiresWarning = !isExpired && expiry.level === 'degraded'
 
   // Progress bar calculation
   let progressPct = 0
   let progressColor = 'bg-green-500'
   if (notBefore && notAfter) {
-    const now = Date.now()
     const start = new Date(notBefore).getTime()
     const end = new Date(notAfter).getTime()
     progressPct = Math.min(100, Math.max(0, ((now - start) / (end - start)) * 100))
-    if (progressPct >= 90) {
+    if (expiry.level === 'unhealthy') {
       progressColor = 'bg-red-500'
-    } else if (progressPct >= 70) {
+    } else if (expiry.level === 'degraded') {
       progressColor = 'bg-yellow-500'
     }
   }
 
   // Expiry remaining text color
-  const expiryTextColor = isExpired || expiresWithin7Days
+  const expiryTextColor = isExpired || expiresHigh
     ? 'text-red-400'
-    : expiresWithin30Days
+    : expiresWarning
       ? 'text-yellow-400'
-      : 'text-green-400'
+      : expiry.level === 'unknown' ? 'text-theme-text-tertiary' : 'text-green-400'
 
   return (
     <>
@@ -86,18 +85,18 @@ export function CertificateRenderer({ data }: CertificateRendererProps) {
         />
       )}
 
-      {expiresWithin7Days && (
+      {expiresHigh && (
         <AlertBanner
           variant="error"
-          title={`Certificate expires in ${pluralize(daysUntilExpiry, 'day')}`}
+          title={`Certificate expires in ${formatDuration(remaining)}`}
           message="Check that cert-manager is renewing this certificate."
         />
       )}
 
-      {expiresWithin30Days && (
+      {expiresWarning && (
         <AlertBanner
           variant="warning"
-          title={`Certificate expires in ${pluralize(daysUntilExpiry, 'day')}`}
+          title={`Certificate expires in ${formatDuration(remaining)}`}
           message="Renewal should happen automatically before expiry."
         />
       )}
@@ -156,11 +155,11 @@ export function CertificateRenderer({ data }: CertificateRendererProps) {
               notAfter ? (
                 <span>
                   {formatDate(notAfter)}
-                  {daysUntilExpiry !== null && (
+                  {expiry.level !== 'unknown' && (
                     <span className={clsx('ml-2 text-xs', expiryTextColor)}>
                       {isExpired
-                        ? `(expired ${-daysUntilExpiry}d ago)`
-                        : `(${daysUntilExpiry}d remaining)`}
+                        ? `(${expiry.text})`
+                        : `(${expiry.text} remaining)`}
                     </span>
                   )}
                 </span>

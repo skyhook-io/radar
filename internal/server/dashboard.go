@@ -658,7 +658,7 @@ func (s *Server) getDashboardHealth(cache *k8s.ResourceCache, namespace string) 
 	// duplicate them. (Missing-ref Pod rows are intentionally kept: those
 	// catch pods stuck Pending on missing refs, which the pod-error loop
 	// above doesn't surface.)
-	detected := append(k8s.DetectProblems(cache, namespace), k8s.DetectMissingRefs(cache, namespace)...)
+	detected := append(k8s.DetectProblemsInScope(cache, namespace, k8s.NewDetectScope(s.certificateExpiryPolicy)), k8s.DetectMissingRefs(cache, namespace)...)
 	detected = append(detected, k8s.DetectMissingWebhookRefs(cache, k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery(), namespace)...)
 	// DetectProblems Pod rows duplicate REST's pod rollup above; skip them.
 	// DetectMissingRefs Pod rows are kept (different failure category — won't-

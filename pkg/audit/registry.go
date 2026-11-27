@@ -220,7 +220,7 @@ var CheckRegistry = map[string]CheckMeta{
 		ID:          "tlsCertificateExpiry",
 		Title:       "TLS certificate expiring",
 		Category:    CategoryReliability,
-		Description: "A kubernetes.io/tls Secret contains a parseable leaf certificate with fewer than 30 days remaining. Fewer than 7 days or an expired certificate is High severity. Missing or malformed leaf certificates and sealed-secrets encryption keys are not evaluated. This checks the stored leaf certificate, not whether a service is using it or whether renewal is failing.",
+		Description: "A kubernetes.io/tls Secret contains a leaf certificate nearing expiry. Warning periods adapt to actual certificate validity, capped at 30 days, and High is calculated automatically. Unknown validity retains 30-day warnings and 7-day High. Expired certificates remain High. Missing or malformed leaf certificates and sealed-secrets encryption keys are not evaluated. This checks the stored certificate, not whether renewal has failed or an endpoint serves it.",
 		Remediation: "Renew or replace the certificate through its issuing system. For controller-managed Secrets, inspect the controller's renewal status; do not hand-edit the Secret. Verify the serving endpoint uses the renewed certificate.",
 		References:  []Reference{refSecrets},
 	},

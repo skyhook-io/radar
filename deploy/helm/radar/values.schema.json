@@ -5,6 +5,25 @@
   "type": "object",
   "additionalProperties": true,
   "properties": {
+    "certificateExpiry": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "warningPercent": {
+          "type": [
+            "string",
+            "integer"
+          ],
+          "minimum": 1,
+          "maximum": 100,
+          "pattern": "^$|^auto$|^([1-9]|[1-9][0-9]|100)$",
+          "description": "Optional percentage of certificate validity remaining before warning (1-100), or auto. Empty uses the last third of validity. Warning periods are capped at 30 days; High is derived automatically."
+        }
+      }
+    },
     "audit": {
       "type": ["object", "null"],
       "additionalProperties": false,

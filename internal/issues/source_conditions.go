@@ -197,7 +197,7 @@ func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool
 			if ownedSubjects[resourceKey(gvr.Group, kind, u.GetNamespace(), u.GetName())] {
 				continue
 			}
-			if curated := detectCuratedConditionIssues(gvr, kind, u); len(curated) > 0 {
+			if curated := detectCuratedConditionIssues(gvr, kind, u, certificatePolicyForProvider(p)); len(curated) > 0 {
 				out = append(out, curated...)
 				continue
 			}
@@ -290,7 +290,7 @@ func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool
 	return foldVeleroLocationRejections(out)
 }
 
-func detectCuratedConditionIssues(gvr schema.GroupVersionResource, kind string, u *unstructured.Unstructured) []Issue {
+func detectCuratedConditionIssues(gvr schema.GroupVersionResource, kind string, u *unstructured.Unstructured, policies ...health.CertificateExpiryPolicy) []Issue {
 	switch gvr.Group {
 	case "cert-manager.io":
 		if kind == "Certificate" {
@@ -315,7 +315,7 @@ func detectCuratedConditionIssues(gvr schema.GroupVersionResource, kind string, 
 			return detectObjectConditionIssues(gvr, kind, u, SeverityCritical, "Established", "NamesAccepted")
 		}
 	case "postgresql.cnpg.io":
-		return detectCNPGIssues(gvr, kind, u)
+		return detectCNPGIssues(gvr, kind, u, policies...)
 	case agentSandboxGroup:
 		return detectSandboxSuspensionBlocked(gvr, kind, u)
 	case substrateGroup:

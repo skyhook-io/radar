@@ -55,6 +55,7 @@ import (
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 	bpaudit "github.com/skyhook-io/radar/pkg/audit"
 	"github.com/skyhook-io/radar/pkg/executioninsight"
+	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/ownership"
@@ -493,7 +494,7 @@ func (s *Server) handleAIGetResource(w http.ResponseWriter, r *http.Request) {
 		"resourceContext": rc,
 	}
 	if node, ok := obj.(*corev1.Node); ok && s.canRead(r, "", "nodes", "", "list") {
-		if provider := issues.NewCacheProvider(); provider != nil {
+		if provider := s.newIssueProvider(); provider != nil {
 			if report := provider.NodeCertificateReport(node.Name); report != nil && report.UID == string(node.UID) {
 				response["nodeCertificateReport"] = report
 			}
@@ -588,7 +589,7 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 	}
 	canonicalGroup := gvk.Group
 
-	issueSum := computeIssueSummaryForResource(cache, s.issueClusterScopedAccess(r), s.issueRelatedResourceAccess(r), s.issueSubjectAccess(r), s.issueEvidenceAccess(r), canonicalGroup, canonicalKind, namespace, name)
+	issueSum := computeIssueSummaryForResource(cache, s.issueClusterScopedAccess(r), s.issueRelatedResourceAccess(r), s.issueSubjectAccess(r), s.issueEvidenceAccess(r), canonicalGroup, canonicalKind, namespace, name, s.certificateExpiryPolicy)
 	auditSum := s.computeAuditSummaryForResource(r, cache, canonicalGroup, canonicalKind, namespace, name)
 
 	scheduling := schedulinginsight.ForResource(obj, resourcecontext.TierBasic)
@@ -614,7 +615,7 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 			k8s.FindContainerCompletionSplitForObject(cache, obj, time.Now()),
 		),
 		ServiceBackends: k8s.ServiceBackendLookup{Cache: cache},
-		TemplateDivergence: issues.NewCacheProvider().TemplateDivergence(obj, s.issueClusterScopedAccess(r), s.issueRelatedResourceAccess(r), func(verb, group, resource, namespace string) bool {
+		TemplateDivergence: s.newIssueProvider().TemplateDivergence(obj, s.issueClusterScopedAccess(r), s.issueRelatedResourceAccess(r), func(verb, group, resource, namespace string) bool {
 			return s.canRead(r, group, resource, namespace, verb)
 		}),
 	}
@@ -671,19 +672,19 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 // summary silently collapses to nil.
 //
 // Returns nil when no issues match — Build then omits the IssueSummary field.
-func computeIssueSummaryForResource(cache *k8s.ResourceCache, canReadClusterScoped func(kind, group string) bool, canReadRelated func(issues.Ref) bool, canReadSubject func(issues.Ref) bool, canReadEvidence func(issues.EvidenceRead) bool, group, kind, namespace, name string) *resourcecontext.IssueSummary {
-	sum, _ := computeIssueSummaryAndRows(cache, canReadClusterScoped, canReadRelated, canReadSubject, canReadEvidence, group, kind, namespace, name, false)
+func computeIssueSummaryForResource(cache *k8s.ResourceCache, canReadClusterScoped func(kind, group string) bool, canReadRelated func(issues.Ref) bool, canReadSubject func(issues.Ref) bool, canReadEvidence func(issues.EvidenceRead) bool, group, kind, namespace, name string, policies ...health.CertificateExpiryPolicy) *resourcecontext.IssueSummary {
+	sum, _ := computeIssueSummaryAndRows(cache, canReadClusterScoped, canReadRelated, canReadSubject, canReadEvidence, group, kind, namespace, name, false, policies...)
 	return sum
 }
 
 // computeIssueSummaryAndRows additionally returns the matched rows sorted by
 // (severity desc, reason asc) — the diagnose health frame shows the actual
 // lines, not just the rollup.
-func computeIssueSummaryAndRows(cache *k8s.ResourceCache, canReadClusterScoped func(kind, group string) bool, canReadRelated func(issues.Ref) bool, canReadSubject func(issues.Ref) bool, canReadEvidence func(issues.EvidenceRead) bool, group, kind, namespace, name string, includeFacts bool) (*resourcecontext.IssueSummary, []issues.Issue) {
+func computeIssueSummaryAndRows(cache *k8s.ResourceCache, canReadClusterScoped func(kind, group string) bool, canReadRelated func(issues.Ref) bool, canReadSubject func(issues.Ref) bool, canReadEvidence func(issues.EvidenceRead) bool, group, kind, namespace, name string, includeFacts bool, policies ...health.CertificateExpiryPolicy) (*resourcecontext.IssueSummary, []issues.Issue) {
 	if cache == nil {
 		return nil, nil
 	}
-	provider := issues.NewCacheProvider()
+	provider := issues.NewCacheProvider(policies...)
 	if provider == nil {
 		return nil, nil
 	}

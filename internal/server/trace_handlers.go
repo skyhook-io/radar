@@ -5,7 +5,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/internal/trace"
@@ -76,7 +75,7 @@ func (s *Server) handleTrace(w http.ResponseWriter, r *http.Request) {
 		Cache:     k8s.GetResourceCache(),
 		Dynamic:   k8s.GetDynamicResourceCache(),
 		Discovery: k8s.GetResourceDiscovery(),
-		Issues:    issues.NewCacheProvider(),
+		Issues:    s.newIssueProvider(),
 		IssueAccess: trace.IssueAccess{
 			CanReadClusterScoped: s.issueClusterScopedAccess(r),
 			CanReadRelated:       s.issueRelatedResourceAccess(r),

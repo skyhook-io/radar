@@ -1,3 +1,4 @@
+import type { CertificateExpiryWindows } from '../../types'
 import { dedupeResourceRefs } from '../../utils/resource-refs'
 import { orderById } from '../shared/order-by-id'
 import { pluralize } from '../../utils/pluralize'
@@ -238,6 +239,7 @@ type WorkloadViewBaseProps = {
   relationships?: Relationships
   /** TLS certificate info for secrets */
   certificateInfo?: any
+  certificateExpiryPolicy?: CertificateExpiryWindows
   /** Decoded request and certificate for CertificateSigningRequest detail responses */
   certificateSigningRequest?: CertificateSigningRequestDetails
   /** HPA diagnosis for HorizontalPodAutoscaler detail responses */
@@ -533,6 +535,7 @@ export function WorkloadView({
   resource,
   relationships,
   certificateInfo,
+  certificateExpiryPolicy,
   certificateSigningRequest,
   hpaDiagnosis,
   scalerDiagnostics,
@@ -1300,6 +1303,7 @@ export function WorkloadView({
                 relationships={rendererRelationships}
                 trackedBy={trackedBy}
                 certificateInfo={certificateInfo}
+                certificateExpiryPolicy={certificateExpiryPolicy}
                 certificateSigningRequest={certificateSigningRequest}
                 hpaDiagnosis={hpaDiagnosis}
                 scalerDiagnostics={scalerDiagnostics}
@@ -1545,6 +1549,7 @@ export function WorkloadView({
               relationships={rendererRelationships}
               trackedBy={trackedBy}
               certificateInfo={certificateInfo}
+              certificateExpiryPolicy={certificateExpiryPolicy}
               certificateSigningRequest={certificateSigningRequest}
               hpaDiagnosis={hpaDiagnosis}
               scalerDiagnostics={scalerDiagnostics}
@@ -2238,6 +2243,7 @@ function InfoTab({
   relationships,
   trackedBy,
   certificateInfo,
+  certificateExpiryPolicy,
   certificateSigningRequest,
   hpaDiagnosis,
   scalerDiagnostics,
@@ -2277,6 +2283,7 @@ function InfoTab({
   relationships?: Relationships
   trackedBy?: string
   certificateInfo?: any
+  certificateExpiryPolicy?: CertificateExpiryWindows
   certificateSigningRequest?: CertificateSigningRequestDetails
   hpaDiagnosis?: HPADiagnosis
   scalerDiagnostics?: ScalerDiagnosis[]
@@ -2334,6 +2341,7 @@ function InfoTab({
           relationships={relationships}
           trackedBy={trackedBy}
           certificateInfo={certificateInfo}
+          certificateExpiryPolicy={certificateExpiryPolicy}
           certificateSigningRequest={certificateSigningRequest}
           hpaDiagnosis={hpaDiagnosis}
           scalerDiagnostics={scalerDiagnostics}

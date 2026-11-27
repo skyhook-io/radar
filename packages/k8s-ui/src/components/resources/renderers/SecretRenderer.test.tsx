@@ -136,6 +136,30 @@ describe('SecretRenderer value edit', () => {
 })
 
 describe('Secret certificate bundles', () => {
+  it('uses supplied windows as time passes and clears the warning after rotation', async () => {
+    vi.useFakeTimers()
+    try {
+      const start = Date.parse('2026-11-25T12:00:00Z')
+      vi.setSystemTime(start)
+      const cert = { subject: 'short.example', issuer: 'Test CA', serialNumber: '1', keyType: 'ECDSA', notBefore: new Date(start).toISOString(), notAfter: new Date(start + 600_000).toISOString(), daysLeft: 0,
+        expiryPolicy: { warningSeconds: 180, highSeconds: 60, liveWarningSeconds: 30 } }
+      const data = { ...secret, type: 'kubernetes.io/tls' }
+      await act(async () => root.render(<SecretRenderer data={data} certificateInfo={{ certificates: [cert] }} />))
+      expect(element.textContent).not.toContain('Certificate expires in')
+      await act(async () => vi.advanceTimersByTime(480_000))
+      expect(element.textContent).toContain('Certificate expires in 2m')
+      expect(element.querySelector('.text-warning-text')).not.toBeNull()
+      await act(async () => vi.advanceTimersByTime(90_000))
+      expect(element.textContent).toContain('Certificate expires in 30s')
+      expect(element.querySelector('.text-semantic-error')).not.toBeNull()
+      await act(async () => vi.advanceTimersByTime(30_000))
+      expect(element.textContent).toContain('Certificate has expired')
+      const rotated = { ...cert, serialNumber: '2', notAfter: new Date(Date.now() + 3_600_000).toISOString() }
+      await act(async () => root.render(<SecretRenderer data={data} certificateInfo={{ certificates: [rotated] }} />))
+      expect(element.textContent).not.toContain('Certificate has expired')
+      expect(element.textContent).not.toContain('Certificate expires in')
+    } finally { vi.useRealTimers() }
+  })
   const leaf = {
     subject: 'demo.example', organizations: ['Demo'], issuer: 'Demo CA', serialNumber: '01', keyType: 'Ed25519',
     notBefore: '2025-01-01T00:00:00Z', notAfter: '2026-01-01T00:00:00Z', daysLeft: -2, expired: true,

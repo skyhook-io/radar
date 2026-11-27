@@ -84,7 +84,7 @@ func (m *capacityIssueMemo) clear() {
 
 func (s *Server) capacityIssuesForRequest(r *http.Request) capacityIssueProjection {
 	contextName := k8s.GetContextName()
-	provider := issues.NewCacheProvider()
+	provider := s.newIssueProvider()
 	if provider == nil {
 		return newCapacityIssueProjection(nil, false)
 	}

@@ -15,8 +15,9 @@ import (
 // Config holds startup configuration persisted across restarts.
 // Values are used as flag defaults; explicit CLI flags always take precedence.
 type Config struct {
-	Kubeconfig     string   `json:"kubeconfig,omitempty"`
-	KubeconfigDirs []string `json:"kubeconfigDirs,omitempty"`
+	CertificateWarningPercent string   `json:"certificateWarningPercent,omitempty"`
+	Kubeconfig                string   `json:"kubeconfig,omitempty"`
+	KubeconfigDirs            []string `json:"kubeconfigDirs,omitempty"`
 	// nil = on. No CLI equivalent, deliberately — that would put a Desktop
 	// switch in the path of a command typed after `kubectl config use-context`.
 	RestoreLastDesktopContext *bool    `json:"restoreLastDesktopContext,omitempty"`

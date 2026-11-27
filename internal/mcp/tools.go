@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/skyhook-io/radar/internal/audit"
 	"io"
 	"log"
 	"regexp"
@@ -2982,7 +2983,7 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 	// etc.) as well as workload/HPA/CronJob/Node ones. The dashboard pod
 	// loop above is the canonical source for pod problems, so skip Pod
 	// here to avoid the same failing pod appearing twice.
-	for _, p := range k8s.DetectProblems(cache, namespace) {
+	for _, p := range k8s.DetectProblemsInScope(cache, namespace, k8s.NewDetectScope(audit.CertificateExpiryPolicyFromContext(ctx))) {
 		if p.Kind == "Pod" {
 			continue
 		}
@@ -3470,7 +3471,7 @@ func countResources(cache *k8s.ResourceCache, namespace string, d *mcpDashboard,
 }
 
 func handleIssuesTool(ctx context.Context, _ *mcp.CallToolRequest, input issuesInput) (*mcp.CallToolResult, any, error) {
-	provider := issues.NewCacheProvider()
+	provider := newIssueProvider(ctx)
 	if provider == nil {
 		return nil, nil, errNotConnected()
 	}

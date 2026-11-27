@@ -14,14 +14,16 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	bp "github.com/skyhook-io/radar/pkg/audit"
 	"github.com/skyhook-io/radar/pkg/gitops"
+	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
 // RunOptions provides optional data sources for checks that need them.
 type RunOptions struct {
-	Scope          *ReadScope
-	ClusterVersion string   // e.g. "1.30"
-	ServedAPIs     []string // e.g. ["apps/v1", "batch/v1beta1"]
+	CertificateExpiryPolicy health.CertificateExpiryPolicy
+	Scope                   *ReadScope
+	ClusterVersion          string   // e.g. "1.30"
+	ServedAPIs              []string // e.g. ["apps/v1", "batch/v1beta1"]
 }
 
 // RunFromCache fetches resources from Radar's cache and runs all best-practice
@@ -43,6 +45,9 @@ func RunFromCache(cache *k8s.ResourceCache, namespaces []string, opts *RunOption
 	// Read consumers after storage coverage checks, so a snapshot taken before
 	// initial informer sync cannot be treated as evidence of absence.
 	input := CollectTypedInput(cache, namespaces)
+	if opts != nil {
+		input.CertificateExpiryPolicy = opts.CertificateExpiryPolicy
+	}
 	input.PersistentVolumeClaims = storage.PersistentVolumeClaims
 	input.PersistentVolumes = storage.PersistentVolumes
 	input.StorageClasses = storage.StorageClasses

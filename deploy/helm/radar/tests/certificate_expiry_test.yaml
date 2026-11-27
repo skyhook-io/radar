@@ -1,0 +1,33 @@
+suite: Automatic certificate expiry with one optional setting
+templates:
+  - deployment.yaml
+tests:
+  - it: leaves automatic defaults and environment values untouched
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --certificate-warning-percent=720h
+  - it: handles old releases without certificate values
+    set:
+      certificateExpiry: null
+    asserts:
+      - isKind:
+          of: Deployment
+  - it: renders one optional warning override
+    set:
+      certificateExpiry.warningPercent: 20
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --certificate-warning-percent=20
+  - it: configures Cloud-connected agents without OSS audit settings
+    set:
+      cloud.enabled: true
+      cloud.token: test-token
+      cloud.url: wss://hub.example.com
+      cloud.clusterName: example
+      certificateExpiry.warningPercent: 20
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --certificate-warning-percent=20

@@ -18,6 +18,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/app"
 	"github.com/skyhook-io/radar/internal/argocd"
+	"github.com/skyhook-io/radar/internal/audit"
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/config"
@@ -151,6 +152,7 @@ func main() {
 	flag.Var(promHeadersFromEnv, "prometheus-header-from-env", "HTTP header to send with Prometheus requests, sourced from an env var, e.g. 'Authorization=PROMETHEUS_TOKEN' (repeatable).")
 	beylaJobSelector := flag.String("beyla-job-selector", "", `PromQL matcher fragment for Beyla Live Traffic, e.g. 'job=~"my-beyla.*"' (empty = *beyla* or *alloy* jobs). Workload charts use this override only with an explicit Prometheus scope flag and accept one job equality or regex matcher; automatic workload matching discovers custom jobs without it.`)
 	// MCP server
+	certificateFlags := config.RegisterCertificateExpiryFlags(flag.CommandLine, fileCfg)
 	mcpFlags := config.RegisterMCPFlags(flag.CommandLine, fileCfg)
 	mcpCatalogStdio := flag.Bool("mcp-catalog-stdio", false, "Start only the MCP catalog over stdio for registry/inspector introspection; skips Kubernetes initialization")
 	mcpCatalogOnly := flag.Bool("mcp-catalog-only", false, "Start only the MCP endpoint for registry/inspector catalog introspection; skips Kubernetes initialization")
@@ -372,6 +374,10 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	certificatePolicy, err := certificateFlags.Resolve()
+	if err != nil {
+		log.Fatal(err)
+	}
 	mcpMode, err := mcpFlags.Resolve()
 	if err != nil {
 		log.Fatal(err)
@@ -425,6 +431,7 @@ func main() {
 	}
 
 	cfg := app.AppConfig{
+		CertificateExpiryPolicy:     certificatePolicy,
 		Kubeconfig:                  resolvedKubeconfig,
 		KubeconfigDirs:              resolvedKubeconfigDirs,
 		Namespace:                   resolvedNamespace,
@@ -531,7 +538,7 @@ func main() {
 		log.Printf("MCP catalog stdio mode enabled (%s): skipping Kubernetes initialization", mode)
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
-		if err := mcppkg.RunStdioMode(ctx, mcpMode.ReadOnly, !cfg.AuthConfig.Enabled() && !cfg.CloudTunnelConfigured); err != nil && !errors.Is(err, context.Canceled) {
+		if err := mcppkg.RunStdioMode(audit.WithCertificateExpiryPolicy(ctx, cfg.CertificateExpiryPolicy), mcpMode.ReadOnly, !cfg.AuthConfig.Enabled() && !cfg.CloudTunnelConfigured); err != nil && !errors.Is(err, context.Canceled) {
 			log.Fatalf("MCP stdio server failed: %v", err)
 		}
 		return
