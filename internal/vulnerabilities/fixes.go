@@ -48,7 +48,7 @@ func (j *rollup) fixes(ctx context.Context, f Filter) ([]Fix, error) {
 		}
 		r := agg.report
 		workloads := sortedWorkloads(agg.workloads)
-		if !m.workloadKept(workloads) {
+		if !m.workloadKept(workloads) || !m.imageKept(r) {
 			continue
 		}
 		imageWorkloads[r.imageID] = workloads

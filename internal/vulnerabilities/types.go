@@ -87,6 +87,11 @@ type Finding struct {
 	// or no listed release is above the installed one; FixedVersion then
 	// stands as the scanner wrote it.
 	FixTarget string `json:"fixTarget,omitempty"`
+	// PackageURL is the scanner's purl for the package version.
+	PackageURL string `json:"packageUrl,omitempty"`
+	// publishedAt and lastModified are the scanner database's dates for the
+	// CVE (zero when it doesn't say): the CSV's, and CVE.PublishedAt's source.
+	publishedAt, lastModified time.Time
 	// ecosystem is how the package's versions are ordered (ecosystemOf);
 	// two packages share a name only within one ecosystem.
 	ecosystem string
@@ -151,6 +156,11 @@ type Image struct {
 	Image  string `json:"image"`
 	Digest string `json:"digest,omitempty"`
 	OS     string `json:"os,omitempty"`
+	// OSEndOfLife is the scanner's word that the OS release no longer gets
+	// security updates (Trivy's eosl).
+	OSEndOfLife bool `json:"osEndOfLife,omitempty"`
+	// Scanner wrote the image's newest report; absent when it names none.
+	Scanner *Scanner `json:"scanner,omitempty"`
 	// ScannedAt is when the report was last updated, or created when it
 	// never was.
 	ScannedAt time.Time `json:"scannedAt"`
@@ -200,6 +210,11 @@ type CVE struct {
 	FixableImages int    `json:"fixableImages"`
 	Title         string `json:"title,omitempty"`
 	Link          string `json:"link,omitempty"`
+	// PublishedAt is the earliest publication date among its findings; not
+	// when it was detected.
+	PublishedAt *time.Time `json:"publishedAt,omitempty"`
+	// lastModified is the latest of its findings', for the CSV.
+	lastModified time.Time
 	// Images and Workloads count every image and distinct workload with it.
 	Images    int `json:"images"`
 	Workloads int `json:"workloads"`
@@ -273,9 +288,10 @@ type WorkloadContainer struct {
 
 // CleanImage is a running image whose report has no findings.
 type CleanImage struct {
-	ID        string    `json:"id"`
-	Image     string    `json:"image"`
-	ScannedAt time.Time `json:"scannedAt"`
+	ID          string    `json:"id"`
+	Image       string    `json:"image"`
+	OSEndOfLife bool      `json:"osEndOfLife,omitempty"`
+	ScannedAt   time.Time `json:"scannedAt"`
 	// Workloads lists at most MaxWorkloadsPerRow of WorkloadsTotal.
 	Workloads      []WorkloadRef         `json:"workloads"`
 	WorkloadsTotal int                   `json:"workloadsTotal"`
@@ -289,6 +305,12 @@ type CleanImage struct {
 	// read every route kind (Exposure.Gaps): no route seen there is not
 	// "not exposed".
 	ExposureUnknown bool `json:"exposureUnknown,omitempty"`
+}
+
+// Scanner names the tool and version that wrote a report.
+type Scanner struct {
+	Name    string `json:"name"`
+	Version string `json:"version,omitempty"`
 }
 
 // Unscanned is a running image no report covers yet. Workloads lists at
@@ -322,6 +344,9 @@ type Summary struct {
 	ImagesClean        int `json:"imagesClean"`
 	ImagesUnscanned    int `json:"imagesUnscanned"`
 	ImagesWithCritical int `json:"imagesWithCritical"`
+	// ImagesOSEndOfLife counts scanned images whose OS the scanner reports as
+	// end of life. Always sent, so its presence says the eol filter is read.
+	ImagesOSEndOfLife int `json:"imagesOsEndOfLife"`
 	// FixableCriticalHighCVEs counts distinct Critical and High CVE IDs that
 	// have a fixed version in at least one affected image.
 	FixableCriticalHighCVEs     int `json:"fixableCriticalHighCves"`
@@ -414,6 +439,10 @@ type Filter struct {
 	// cluster runs (By workload: those workloads), still listing every
 	// workload that runs them.
 	ExposedOnly bool
+	// OSEndOfLifeOnly keeps the scanned images whose OS the scanner reports
+	// as end of life (By workload: the workloads that run one). Unscanned
+	// images stay, as under a severity filter: their OS is unknown.
+	OSEndOfLifeOnly bool
 }
 
 const (

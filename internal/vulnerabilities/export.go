@@ -34,14 +34,17 @@ var exportLead = []string{"cluster", "scanned", "status"}
 // ExportColumns are each view's CSV header. Radar Cloud maps an agent's
 // columns by these names, so renaming one is a breaking change there.
 var ExportColumns = map[View][]string{
-	ViewImage:    slices.Concat(exportLead, []string{"image", "digest", "os", "critical", "high", "medium", "low", "unrated", "with_a_fix", "running_in", "exposed_workloads"}),
-	ViewFix:      slices.Concat(exportLead, []string{"package", "type", "installed", "upgrade_to", "fixed_versions", "critical", "high", "medium", "low", "unrated", "cves", "images", "workloads", "image_names", "running_in", "exposed_workloads"}),
-	ViewCVE:      slices.Concat(exportLead, []string{"cve", "title", "severity", "score", "packages", "installed", "fixed_versions", "fix", "images", "workloads", "image_names", "running_in", "link", "exposed_workloads"}),
+	ViewImage: slices.Concat(exportLead, []string{"image", "digest", "os", "critical", "high", "medium", "low", "unrated", "with_a_fix", "running_in", "exposed_workloads", "os_end_of_life", "scanner", "scanner_version"}),
+	ViewFix:   slices.Concat(exportLead, []string{"package", "type", "installed", "upgrade_to", "fixed_versions", "critical", "high", "medium", "low", "unrated", "cves", "images", "workloads", "image_names", "running_in", "exposed_workloads"}),
+	// published, last_modified and days_since_published are the scanner
+	// database's dates for the CVE, not when it was found here.
+	ViewCVE:      slices.Concat(exportLead, []string{"cve", "title", "severity", "score", "packages", "installed", "fixed_versions", "fix", "images", "workloads", "image_names", "running_in", "link", "exposed_workloads", "published", "last_modified", "days_since_published"}),
 	ViewWorkload: slices.Concat(exportLead, []string{"kind", "namespace", "workload", "critical", "high", "medium", "low", "unrated", "with_a_fix", "containers", "exposed_workloads"}),
 	// One row per finding, image and workload container, for a compliance
 	// tracker (a POA&M): exposure is "exposed", "unknown", or empty when
 	// Radar sees no route.
-	ViewFindings: slices.Concat(exportLead, []string{"cve", "severity", "score", "title", "package", "package_type", "installed_version", "fixed_version", "fix_target", "fix_available", "image", "digest", "namespace", "workload_kind", "workload", "container", "exposure", "routes", "link"}),
+	ViewFindings: slices.Concat(exportLead, []string{"cve", "severity", "score", "title", "package", "package_type", "installed_version", "fixed_version", "fix_target", "fix_available", "image", "digest", "namespace", "workload_kind", "workload", "container", "exposure", "routes", "link",
+		"published", "last_modified", "days_since_published", "package_url", "os", "os_end_of_life", "scanner", "scanner_version"}),
 }
 
 // exportExtras is what an export's CSV needs beyond the wire shape: scan
@@ -59,6 +62,10 @@ type exportExtras struct {
 
 type imageMeta struct {
 	digest, os string
+	// osEOL is the os_end_of_life cell: yes, no, or blank when the report
+	// names no OS.
+	osEOL   string
+	scanner Scanner
 	// scanned is the oldest of the reports merged for the image: the row
 	// is only as current as its stalest input.
 	scanned time.Time
@@ -74,9 +81,46 @@ type unreadImage struct {
 func (j *rollup) imageMetas() map[string]imageMeta {
 	out := make(map[string]imageMeta, len(j.images))
 	for id, agg := range j.images {
-		out[id] = imageMeta{digest: agg.report.digest, os: agg.report.os, scanned: agg.oldestScan()}
+		r := agg.report
+		meta := imageMeta{digest: r.digest, os: r.os, scanned: agg.oldestScan()}
+		if r.osKnown {
+			meta.osEOL = yesNo(r.osEOL)
+		}
+		meta.scanner = r.scanner
+		out[id] = meta
 	}
 	return out
+}
+
+// imageTail is the image view's last cells: OS end of life and scanner.
+func (m imageMeta) imageTail() []string {
+	return []string{m.osEOL, m.scanner.Name, m.scanner.Version}
+}
+
+func yesNo(b bool) string {
+	if b {
+		return "yes"
+	}
+	return "no"
+}
+
+// now is the clock days_since_published counts to; a var for tests.
+var now = time.Now
+
+// dateCells are a CVE's published, last_modified and days_since_published.
+func dateCells(published, lastModified time.Time) []string {
+	if published.IsZero() {
+		return []string{"", timeCell(lastModified), ""}
+	}
+	days := max(0, int(now().Sub(published).Hours()/24))
+	return []string{timeCell(published), timeCell(lastModified), strconv.Itoa(days)}
+}
+
+func cvePublished(c CVE) time.Time {
+	if c.PublishedAt == nil {
+		return time.Time{}
+	}
+	return *c.PublishedAt
 }
 
 // oldestScan is the oldest of the reports merged for the image.
@@ -102,7 +146,7 @@ func (j *rollup) unreadRows(f Filter) []unreadImage {
 			continue
 		}
 		workloads := sortedWorkloads(agg.workloads)
-		if !m.workloadKept(workloads) {
+		if !m.workloadKept(workloads) || !m.imageKept(agg.report) {
 			continue
 		}
 		if !j.charge(len(workloads)) {
@@ -248,20 +292,20 @@ func WriteCSV(ctx context.Context, resp Response, f Filter, cluster string) ([]b
 			if img.FindingsUnread {
 				status, counts = StatusNotRead, blank(6)
 			}
-			if err := put(meta.scanned, status, slices.Concat([]string{img.Image, meta.digest, meta.os}, counts, []string{join(workloadCells(img.Workloads, true)), exposedCell(img.Exposed, img.Workloads)})...); err != nil {
+			if err := put(meta.scanned, status, slices.Concat([]string{img.Image, meta.digest, meta.os}, counts, []string{join(workloadCells(img.Workloads, true)), exposedCell(img.Exposed, img.Workloads)}, meta.imageTail())...); err != nil {
 				return nil, err
 			}
 		}
 		if unfiltered {
 			for _, c := range resp.Clean {
 				meta := x.images[c.ID]
-				if err := put(meta.scanned, StatusOK, slices.Concat([]string{c.Image, meta.digest, meta.os}, countCells(Counts{}, Counts{}), []string{join(workloadCells(c.Workloads, true)), exposedCell(c.Exposed, c.Workloads)})...); err != nil {
+				if err := put(meta.scanned, StatusOK, slices.Concat([]string{c.Image, meta.digest, meta.os}, countCells(Counts{}, Counts{}), []string{join(workloadCells(c.Workloads, true)), exposedCell(c.Exposed, c.Workloads)}, meta.imageTail())...); err != nil {
 					return nil, err
 				}
 			}
 		}
 		for _, u := range resp.Unscanned {
-			if err := put(time.Time{}, StatusNotScanned, slices.Concat([]string{u.Image}, blank(8), []string{join(workloadCells(u.Workloads, true)), exposedCell(u.Exposed, u.Workloads)})...); err != nil {
+			if err := put(time.Time{}, StatusNotScanned, slices.Concat([]string{u.Image}, blank(8), []string{join(workloadCells(u.Workloads, true)), exposedCell(u.Exposed, u.Workloads)}, blank(3))...); err != nil {
 				return nil, err
 			}
 		}
@@ -275,7 +319,7 @@ func WriteCSV(ctx context.Context, resp Response, f Filter, cluster string) ([]b
 				continue
 			}
 			meta := x.images[u.id]
-			if err := put(meta.scanned, StatusNotRead, slices.Concat([]string{u.image, meta.digest, meta.os}, blank(6), []string{join(workloadCells(u.workloads, true)), exposedCell(u.exposed, u.workloads)})...); err != nil {
+			if err := put(meta.scanned, StatusNotRead, slices.Concat([]string{u.image, meta.digest, meta.os}, blank(6), []string{join(workloadCells(u.workloads, true)), exposedCell(u.exposed, u.workloads)}, meta.imageTail())...); err != nil {
 				return nil, err
 			}
 		}
@@ -320,9 +364,10 @@ func WriteCSV(ctx context.Context, resp Response, f Filter, cluster string) ([]b
 			if c.Score != nil {
 				score = strconv.FormatFloat(*c.Score, 'f', 1, 64)
 			}
-			if err := put(scanned, StatusOK,
+			if err := put(scanned, StatusOK, slices.Concat([]string{
 				c.ID, c.Title, severityLabel(c.Severity), score, join(c.Packages), join(distinct(installed)), join(distinct(fixed)), cveFix(c),
-				strconv.Itoa(c.Images), strconv.Itoa(c.Workloads), join(images), join(distinctWorkloadCells(workloads)), c.Link, exposedCell(c.Exposed, workloads)); err != nil {
+				strconv.Itoa(c.Images), strconv.Itoa(c.Workloads), join(images), join(distinctWorkloadCells(workloads)), c.Link, exposedCell(c.Exposed, workloads),
+			}, dateCells(cvePublished(c), c.lastModified))...); err != nil {
 				return nil, err
 			}
 		}
@@ -461,15 +506,16 @@ func writeFindings(ctx context.Context, resp Response, f Filter, put func(time.T
 		}
 		return out, nil
 	}
-	status := func(scanned time.Time, status, image, digest string, workloads []WorkloadRef, exposed []ExposedWorkload) error {
+	status := func(scanned time.Time, status, image string, meta imageMeta, workloads []WorkloadRef, exposed []ExposedWorkload) error {
 		kept, err := containers(workloads, exposed)
 		if err != nil {
 			return err
 		}
 		for _, c := range kept {
 			if err := put(scanned, status, named(cols, map[string]string{
-				"image": image, "digest": digest, "namespace": c.w.Namespace, "workload_kind": c.w.Kind, "workload": c.w.Name,
+				"image": image, "digest": meta.digest, "namespace": c.w.Namespace, "workload_kind": c.w.Kind, "workload": c.w.Name,
 				"container": c.w.Container, "exposure": c.exposure, "routes": c.routes,
+				"os": meta.os, "os_end_of_life": meta.osEOL, "scanner": meta.scanner.Name, "scanner_version": meta.scanner.Version,
 			})...); err != nil {
 				return err
 			}
@@ -481,7 +527,7 @@ func writeFindings(ctx context.Context, resp Response, f Filter, put func(time.T
 		listed[img.ID] = true
 		meta := x.images[img.ID]
 		if img.FindingsUnread {
-			if err := status(meta.scanned, StatusNotRead, img.Image, meta.digest, img.Workloads, img.Exposed); err != nil {
+			if err := status(meta.scanned, StatusNotRead, img.Image, meta, img.Workloads, img.Exposed); err != nil {
 				return err
 			}
 			continue
@@ -502,18 +548,20 @@ func writeFindings(ctx context.Context, resp Response, f Filter, put func(time.T
 			if fd.FixedVersion != "" {
 				fixAvailable = "yes"
 			}
+			dates := dateCells(fd.publishedAt, fd.lastModified)
 			for _, c := range kept {
 				if err := put(meta.scanned, StatusOK,
 					fd.ID, severityLabel(fd.Severity), score, fd.Title, fd.Package, ecosystemLabel(cmp.Or(fd.PackageType, fd.ecosystem)),
 					fd.InstalledVersion, fd.FixedVersion, fd.FixTarget, fixAvailable,
-					img.Image, meta.digest, c.w.Namespace, c.w.Kind, c.w.Name, c.w.Container, c.exposure, c.routes, fd.Link); err != nil {
+					img.Image, meta.digest, c.w.Namespace, c.w.Kind, c.w.Name, c.w.Container, c.exposure, c.routes, fd.Link,
+					dates[0], dates[1], dates[2], fd.PackageURL, meta.os, meta.osEOL, meta.scanner.Name, meta.scanner.Version); err != nil {
 					return err
 				}
 			}
 		}
 	}
 	for _, u := range resp.Unscanned {
-		if err := status(time.Time{}, StatusNotScanned, u.Image, "", u.Workloads, u.Exposed); err != nil {
+		if err := status(time.Time{}, StatusNotScanned, u.Image, imageMeta{}, u.Workloads, u.Exposed); err != nil {
 			return err
 		}
 	}
@@ -523,7 +571,7 @@ func writeFindings(ctx context.Context, resp Response, f Filter, put func(time.T
 			continue
 		}
 		meta := x.images[u.id]
-		if err := status(meta.scanned, StatusNotRead, u.image, meta.digest, u.workloads, u.exposed); err != nil {
+		if err := status(meta.scanned, StatusNotRead, u.image, meta, u.workloads, u.exposed); err != nil {
 			return err
 		}
 	}
