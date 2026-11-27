@@ -597,6 +597,9 @@ function noFeedNote(name: 'KEV' | 'EPSS', flag: string, what: string, feed: Vuln
   if (feed.origin === 'mirror' || feed.origin === 'file') {
     return `Radar couldn't read ${what} from its configured ${feed.origin}${feed.error ? ` (${feed.error})` : ''}. Check ${setting}.`
   }
+  // The public server answered, so this Radar does reach it: a passing
+  // failure, which Radar retries hourly, not a network without internet.
+  if (feed.error?.includes('answered HTTP')) return `Radar couldn't download ${what} just now (${feed.error}). It tries again within the hour.`
   return `This Radar can't reach the internet to download ${what}. To ${adds}, set ${setting} to an https mirror inside your network, or a file.`
 }
 

@@ -148,6 +148,10 @@ describe('without a feed', () => {
     expect(feedNote('KEV', { state: 'disabled' })).toContain('turned off')
     expect(feedNote('KEV', { state: 'disabled', downloadsOff: true })).toBe("Feed downloads are turned off on this Radar. To mark the CVEs that are known to be exploited, put a copy of CISA's Known Exploited Vulnerabilities catalog in a file and set vulnerabilities.kevFeed (Helm) or --kev-feed to its path.")
     expect(feedNote('KEV', { state: 'unavailable', origin: 'mirror', error: 'HTTP 404' })).toContain('HTTP 404')
+    // The public server answering an error is not a network without internet.
+    const answered = feedNote('KEV', { state: 'unavailable', origin: 'public', error: 'the feed answered HTTP 503' })!
+    expect(answered).not.toContain('internet')
+    expect(answered).toContain('HTTP 503')
     expect(intelNotes({ kev: { state: 'unavailable', origin: 'public' }, epss: { state: 'disabled' } })).toEqual([])
   })
   it('offers Refresh only where a reload could change something', () => {
