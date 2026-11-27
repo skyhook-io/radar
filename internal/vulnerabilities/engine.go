@@ -1307,6 +1307,13 @@ func (j *rollup) workloads(f Filter) (rows, clean, unscanned []Workload) {
 	rows = []Workload{}
 	clean = []Workload{}
 	worst := map[WorkloadRef]int{}
+	// imageMatches memoizes whether an image holds a finding the filters
+	// keep, which workloads sharing a base image would otherwise each scan.
+	type imageMatch struct {
+		id         string
+		rowMatched bool
+	}
+	imageMatches := map[imageMatch]bool{}
 	for _, ref := range order {
 		a := byRef[ref]
 		if !m.workloadKept([]WorkloadRef{ref}) {
@@ -1324,15 +1331,22 @@ func (j *rollup) workloads(f Filter) (rows, clean, unscanned []Workload) {
 			}
 		}
 		rowMatched := m.rowMatches(strings.Join(images, " "), []WorkloadRef{ref})
-		// The workload's date is its containers' that hold a finding the
-		// filters keep, so a Critical filter doesn't date the row by a
-		// sidecar with only Low findings.
+		// The workload's date is its containers' whose image the filters
+		// keep and that hold a finding they keep, so a Critical filter
+		// doesn't date the row by a sidecar with only Low findings.
 		var since time.Time
 		for _, c := range a.row.Containers {
 			if c.RunningSince == nil || c.Counts == nil || totalCount(*c.Counts) == 0 {
 				continue
 			}
-			if slices.ContainsFunc(j.images[c.ImageID].report.findings, func(fd Finding) bool { return m.findingMatches(fd, rowMatched) }) {
+			key := imageMatch{c.ImageID, rowMatched}
+			match, seen := imageMatches[key]
+			if !seen {
+				r := j.images[c.ImageID].report
+				match = m.imageKept(r) && slices.ContainsFunc(r.findings, func(fd Finding) bool { return m.findingMatches(fd, rowMatched) })
+				imageMatches[key] = match
+			}
+			if match {
 				since = oldest(since, *c.RunningSince)
 			}
 		}

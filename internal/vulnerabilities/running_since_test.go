@@ -137,6 +137,19 @@ func TestRunningSinceRollsUp(t *testing.T) {
 		}
 	}
 
+	// With only sha256:b's OS at end of life, the OS filter dates checkout
+	// by that container too.
+	for _, u := range items {
+		if u.GetName() == "b" {
+			u.Object["report"].(map[string]any)["os"] = map[string]any{"family": "debian", "name": "9", "eosl": true}
+		}
+	}
+	for _, w := range mustBuild(t, items, targets, ViewWorkload, Filter{OSEndOfLifeOnly: true}).Workloads {
+		if w.Name == "checkout" && !sameTime(w.RunningSince, &day3) {
+			t.Fatalf("checkout under the OS filter: %v, want %v", w.RunningSince, day3)
+		}
+	}
+
 	// Narrowed to checkout, sha256:a's date is checkout's own, not db's
 	// older start, in the image row and the CVE rows alike.
 	narrowed := Filter{Workload: &WorkloadRef{Kind: co.Kind, Group: co.Group, Namespace: co.Namespace, Name: co.Name}}
