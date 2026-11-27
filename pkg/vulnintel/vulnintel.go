@@ -20,8 +20,8 @@ import (
 	"time"
 )
 
-// Default feed locations. FIRST moved the EPSS file from epss.cyentia.com,
-// which still redirects here.
+// Default feed locations. The EPSS file is FIRST's current host; the older
+// epss.cyentia.com address redirects to it.
 const (
 	DefaultKEVURL  = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
 	DefaultEPSSURL = "https://epss.empiricalsecurity.com/epss_scores-current.csv.gz"
@@ -96,9 +96,6 @@ func ParseKEV(r io.Reader) (*KEVCatalog, error) {
 	if err := json.Unmarshal(body, &doc); err != nil {
 		return nil, fmt.Errorf("KEV catalog: %w", err)
 	}
-	if len(doc.Vulnerabilities) == 0 {
-		return nil, errors.New("KEV catalog lists no vulnerabilities")
-	}
 	c := &KEVCatalog{Version: doc.CatalogVersion, entries: make(map[string]KEV, len(doc.Vulnerabilities))}
 	c.Released, _ = time.Parse(time.RFC3339, doc.DateReleased)
 	for _, v := range doc.Vulnerabilities {
@@ -114,6 +111,9 @@ func ParseKEV(r io.Reader) (*KEVCatalog, error) {
 			DateAdded: v.DateAdded, DueDate: v.DueDate, RansomwareUse: use,
 			RequiredAction: v.RequiredAction, Name: v.VulnerabilityName,
 		}
+	}
+	if len(c.entries) == 0 {
+		return nil, errors.New("KEV catalog lists no vulnerabilities")
 	}
 	return c, nil
 }

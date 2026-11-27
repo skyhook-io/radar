@@ -263,7 +263,11 @@ func (s *Server) handleVulnerabilityFeedRefresh(w http.ResponseWriter, r *http.R
 	wait, err := vulnerabilities.RefreshIntel()
 	switch {
 	case errors.Is(err, vulnintel.ErrFeedsOff):
-		s.writeErrorCode(w, http.StatusConflict, "feeds_off", "The KEV and EPSS feeds are turned off on this Radar (--kev-feed and --epss-feed are off).")
+		msg := "The KEV and EPSS feeds are turned off on this Radar (--kev-feed and --epss-feed are off)."
+		if st := vulnerabilities.IntelStatus(); st != nil && (st.KEV.DownloadsOff || st.EPSS.DownloadsOff) {
+			msg = "Feed downloads are turned off on this Radar (--no-vulnerability-feed-downloads), and no feed is set to a file."
+		}
+		s.writeErrorCode(w, http.StatusConflict, "feeds_off", msg)
 		return
 	case errors.Is(err, vulnintel.ErrRefreshTooSoon):
 		secs := int(wait.Round(time.Second) / time.Second)

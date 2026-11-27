@@ -286,9 +286,9 @@ func WriteCSV(ctx context.Context, resp Response, f Filter, cluster string) ([]b
 	}
 	blank := func(n int) []string { return make([]string, n) }
 	kevCount, intelCells := intelCellWriters(resp.Intel)
-	// Clean rows follow the screen's clean fold: hidden under a severity or
-	// fix filter.
-	unfiltered := len(f.Severities) == 0 && !f.FixableOnly
+	// Clean rows follow the screen's clean fold: hidden under a severity,
+	// fix or Known exploited filter.
+	unfiltered := len(f.Severities) == 0 && !f.FixableOnly && !f.KEVOnly
 
 	switch resp.View {
 	case ViewImage:
