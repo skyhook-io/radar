@@ -336,3 +336,29 @@ func TestResolveOwnersUnreadWorkloadIsUnknown(t *testing.T) {
 		t.Errorf("owners = %+v, want only the Rollout, unknown", owners)
 	}
 }
+
+// A source whose address is withheld still counts: the Application has
+// two sources, so the surviving one's chart isn't the workload's.
+func TestArgoSourcesCountsWithheldSources(t *testing.T) {
+	app := ownerObject("argoproj.io/v1alpha1", "Application", "argocd", "shop", map[string]any{
+		"sources": []any{map[string]any{"repoURL": "https://charts.example.com", "chart": "shop"}, map[string]any{"repoURL": "host:repo?token=x"}},
+	}, nil)
+	if sources, chart := argoSources(app); chart != "" || len(sources) != 1 || sources[0].Chart != "shop" {
+		t.Errorf("argoSources = %+v, %q", sources, chart)
+	}
+}
+
+// With no owner read at all, the CSV says unknown for every workload
+// rather than leaving the owner cells blank.
+func TestOwnerIndexUnavailableIsUnknown(t *testing.T) {
+	w := WorkloadRef{Kind: "Deployment", Group: "apps", Namespace: "shop", Name: "web"}
+	join := func(v []string) string { return strings.Join(v, "; ") }
+	resp := &Response{Ownership: &Ownership{TeamLabel: TeamLabel, Unavailable: "cluster_connecting"}}
+	if got := ownerCells(ownerIndex(resp)(w), join); got[0] != "unknown" {
+		t.Errorf("unavailable: %q", got)
+	}
+	resp.Ownership.Unavailable = ""
+	if got := ownerCells(ownerIndex(resp)(w), join); got[0] != "" {
+		t.Errorf("read, nothing found: %q", got)
+	}
+}

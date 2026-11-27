@@ -285,7 +285,7 @@ func WriteCSV(ctx context.Context, resp Response, f Filter, cluster string) ([]b
 		return w.Write(row)
 	}
 	blank := func(n int) []string { return make([]string, n) }
-	owners := ownerIndex(resp.Owners)
+	owners := ownerIndex(&resp)
 	// Clean rows follow the screen's clean fold: hidden under a severity or
 	// fix filter.
 	unfiltered := len(f.Severities) == 0 && !f.FixableOnly
@@ -404,7 +404,7 @@ func WriteCSV(ctx context.Context, resp Response, f Filter, cluster string) ([]b
 			if len(wl.Routes) > 0 {
 				exposed = []ExposedWorkload{{WorkloadRef: ref, Routes: wl.Routes}}
 			}
-			if err := put(scanned, status, slices.Concat([]string{wl.Kind, wl.Namespace, wl.Name}, counts, []string{join(containers), exposedCell(exposed, []WorkloadRef{ref})}, ownerCells(owners[ref], join))...); err != nil {
+			if err := put(scanned, status, slices.Concat([]string{wl.Kind, wl.Namespace, wl.Name}, counts, []string{join(containers), exposedCell(exposed, []WorkloadRef{ref})}, ownerCells(owners(ref), join))...); err != nil {
 				return nil, err
 			}
 		}
@@ -461,7 +461,7 @@ func writeImageGaps(put func(time.Time, string, ...string) error, join func([]st
 // containers of that workload, or of exposed ones. Images not scanned and
 // images whose findings weren't read are a row per workload container with
 // the finding cells blank, as the image view writes them.
-func writeFindings(ctx context.Context, resp Response, f Filter, put func(time.Time, string, ...string) error, join func([]string) string, cols []string, owners map[WorkloadRef]*WorkloadOwner) error {
+func writeFindings(ctx context.Context, resp Response, f Filter, put func(time.Time, string, ...string) error, join func([]string) string, cols []string, owners func(WorkloadRef) *WorkloadOwner) error {
 	x := resp.export
 	m := newMatcher(f)
 	// containers are a row's workload containers the filters keep, each
@@ -494,7 +494,7 @@ func writeFindings(ctx context.Context, resp Response, f Filter, put func(time.T
 			}
 			// No route seen leaves exposure empty, as exposed_workloads does:
 			// absence of a route Radar sees is not a finding of "not exposed".
-			c := container{w: w, owner: ownerCells(owners[ref], join)}
+			c := container{w: w, owner: ownerCells(owners(ref), join)}
 			switch {
 			case len(rs) > 0:
 				cell, ok := routeCells[ref]

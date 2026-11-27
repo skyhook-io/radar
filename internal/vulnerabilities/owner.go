@@ -233,7 +233,11 @@ func (r *ownerReader) manager(ref resourceid.Ref, labels map[string]string) *Own
 // the precedence Argo CD applies when both are set. chart is the first
 // source's that names one.
 func argoSources(app *unstructured.Unstructured) (sources []OwnerSource, chart string) {
+	// declared counts every source, kept or not: a withheld address still
+	// makes the Application multi-source.
+	declared := 0
 	add := func(raw any) {
+		declared++
 		src, _ := raw.(map[string]any)
 		repo := safeRepo(gitops.StringValue(src["repoURL"]))
 		if repo == "" {
@@ -244,7 +248,7 @@ func argoSources(app *unstructured.Unstructured) (sources []OwnerSource, chart s
 	// One source's chart is the workload's; with several, which one made
 	// the workload is unknown, so each source keeps its own.
 	single := func() ([]OwnerSource, string) {
-		if len(sources) == 1 {
+		if declared == 1 && len(sources) == 1 {
 			chart, sources[0].Chart = sources[0].Chart, ""
 		}
 		return sources, chart
@@ -412,13 +416,21 @@ func compareWorkloadRefs(a, b WorkloadRef) int {
 	return strings.Compare(a.Namespace+"/"+a.Group+"/"+a.Kind+"/"+a.Name, b.Namespace+"/"+b.Group+"/"+b.Kind+"/"+b.Name)
 }
 
-// ownerIndex looks a workload's owner up, container ignored.
-func ownerIndex(owners []WorkloadOwner) map[WorkloadRef]*WorkloadOwner {
-	out := make(map[WorkloadRef]*WorkloadOwner, len(owners))
-	for i := range owners {
-		out[owners[i].WorkloadRef] = &owners[i]
+// ownerIndex looks a workload's owner up, container ignored. When no owner
+// could be read at all (Ownership.Unavailable), every workload's is
+// unknown, not "none found".
+func ownerIndex(resp *Response) func(WorkloadRef) *WorkloadOwner {
+	out := make(map[WorkloadRef]*WorkloadOwner, len(resp.Owners))
+	for i := range resp.Owners {
+		out[resp.Owners[i].WorkloadRef] = &resp.Owners[i]
 	}
-	return out
+	unavailable := resp.Ownership != nil && resp.Ownership.Unavailable != ""
+	return func(w WorkloadRef) *WorkloadOwner {
+		if o := out[w]; o != nil || !unavailable {
+			return o
+		}
+		return &WorkloadOwner{WorkloadRef: w, ManagerUnknown: true}
+	}
 }
 
 // ownerCells are a workload's owner_kind, owner, source_repo, source_path,
