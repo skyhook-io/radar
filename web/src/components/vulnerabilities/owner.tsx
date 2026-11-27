@@ -57,7 +57,7 @@ function OwnerDetail({ owner, teamLabel }: { owner: VulnerabilityWorkloadOwner; 
             <span key={`${s.repo}/${s.path ?? ''}`} className="break-all font-mono">{s.repo}{s.path ? ` (${s.path})` : ''}{s.chart ? `, chart ${s.chart}` : ''}</span>
           ))}
           {m.tool === 'helm' && <span>Helm records no source repository.</span>}
-          {m.shared && <span>Another Argo CD or Flux object lists it too; this is the one its own metadata names.</span>}
+          {m.shared && <span>More than one Argo CD or Flux object manages it, or what runs it; this is the one Radar leads with.</span>}
         </>
       )}
       {!m && owner.managerUnknown && <span>Radar couldn't tell what deploys it: the evidence disagrees or couldn't all be read.</span>}
@@ -109,7 +109,7 @@ export function ownerTip(owner: VulnerabilityWorkloadOwner | undefined): string 
   if (m) {
     const from = (m.sources ?? []).map((s) => `${shortRepo(s.repo)}${s.path ? ` (${s.path})` : ''}`).join(', ')
     parts.push(`Deployed by ${managerLabel(m)} ${m.namespace}/${m.name}${m.chart ? `, chart ${m.chart}` : ''}${from ? `, from ${from}` : ''}`)
-    if (m.shared) parts.push('Another Argo CD or Flux object lists it too')
+    if (m.shared) parts.push('More than one Argo CD or Flux object manages it')
   } else if (owner.managerUnknown) {
     parts.push("Radar couldn't tell what deploys it")
   }

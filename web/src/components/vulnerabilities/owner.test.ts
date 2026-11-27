@@ -26,7 +26,7 @@ describe('owner', () => {
     expect(ownerTip({ ...helm, manager: { tool: 'argocd', kind: 'Application', group: 'argoproj.io', namespace: 'argocd', name: 'shop', sources: [{ repo: 'https://github.com/acme/deploy.git', path: 'apps' }] }, team: undefined }))
       .toBe('Deployed by Argo CD Application argocd/shop, from github.com/acme/deploy (apps).')
     expect(ownerTip({ ...helm, team: undefined, manager: { tool: 'argocd', kind: 'Application', group: 'argoproj.io', namespace: 'argocd', name: 'shop', shared: true, sources: [{ repo: 'https://charts.example.com' }, { repo: 'https://github.com/acme/deploy.git', path: 'apps' }] } }))
-      .toBe('Deployed by Argo CD Application argocd/shop, from charts.example.com, github.com/acme/deploy (apps). Another Argo CD or Flux object lists it too.')
+      .toBe('Deployed by Argo CD Application argocd/shop, from charts.example.com, github.com/acme/deploy (apps). More than one Argo CD or Flux object manages it.')
     expect(ownerTip({ ...helm, manager: undefined, team: undefined, managerUnknown: true })).toBe("Radar couldn't tell what deploys it.")
     expect(ownerTip(undefined)).toBeUndefined()
     expect(managerLabel({ tool: 'fluxcd', kind: 'Kustomization', namespace: 'f', name: 'x' })).toBe('Flux Kustomization')

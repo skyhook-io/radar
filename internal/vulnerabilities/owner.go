@@ -71,9 +71,9 @@ type OwnerManager struct {
 	// Empty for a Helm release, which records no source, and when the
 	// caller can't read the manager or its source.
 	Sources []OwnerSource `json:"sources,omitempty"`
-	// Shared: two or more Argo CD or Flux objects list the workload, and
-	// this is the one its own metadata names; it is a lead, not the only
-	// deployer.
+	// Shared: two or more Argo CD or Flux objects list the workload, or
+	// the controller that runs it, and this is the one the ownership
+	// answer leads with; it is a lead, not the only deployer.
 	Shared bool `json:"shared,omitempty"`
 }
 

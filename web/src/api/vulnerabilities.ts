@@ -209,7 +209,7 @@ export interface VulnerabilityOwnerManager {
   chart?: string
   /** Empty for a Helm release, which records none, and where the caller can't read the manager or its source. */
   sources?: VulnerabilityOwnerSource[]
-  /** Two or more Argo CD or Flux objects list the workload; this is the one its metadata names. */
+  /** Two or more Argo CD or Flux objects list the workload, or what runs it; this is the one Radar leads with. */
   shared?: boolean
 }
 
