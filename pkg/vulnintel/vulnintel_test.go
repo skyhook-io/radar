@@ -275,3 +275,59 @@ func TestNoDownloadsMakesNoRequest(t *testing.T) {
 		t.Fatalf("EPSS from a file %+v", snap.EPSSStatus)
 	}
 }
+
+// A cached copy younger than the refresh interval is used as it is: a
+// restart doesn't download the feed again.
+func TestFreshCacheIsNotDownloadedAgain(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		_, _ = w.Write(fixture(t, "kev.json"))
+	}))
+	defer srv.Close()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "kev.json"), fixture(t, "kev.json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	recent := time.Now().Add(-2 * time.Hour)
+	_ = os.Chtimes(filepath.Join(dir, "kev.json"), recent, recent)
+	s := NewStore(Config{KEVSource: srv.URL + "/kev.json", EPSSSource: "off", CacheDir: dir})
+	defer s.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	s.WaitLoaded(ctx)
+	st := s.Snapshot().KEVStatus
+	if hits.Load() != 0 || st.State != StateReady || st.Stale || st.LoadedAt == nil || !st.LoadedAt.Equal(recent) {
+		t.Fatalf("%d downloads, status %+v", hits.Load(), st)
+	}
+}
+
+// A feed that fails is retried on its own: the other one isn't downloaded
+// again until its own refresh is due.
+func TestFailingFeedRetriesAlone(t *testing.T) {
+	var kevHits, epssHits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/kev.json" {
+			kevHits.Add(1)
+			_, _ = w.Write(fixture(t, "kev.json"))
+			return
+		}
+		epssHits.Add(1)
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer srv.Close()
+	s := NewStore(Config{KEVSource: srv.URL + "/kev.json", EPSSSource: srv.URL + "/epss.csv.gz", RetryAfter: 20 * time.Millisecond})
+	defer s.Close()
+	s.Snapshot()
+	deadline := time.Now().Add(5 * time.Second)
+	for epssHits.Load() < 3 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if epssHits.Load() < 3 || kevHits.Load() != 1 {
+		t.Fatalf("KEV fetched %d times, EPSS %d", kevHits.Load(), epssHits.Load())
+	}
+	snap := s.Snapshot()
+	if snap.KEVStatus.State != StateReady || snap.EPSSStatus.State != StateUnavailable {
+		t.Fatalf("KEV %+v, EPSS %+v", snap.KEVStatus, snap.EPSSStatus)
+	}
+}
