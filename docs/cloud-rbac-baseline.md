@@ -116,6 +116,10 @@ eligible Owner on direct cluster requests, including MCP. The agent accepts only
 groups its Helm release approves. Kubernetes enforces the resulting resource
 permissions alongside the caller’s other bindings.
 
+The Velero switch controls backup and schedule operations plus backup data
+access when Helm explicitly approves it. Permanent backup deletion requires
+a separate Kubernetes role binding.
+
 Use the [chart guide](../deploy/helm/radar/README.md#cloud-owner-permissions)
 for the defaults, scope, opt-outs and upgrade order.
 

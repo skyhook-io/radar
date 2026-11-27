@@ -636,9 +636,8 @@ cloud:
       # CNPG defaults on for built-in admin and cluster-admin Owner roles.
       # Set cnpg.owner: true to approve it for a custom Owner role.
       cnpg: {}
+      # Approving backup data gives Owners access to archives whenever Velero is on in Hub.
       velero-download:
-        owner: false
-      velero-delete:
         owner: false
   # Create the default read grant for radar:system: Radar Cloud's alerts worker
   # and timeline puller. Includes view via a chart-owned aggregated role, the
