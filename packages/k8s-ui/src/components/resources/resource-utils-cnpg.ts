@@ -753,6 +753,8 @@ export function getCNPGClusterInstancesReportedState(resource: any): CNPGInstanc
 
 /** Certificate expirations from status.certificates.expirations */
 export interface CNPGCertificateExpiry {
+  remainingMilliseconds: number
+  renewal: 'user' | 'operator'
   secretName: string
   expiryDate: string
   daysUntilExpiry: number
@@ -767,7 +769,8 @@ export function getCNPGClusterCertificateExpirations(resource: any): CNPGCertifi
     const daysUntilExpiry = isNaN(expiry.getTime())
       ? -1  // treat unparseable dates as expired/critical
       : Math.floor((expiry.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
-    return { secretName, expiryDate: String(expiryDate), daysUntilExpiry }
+    const userSecrets = Object.values(resource.spec?.certificates ?? {})
+    return { secretName, expiryDate: String(expiryDate), daysUntilExpiry, remainingMilliseconds: expiry.getTime() - now.getTime(), renewal: userSecrets.includes(secretName) ? 'user' : 'operator' }
   })
 }
 

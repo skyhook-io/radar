@@ -8,6 +8,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/ingressstatus"
 	"github.com/skyhook-io/radar/pkg/certs"
+	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/timeutil"
 	corev1 "k8s.io/api/core/v1"
@@ -23,7 +24,13 @@ const (
 
 // A served certificate this close to expiry is reported before it fails;
 // further out it stays an audit finding.
-const tlsExpiringWindow = 24 * time.Hour
+func tlsWarningWindow(scope *DetectScope, cert certs.Input) time.Duration {
+	var policy health.CertificateExpiryPolicy
+	if scope != nil {
+		policy = scope.CertificateExpiryPolicy
+	}
+	return policy.Resolve(cert.NotBefore, cert.NotAfter).LiveWarningWindow
+}
 
 // maxTLSMessageHosts bounds the certificate hostnames a message lists.
 const maxTLSMessageHosts = 3
@@ -120,7 +127,7 @@ func detectLiveTLSCertificates(cache *ResourceCache, namespace string, scope *De
 		}
 		cert, ok, _ := certFor(use.secretNamespace, use.secretName)
 		// Only a certificate with a problem is checked against the others.
-		if !ok || (tlsCertificateValid(cert, now) && cert.NotAfter.Sub(now) > tlsExpiringWindow) || !tlsUseSelectsCertificate(idx, use, cert, now, certFor) {
+		if !ok || (tlsCertificateValid(cert, now) && cert.NotAfter.Sub(now) > tlsWarningWindow(scope, cert)) || !tlsUseSelectsCertificate(idx, use, cert, now, certFor) {
 			continue
 		}
 		key := use.secretNamespace + "/" + use.secretName
@@ -157,7 +164,7 @@ func detectLiveTLSCertificates(cache *ResourceCache, namespace string, scope *De
 		if err != nil {
 			continue
 		}
-		if det, ok := liveTLSCertificateProblem(secret, consumers[key], now); ok {
+		if det, ok := liveTLSCertificateProblem(secret, consumers[key], now, policyForTLSScope(scope)); ok {
 			out = append(out, det)
 		}
 	}
@@ -511,7 +518,7 @@ func scanReadyControllerPodNamespaces(cache *ResourceCache, controller string) [
 	return out
 }
 
-func liveTLSCertificateProblem(secret *corev1.Secret, consumers *tlsConsumers, now time.Time) (Detection, bool) {
+func liveTLSCertificateProblem(secret *corev1.Secret, consumers *tlsConsumers, now time.Time, policy health.CertificateExpiryPolicy) (Detection, bool) {
 	if secret.DeletionTimestamp != nil {
 		return Detection{}, false
 	}
@@ -519,6 +526,7 @@ func liveTLSCertificateProblem(secret *corev1.Secret, consumers *tlsConsumers, n
 	if !ok {
 		return Detection{}, false
 	}
+	warningWindow := policy.Resolve(cert.NotBefore, cert.NotAfter).LiveWarningWindow
 	addressed := len(consumers.addressedRefs) > 0
 	user := "an Ingress references it for TLS and its ingress controller is running, so it is likely, not confirmed, served"
 	severity := "warning"
@@ -550,7 +558,7 @@ func liveTLSCertificateProblem(secret *corev1.Secret, consumers *tlsConsumers, n
 	}
 	var reason, fingerprint, message, cause string
 	switch {
-	case cert.NotAfter != nil && now.After(*cert.NotAfter):
+	case cert.NotAfter != nil && !now.Before(*cert.NotAfter):
 		reason, fingerprint = TLSCertificateExpiredReason, "tls-certificate-expired"
 		message = fmt.Sprintf("%s expired %s ago (%s), and %s.",
 			subject, timeutil.FormatAgeShort(now.Sub(*cert.NotAfter)), cert.NotAfter.UTC().Format(time.RFC3339), user)
@@ -560,12 +568,12 @@ func liveTLSCertificateProblem(secret *corev1.Secret, consumers *tlsConsumers, n
 		message = fmt.Sprintf("%s is not valid until %s (in %s), and %s.",
 			subject, cert.NotBefore.UTC().Format(time.RFC3339), timeutil.FormatAgeShort(cert.NotBefore.Sub(now)), user)
 		cause = "The certificate's validity period has not started, often because it was issued with a wrong clock or start date. Clients that verify certificates reject it until then."
-	case cert.NotAfter != nil && cert.NotAfter.Sub(now) <= tlsExpiringWindow:
+	case cert.NotAfter != nil && cert.NotAfter.Sub(now) <= warningWindow:
 		// Nothing fails yet, so this is a warning however certain the serving is.
 		reason, fingerprint, severity = TLSCertificateExpiringReason, "tls-certificate-expiring", "warning"
 		message = fmt.Sprintf("%s expires in %s (%s), and %s.",
 			subject, timeutil.FormatAgeShort(cert.NotAfter.Sub(now)), cert.NotAfter.UTC().Format(time.RFC3339), user)
-		cause = "The certificate is still valid but expires within a day. Unless it is renewed first, clients that verify certificates start rejecting the connection at that time."
+		cause = "The certificate is still valid but is within the configured live expiry warning window. Unless it is renewed first, clients that verify certificates start rejecting the connection at that time."
 	default:
 		return Detection{}, false
 	}
@@ -643,4 +651,11 @@ func sortedSetKeys(set map[string]bool) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+func policyForTLSScope(scope *DetectScope) health.CertificateExpiryPolicy {
+	if scope == nil {
+		return health.CertificateExpiryPolicy{}
+	}
+	return scope.CertificateExpiryPolicy
 }

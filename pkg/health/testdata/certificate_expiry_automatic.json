@@ -1,0 +1,428 @@
+[
+  {
+    "name": "one year fresh",
+    "lifetimeSeconds": 31536000,
+    "warningSeconds": 2592000,
+    "highSeconds": 604800,
+    "remainingSeconds": 31536000,
+    "health": "healthy"
+  },
+  {
+    "name": "one year warning boundary",
+    "lifetimeSeconds": 31536000,
+    "warningSeconds": 2592000,
+    "highSeconds": 604800,
+    "remainingSeconds": 2592000,
+    "health": "healthy"
+  },
+  {
+    "name": "one year warning",
+    "lifetimeSeconds": 31536000,
+    "warningSeconds": 2592000,
+    "highSeconds": 604800,
+    "remainingSeconds": 2591999,
+    "health": "degraded"
+  },
+  {
+    "name": "one year High boundary",
+    "lifetimeSeconds": 31536000,
+    "warningSeconds": 2592000,
+    "highSeconds": 604800,
+    "remainingSeconds": 604800,
+    "health": "degraded"
+  },
+  {
+    "name": "one year High",
+    "lifetimeSeconds": 31536000,
+    "warningSeconds": 2592000,
+    "highSeconds": 604800,
+    "remainingSeconds": 604799,
+    "health": "unhealthy"
+  },
+  {
+    "name": "one year expired",
+    "lifetimeSeconds": 31536000,
+    "warningSeconds": 2592000,
+    "highSeconds": 604800,
+    "remainingSeconds": 0,
+    "health": "unhealthy"
+  },
+  {
+    "name": "ninety days fresh",
+    "lifetimeSeconds": 7776000,
+    "warningSeconds": 2592000,
+    "highSeconds": 604800,
+    "remainingSeconds": 7776000,
+    "health": "healthy"
+  },
+  {
+    "name": "ninety days warning boundary",
+    "lifetimeSeconds": 7776000,
+    "warningSeconds": 2592000,
+    "highSeconds": 604800,
+    "remainingSeconds": 2592000,
+    "health": "healthy"
+  },
+  {
+    "name": "ninety days warning",
+    "lifetimeSeconds": 7776000,
+    "warningSeconds": 2592000,
+    "highSeconds": 604800,
+    "remainingSeconds": 2591999,
+    "health": "degraded"
+  },
+  {
+    "name": "ninety days High boundary",
+    "lifetimeSeconds": 7776000,
+    "warningSeconds": 2592000,
+    "highSeconds": 604800,
+    "remainingSeconds": 604800,
+    "health": "degraded"
+  },
+  {
+    "name": "ninety days High",
+    "lifetimeSeconds": 7776000,
+    "warningSeconds": 2592000,
+    "highSeconds": 604800,
+    "remainingSeconds": 604799,
+    "health": "unhealthy"
+  },
+  {
+    "name": "ninety days expired",
+    "lifetimeSeconds": 7776000,
+    "warningSeconds": 2592000,
+    "highSeconds": 604800,
+    "remainingSeconds": 0,
+    "health": "unhealthy"
+  },
+  {
+    "name": "one day fresh",
+    "lifetimeSeconds": 86400,
+    "warningSeconds": 28800,
+    "highSeconds": 6720,
+    "remainingSeconds": 86400,
+    "health": "healthy"
+  },
+  {
+    "name": "one day warning boundary",
+    "lifetimeSeconds": 86400,
+    "warningSeconds": 28800,
+    "highSeconds": 6720,
+    "remainingSeconds": 28800,
+    "health": "healthy"
+  },
+  {
+    "name": "one day warning",
+    "lifetimeSeconds": 86400,
+    "warningSeconds": 28800,
+    "highSeconds": 6720,
+    "remainingSeconds": 28799,
+    "health": "degraded"
+  },
+  {
+    "name": "one day High boundary",
+    "lifetimeSeconds": 86400,
+    "warningSeconds": 28800,
+    "highSeconds": 6720,
+    "remainingSeconds": 6720,
+    "health": "degraded"
+  },
+  {
+    "name": "one day High",
+    "lifetimeSeconds": 86400,
+    "warningSeconds": 28800,
+    "highSeconds": 6720,
+    "remainingSeconds": 6719,
+    "health": "unhealthy"
+  },
+  {
+    "name": "one day expired",
+    "lifetimeSeconds": 86400,
+    "warningSeconds": 28800,
+    "highSeconds": 6720,
+    "remainingSeconds": 0,
+    "health": "unhealthy"
+  },
+  {
+    "name": "one hour fresh",
+    "lifetimeSeconds": 3600,
+    "warningSeconds": 1200,
+    "highSeconds": 280,
+    "remainingSeconds": 3600,
+    "health": "healthy"
+  },
+  {
+    "name": "one hour warning boundary",
+    "lifetimeSeconds": 3600,
+    "warningSeconds": 1200,
+    "highSeconds": 280,
+    "remainingSeconds": 1200,
+    "health": "healthy"
+  },
+  {
+    "name": "one hour warning",
+    "lifetimeSeconds": 3600,
+    "warningSeconds": 1200,
+    "highSeconds": 280,
+    "remainingSeconds": 1199,
+    "health": "degraded"
+  },
+  {
+    "name": "one hour High boundary",
+    "lifetimeSeconds": 3600,
+    "warningSeconds": 1200,
+    "highSeconds": 280,
+    "remainingSeconds": 280,
+    "health": "degraded"
+  },
+  {
+    "name": "one hour High",
+    "lifetimeSeconds": 3600,
+    "warningSeconds": 1200,
+    "highSeconds": 280,
+    "remainingSeconds": 279,
+    "health": "unhealthy"
+  },
+  {
+    "name": "one hour expired",
+    "lifetimeSeconds": 3600,
+    "warningSeconds": 1200,
+    "highSeconds": 280,
+    "remainingSeconds": 0,
+    "health": "unhealthy"
+  },
+  {
+    "name": "fifteen minutes fresh",
+    "lifetimeSeconds": 900,
+    "warningSeconds": 300,
+    "highSeconds": 70,
+    "remainingSeconds": 900,
+    "health": "healthy"
+  },
+  {
+    "name": "fifteen minutes warning boundary",
+    "lifetimeSeconds": 900,
+    "warningSeconds": 300,
+    "highSeconds": 70,
+    "remainingSeconds": 300,
+    "health": "healthy"
+  },
+  {
+    "name": "fifteen minutes warning",
+    "lifetimeSeconds": 900,
+    "warningSeconds": 300,
+    "highSeconds": 70,
+    "remainingSeconds": 299,
+    "health": "degraded"
+  },
+  {
+    "name": "fifteen minutes High boundary",
+    "lifetimeSeconds": 900,
+    "warningSeconds": 300,
+    "highSeconds": 70,
+    "remainingSeconds": 70,
+    "health": "degraded"
+  },
+  {
+    "name": "fifteen minutes High",
+    "lifetimeSeconds": 900,
+    "warningSeconds": 300,
+    "highSeconds": 70,
+    "remainingSeconds": 69,
+    "health": "unhealthy"
+  },
+  {
+    "name": "fifteen minutes expired",
+    "lifetimeSeconds": 900,
+    "warningSeconds": 300,
+    "highSeconds": 70,
+    "remainingSeconds": 0,
+    "health": "unhealthy"
+  },
+  {
+    "name": "unknown lifetime fresh",
+    "lifetimeSeconds": null,
+    "warningSeconds": 2592000,
+    "highSeconds": 604800,
+    "remainingSeconds": 3000000,
+    "health": "healthy"
+  },
+  {
+    "name": "unknown lifetime warning boundary",
+    "lifetimeSeconds": null,
+    "warningSeconds": 2592000,
+    "highSeconds": 604800,
+    "remainingSeconds": 2592000,
+    "health": "healthy"
+  },
+  {
+    "name": "unknown lifetime warning",
+    "lifetimeSeconds": null,
+    "warningSeconds": 2592000,
+    "highSeconds": 604800,
+    "remainingSeconds": 2591999,
+    "health": "degraded"
+  },
+  {
+    "name": "unknown lifetime High boundary",
+    "lifetimeSeconds": null,
+    "warningSeconds": 2592000,
+    "highSeconds": 604800,
+    "remainingSeconds": 604800,
+    "health": "degraded"
+  },
+  {
+    "name": "unknown lifetime High",
+    "lifetimeSeconds": null,
+    "warningSeconds": 2592000,
+    "highSeconds": 604800,
+    "remainingSeconds": 604799,
+    "health": "unhealthy"
+  },
+  {
+    "name": "unknown lifetime expired",
+    "lifetimeSeconds": null,
+    "warningSeconds": 2592000,
+    "highSeconds": 604800,
+    "remainingSeconds": 0,
+    "health": "unhealthy"
+  },
+  {
+    "name": "invalid lifetime fresh",
+    "lifetimeSeconds": -60,
+    "warningSeconds": 2592000,
+    "highSeconds": 604800,
+    "remainingSeconds": 3000000,
+    "health": "healthy"
+  },
+  {
+    "name": "invalid lifetime warning boundary",
+    "lifetimeSeconds": -60,
+    "warningSeconds": 2592000,
+    "highSeconds": 604800,
+    "remainingSeconds": 2592000,
+    "health": "healthy"
+  },
+  {
+    "name": "invalid lifetime warning",
+    "lifetimeSeconds": -60,
+    "warningSeconds": 2592000,
+    "highSeconds": 604800,
+    "remainingSeconds": 2591999,
+    "health": "degraded"
+  },
+  {
+    "name": "invalid lifetime High boundary",
+    "lifetimeSeconds": -60,
+    "warningSeconds": 2592000,
+    "highSeconds": 604800,
+    "remainingSeconds": 604800,
+    "health": "degraded"
+  },
+  {
+    "name": "invalid lifetime High",
+    "lifetimeSeconds": -60,
+    "warningSeconds": 2592000,
+    "highSeconds": 604800,
+    "remainingSeconds": 604799,
+    "health": "unhealthy"
+  },
+  {
+    "name": "invalid lifetime expired",
+    "lifetimeSeconds": -60,
+    "warningSeconds": 2592000,
+    "highSeconds": 604800,
+    "remainingSeconds": 0,
+    "health": "unhealthy"
+  },
+  {
+    "name": "1 percent fresh",
+    "lifetimeSeconds": 36000,
+    "warningPercent": 1,
+    "warningSeconds": 360,
+    "highSeconds": 84,
+    "remainingSeconds": 36000,
+    "health": "healthy"
+  },
+  {
+    "name": "1 percent warning",
+    "lifetimeSeconds": 36000,
+    "warningPercent": 1,
+    "warningSeconds": 360,
+    "highSeconds": 84,
+    "remainingSeconds": 359,
+    "health": "degraded"
+  },
+  {
+    "name": "20 percent fresh",
+    "lifetimeSeconds": 3600,
+    "warningPercent": 20,
+    "warningSeconds": 720,
+    "highSeconds": 168,
+    "remainingSeconds": 3600,
+    "health": "healthy"
+  },
+  {
+    "name": "20 percent warning",
+    "lifetimeSeconds": 3600,
+    "warningPercent": 20,
+    "warningSeconds": 720,
+    "highSeconds": 168,
+    "remainingSeconds": 719,
+    "health": "degraded"
+  },
+  {
+    "name": "50 percent fresh",
+    "lifetimeSeconds": 3600,
+    "warningPercent": 50,
+    "warningSeconds": 1800,
+    "highSeconds": 420,
+    "remainingSeconds": 3600,
+    "health": "healthy"
+  },
+  {
+    "name": "50 percent warning",
+    "lifetimeSeconds": 3600,
+    "warningPercent": 50,
+    "warningSeconds": 1800,
+    "highSeconds": 420,
+    "remainingSeconds": 1799,
+    "health": "degraded"
+  },
+  {
+    "name": "100 percent fresh",
+    "lifetimeSeconds": 3600,
+    "warningPercent": 100,
+    "warningSeconds": 3600,
+    "highSeconds": 840,
+    "remainingSeconds": 3600,
+    "health": "healthy"
+  },
+  {
+    "name": "100 percent warning",
+    "lifetimeSeconds": 3600,
+    "warningPercent": 100,
+    "warningSeconds": 3600,
+    "highSeconds": 840,
+    "remainingSeconds": 3599,
+    "health": "degraded"
+  },
+  {
+    "name": "percentage still capped",
+    "lifetimeSeconds": 31536000,
+    "warningPercent": 100,
+    "warningSeconds": 2592000,
+    "highSeconds": 604800,
+    "remainingSeconds": 3000000,
+    "health": "healthy"
+  },
+  {
+    "name": "percentage unknown lifetime fallback",
+    "lifetimeSeconds": null,
+    "warningPercent": 20,
+    "warningSeconds": 2592000,
+    "highSeconds": 604800,
+    "remainingSeconds": 3000000,
+    "health": "healthy"
+  }
+]

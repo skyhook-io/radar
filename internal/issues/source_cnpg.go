@@ -6,6 +6,7 @@ import (
 
 	"github.com/skyhook-io/radar/pkg/cnpg"
 	"github.com/skyhook-io/radar/pkg/conditions"
+	"github.com/skyhook-io/radar/pkg/health"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -133,10 +134,10 @@ func cnpgSuppressesGenericConditions(group, kind string, u *unstructured.Unstruc
 	return true
 }
 
-func detectCNPGIssues(gvr schema.GroupVersionResource, kind string, u *unstructured.Unstructured) []Issue {
+func detectCNPGIssues(gvr schema.GroupVersionResource, kind string, u *unstructured.Unstructured, policies ...health.CertificateExpiryPolicy) []Issue {
 	switch kind {
 	case "Cluster":
-		return append(detectCNPGClusterIssues(gvr, kind, u), detectCNPGCertificateIssues(gvr, kind, u, time.Now())...)
+		return append(detectCNPGClusterIssues(gvr, kind, u), detectCNPGCertificateIssues(gvr, kind, u, time.Now(), policies...)...)
 	case "Backup":
 		return detectCNPGBackupIssues(gvr, kind, u)
 	case "Database", "Publication", "Subscription", "DatabaseRole":

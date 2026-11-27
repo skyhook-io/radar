@@ -22,6 +22,7 @@ import (
 
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 	"github.com/skyhook-io/radar/pkg/capacityapi"
+	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"golang.org/x/sync/singleflight"
 )
@@ -119,37 +120,38 @@ type OwnerAccessSetup struct {
 
 // Capabilities represents the features available based on RBAC permissions
 type Capabilities struct {
-	OwnerAccess            *[]string                `json:"ownerAccess,omitempty"`
-	OwnerAccessSetup       *OwnerAccessSetup        `json:"ownerAccessSetup,omitempty"`
-	ConfigManagement       string                   `json:"configManagement"`
-	Exec                   bool                     `json:"exec"` // Can create pods/exec (terminal feature)
-	PodExecUID             bool                     `json:"podExecUID,omitempty"`
-	PodDebugImage          string                   `json:"podDebugImage,omitempty"`
-	PodDebug               bool                     `json:"podDebug,omitempty"` // Scoped to the requested namespace.
-	LocalTerminal          bool                     `json:"localTerminal"`      // Local terminal available (not in-cluster, not disabled)
-	LocalShell             string                   `json:"localShell"`         // Shell family where a hand-off command runs: "powershell" on Windows, else "posix"
-	Logs                   bool                     `json:"logs"`               // Can get pods/log (log viewer)
-	PortForward            bool                     `json:"portForward"`        // Can create pods/portforward
-	Secrets                bool                     `json:"secrets"`            // Can list secrets
-	SecretsUpdate          bool                     `json:"secretsUpdate"`      // Can update secrets (inline editing)
-	HelmWrite              bool                     `json:"helmWrite"`          // Helm write ops (detected via secrets/create as sentinel RBAC check)
-	NodeWrite              bool                     `json:"nodeWrite"`          // Can patch nodes (cordon/uncordon/drain)
-	WorkloadWrites         WorkloadWritePermissions `json:"workloadWrites"`     // Permissions for workload actions
-	MCPReadOnly            bool                     `json:"mcpReadOnly"`
-	MCPExecTools           bool                     `json:"mcpExecTools"`
-	MCPHelmTools           bool                     `json:"mcpHelmTools"` // Native Helm MCP tool registered; target Kubernetes permissions still required
-	MCPHTTPTools           bool                     `json:"mcpHttpTools"`
-	MCPApplicationEvidence bool                     `json:"mcpApplicationEvidence"`
-	MCPEnabled             bool                     `json:"mcpEnabled"`              // MCP server is running
-	Deployment             DeploymentInfo           `json:"deployment"`              // How / where this Radar binary is running. Tells the UI which chrome to render or suppress (e.g. embedded mode hides the cluster headline + local-MCP card because the hub already renders both).
-	Features               FeatureCapabilities      `json:"features"`                // Versioned server features that newer embedded frontends must negotiate
-	AuthEnabled            bool                     `json:"authEnabled,omitempty"`   // Auth is enabled on the server
-	Username               string                   `json:"username,omitempty"`      // Authenticated username (when auth enabled)
-	Resources              *ResourcePermissions     `json:"resources,omitempty"`     // Per-resource-type permissions
-	Visibility             *VisibilitySummary       `json:"visibility,omitempty"`    // Present when resource visibility is limited enough to make diagnostics incomplete
-	Karpenter              IntegrationCapability    `json:"karpenter"`               // Per-request Karpenter discovery + NodePool read state; populated by the HTTP layer after user SAR.
-	PolicyReports          *PolicyReportStatus      `json:"policyReports,omitempty"` // Why the Kyverno PolicyReport index is (or is not) populated, so an empty policy view can say which.
-	CloudConnect           *CloudConnectCapability  `json:"cloudConnect,omitempty"`
+	CertificateExpiryPolicy *health.CertificateExpiryWindows `json:"certificateExpiryPolicy,omitempty"`
+	OwnerAccess             *[]string                        `json:"ownerAccess,omitempty"`
+	OwnerAccessSetup        *OwnerAccessSetup                `json:"ownerAccessSetup,omitempty"`
+	ConfigManagement        string                           `json:"configManagement"`
+	Exec                    bool                             `json:"exec"` // Can create pods/exec (terminal feature)
+	PodExecUID              bool                             `json:"podExecUID,omitempty"`
+	PodDebugImage           string                           `json:"podDebugImage,omitempty"`
+	PodDebug                bool                             `json:"podDebug,omitempty"` // Scoped to the requested namespace.
+	LocalTerminal           bool                             `json:"localTerminal"`      // Local terminal available (not in-cluster, not disabled)
+	LocalShell              string                           `json:"localShell"`         // Shell family where a hand-off command runs: "powershell" on Windows, else "posix"
+	Logs                    bool                             `json:"logs"`               // Can get pods/log (log viewer)
+	PortForward             bool                             `json:"portForward"`        // Can create pods/portforward
+	Secrets                 bool                             `json:"secrets"`            // Can list secrets
+	SecretsUpdate           bool                             `json:"secretsUpdate"`      // Can update secrets (inline editing)
+	HelmWrite               bool                             `json:"helmWrite"`          // Helm write ops (detected via secrets/create as sentinel RBAC check)
+	NodeWrite               bool                             `json:"nodeWrite"`          // Can patch nodes (cordon/uncordon/drain)
+	WorkloadWrites          WorkloadWritePermissions         `json:"workloadWrites"`     // Permissions for workload actions
+	MCPReadOnly             bool                             `json:"mcpReadOnly"`
+	MCPExecTools            bool                             `json:"mcpExecTools"`
+	MCPHelmTools            bool                             `json:"mcpHelmTools"` // Native Helm MCP tool registered; target Kubernetes permissions still required
+	MCPHTTPTools            bool                             `json:"mcpHttpTools"`
+	MCPApplicationEvidence  bool                             `json:"mcpApplicationEvidence"`
+	MCPEnabled              bool                             `json:"mcpEnabled"`              // MCP server is running
+	Deployment              DeploymentInfo                   `json:"deployment"`              // How / where this Radar binary is running. Tells the UI which chrome to render or suppress (e.g. embedded mode hides the cluster headline + local-MCP card because the hub already renders both).
+	Features                FeatureCapabilities              `json:"features"`                // Versioned server features that newer embedded frontends must negotiate
+	AuthEnabled             bool                             `json:"authEnabled,omitempty"`   // Auth is enabled on the server
+	Username                string                           `json:"username,omitempty"`      // Authenticated username (when auth enabled)
+	Resources               *ResourcePermissions             `json:"resources,omitempty"`     // Per-resource-type permissions
+	Visibility              *VisibilitySummary               `json:"visibility,omitempty"`    // Present when resource visibility is limited enough to make diagnostics incomplete
+	Karpenter               IntegrationCapability            `json:"karpenter"`               // Per-request Karpenter discovery + NodePool read state; populated by the HTTP layer after user SAR.
+	PolicyReports           *PolicyReportStatus              `json:"policyReports,omitempty"` // Why the Kyverno PolicyReport index is (or is not) populated, so an empty policy view can say which.
+	CloudConnect            *CloudConnectCapability          `json:"cloudConnect,omitempty"`
 	// ChecksIncomplete: an access check errored, so a false above may be a
 	// failed check rather than a denial. The server re-checks after a short
 	// TTL; the UI should refetch soon.

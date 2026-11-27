@@ -405,6 +405,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   return (
     <>
     <BaseResourcesView
+      certificateExpiryPolicy={capabilities?.certificateExpiryPolicy}
       key={connection.context || 'default'}
       namespaces={namespaces}
       selectedResource={selectedResource}

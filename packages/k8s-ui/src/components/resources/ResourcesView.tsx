@@ -1,3 +1,6 @@
+import type { CertificateExpiryWindows } from '../../types'
+import { useCertificateClock } from '../../hooks/useCertificateClock'
+import { certificateExpiryHealth } from '../../utils/certificate-expiry'
 import { CRDVersionsCell } from './renderers/crd-cells'
 import { getCRDColumnValue } from './resource-utils-crd'
 import { getStrimziConnectorColumnValue, getStrimziClusterColumnValue } from './resource-utils-strimzi'
@@ -875,7 +878,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'type', label: 'Type', width: 'w-28' },
     { key: 'keys', label: 'Keys', width: 'w-20' },
-    { key: 'expires', label: 'Expires', width: 'w-24', tooltip: "Days until the certificate in a TLS Secret expires. Blank for Secrets carrying no readable TLS certificate; ! means the expiry lookup itself failed." },
+    { key: 'expires', label: 'Expires', width: 'w-24', tooltip: "Time until the certificate in a TLS Secret expires. Blank for Secrets carrying no readable TLS certificate; ! means the expiry lookup itself failed." },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   jobs: [
@@ -981,7 +984,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Ready', width: 'w-24' },
     { key: 'domains', label: 'Domains', width: 'w-56' },
     { key: 'issuer', label: 'Issuer', width: 'w-36', tooltip: "Issuer name alone may be ambiguous. Check the certificate's issuer reference for its kind and API group." },
-    { key: 'expires', label: 'Expires', width: 'w-24', tooltip: 'Days until certificate expires' },
+    { key: 'expires', label: 'Expires', width: 'w-24', tooltip: 'Time until certificate expires' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   persistentvolumes: [
@@ -3752,9 +3755,11 @@ const MetricsContext = React.createContext<MetricsLookup>({ pods: new Map(), nod
 
 // Context for deeply nested sub-components (PodCell, SecretCell) to access injected platform data
 interface ResourcesViewData {
+  certificateNow?: number
   onNavigate?: (path: string, options?: { replace?: boolean }) => void
-  certExpiry?: Record<string, { expired?: boolean; daysLeft: number }>
+  certExpiry?: Record<string, { expired?: boolean; daysLeft: number; expiry?: string; health?: string; expiryPolicy?: import('../../types').CertificateExpiryWindows }>
   certExpiryError?: boolean
+  certificateExpiryPolicy?: CertificateExpiryWindows
   // Provider type per SecretStore, keyed 'ns/name' and 'name' for the
   // cluster-scoped kind. An ExternalSecret names a store; only the store
   // knows which backend it reads from.
@@ -3822,8 +3827,9 @@ interface ResourcesViewProps {
   largeListGuard?: LargeListGuardState | null
   topPodMetrics?: TopPodMetrics[]
   topNodeMetrics?: TopNodeMetrics[]
-  certExpiry?: Record<string, { expired?: boolean; daysLeft: number }>
+  certExpiry?: Record<string, { expired?: boolean; daysLeft: number; expiry?: string; health?: string; expiryPolicy?: import('../../types').CertificateExpiryWindows }>
   certExpiryError?: boolean
+  certificateExpiryPolicy?: CertificateExpiryWindows
   // Provider type per SecretStore, keyed 'ns/name' and 'name' for the
   // cluster-scoped kind. An ExternalSecret names a store; only the store
   // knows which backend it reads from.
@@ -4136,6 +4142,7 @@ export function ResourcesView({
   topNodeMetrics,
   certExpiry,
   certExpiryError,
+  certificateExpiryPolicy,
   storeProviders,
   auditBadges,
   operationalIssues,
@@ -4176,6 +4183,7 @@ export function ResourcesView({
 }: ResourcesViewProps) {
   const initialFilters = getInitialFiltersFromURL()
   const [selectedKind, setSelectedKind] = useState<SelectedKindInfo>(() => getInitialKindFromURL(basePath, defaultKind, locationPathname, locationSearch))
+  const certificateNow = useCertificateClock(selectedKind.name === 'secrets' || selectedKind.name === 'certificates' || selectedKind.name === 'knativecertificates')
   // Phones: the 224px kind list would leave the table a sliver, so it lives in
   // a drawer over the table, opened from the toolbar and closed by a pick.
   const isPhone = usePhoneLayout()
@@ -6846,15 +6854,17 @@ export function ResourcesView({
   }, [labelSelector])
 
   const resourcesViewDataContextValue = useMemo<ResourcesViewData>(() => ({
+    certificateNow,
     onNavigate,
     certExpiry,
     certExpiryError,
+    certificateExpiryPolicy,
     auditBadges,
     operationalIssues,
     operationalIssuesIncomplete,
     onOpenLogs,
     onOpenWorkloadLogs,
-  }), [onNavigate, certExpiry, certExpiryError, auditBadges, operationalIssues, operationalIssuesIncomplete, onOpenLogs, onOpenWorkloadLogs])
+  }), [certificateNow, onNavigate, certExpiry, certExpiryError, certificateExpiryPolicy, auditBadges, operationalIssues, operationalIssuesIncomplete, onOpenLogs, onOpenWorkloadLogs])
 
   const renderSidebar = (className?: string, inDrawer = false) => (
     <ResourcesSidebar
@@ -8221,7 +8231,7 @@ interface CellContentProps {
 }
 
 function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, storeProviders, extraColumn, nameHref, findingMatch }: CellContentProps) {
-  const { auditBadges } = useContext(ResourcesViewDataContext)
+  const { auditBadges, certificateExpiryPolicy, certExpiry, certificateNow } = useContext(ResourcesViewDataContext)
   // Parent-injected extra columns short-circuit the built-in switch.
   // Used by hosts that inject leading columns (e.g. a multi-cluster Cluster column).
   if (extraColumn) {
@@ -8419,8 +8429,12 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
       return <WorkflowCell resource={resource} column={column} />
     case 'cronworkflows':
       return <CronWorkflowCell resource={resource} column={column} />
-    case 'certificates':
-      return <CertificateCell resource={resource} column={column} />
+    case 'certificates': {
+      const secretExpiry = certExpiry?.[`${resource.metadata?.namespace}/${resource.spec?.secretName}`]
+      const sameExpiry = secretExpiry?.expiry && Date.parse(secretExpiry.expiry) === Date.parse(resource.status?.notAfter)
+      const policy = !resource.status?.notBefore && sameExpiry ? secretExpiry?.expiryPolicy ?? certificateExpiryPolicy : certificateExpiryPolicy
+      return <CertificateCell resource={resource} column={column} certificateExpiryPolicy={policy} now={certificateNow} />
+    }
     case 'persistentvolumes':
       return <PersistentVolumeCell resource={resource} column={column} />
     case 'storageclasses':
@@ -8847,8 +8861,12 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
       return <DomainMappingCell resource={resource} column={column} />
     case 'knativeingresses':
       return <KnativeIngressCell resource={resource} column={column} />
-    case 'knativecertificates':
-      return <KnativeCertificateCell resource={resource} column={column} />
+    case 'knativecertificates': {
+      const secretExpiry = certExpiry?.[`${resource.metadata?.namespace}/${resource.spec?.secretName}`]
+      const sameExpiry = secretExpiry?.expiry && Date.parse(secretExpiry.expiry) === Date.parse(resource.status?.notAfter)
+      const policy = !resource.status?.notBefore && sameExpiry ? secretExpiry?.expiryPolicy ?? certificateExpiryPolicy : certificateExpiryPolicy
+      return <KnativeCertificateCell resource={resource} column={column} certificateExpiryPolicy={policy} now={certificateNow} />
+    }
     // Traefik
     case 'ingressroutes':
     case 'ingressroutetcps':
@@ -9592,7 +9610,7 @@ function ConfigMapCell({ resource, column }: { resource: any; column: string }) 
 }
 
 function SecretCell({ resource, column }: { resource: any; column: string }) {
-  const { certExpiry, certExpiryError } = useContext(ResourcesViewDataContext)
+  const { certExpiry, certExpiryError, certificateNow } = useContext(ResourcesViewDataContext)
   switch (column) {
     case 'type': {
       const { type, color } = getSecretType(resource)
@@ -9616,14 +9634,16 @@ function SecretCell({ resource, column }: { resource: any; column: string }) {
       if (!expiry) {
         return <span className="text-sm text-theme-text-tertiary">-</span>
       }
-      const color = expiry.expired || expiry.daysLeft < 7
+      const remaining = expiry.expiry ? Date.parse(expiry.expiry) - (certificateNow ?? Date.now()) : expiry.daysLeft * 24 * 60 * 60 * 1000
+      const expiryHealth = expiry.expiry
+        ? certificateExpiryHealth(remaining, expiry.expiryPolicy)
+        : expiry.health ?? certificateExpiryHealth(expiry.daysLeft * 24 * 60 * 60 * 1000)
+      const color = expiry.expired || expiryHealth === 'unhealthy'
         ? 'text-red-400'
-        : expiry.daysLeft < 30
-          ? 'text-yellow-400'
-          : 'text-green-400'
-      const text = expiry.expired
-        ? `Expired ${Math.abs(expiry.daysLeft)}d ago`
-        : `${expiry.daysLeft}d`
+          : expiryHealth === 'degraded' ? 'text-yellow-400' : expiryHealth === 'unknown' ? 'text-theme-text-tertiary' : 'text-green-400'
+      const text = expiry.expiry && Math.abs(remaining) < 24 * 60 * 60 * 1000
+        ? remaining <= 0 ? `Expired ${formatDuration(-remaining)} ago` : formatDuration(remaining)
+        : expiry.expired ? `Expired ${Math.abs(expiry.daysLeft)}d ago` : `${expiry.daysLeft}d`
       return <span className={clsx('text-sm font-medium', color)}>{text}</span>
     }
     default:

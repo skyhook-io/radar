@@ -40,6 +40,15 @@ func genTLSSecret(t *testing.T, namespace, name string, daysFromNow int) *corev1
 	}
 }
 
+func TestGetCertificateExpiryIncludesSealedSecretsKey(t *testing.T) {
+	secret := genTLSSecret(t, "app", "sealed-key", 15)
+	secret.Labels = map[string]string{"sealedsecrets.bitnami.com/sealed-secrets-key": "active"}
+	got, err := GetCertificateExpiry(&mockProvider{secrets: []*corev1.Secret{secret}}, nil)
+	if err != nil || got["app/sealed-key"].Expiry == "" {
+		t.Fatalf("sealed key expiry missing: %v, %v", got, err)
+	}
+}
+
 func TestGetCertificateExpiry_NamespaceFiltering(t *testing.T) {
 	prov := &mockProvider{
 		secrets: []*corev1.Secret{

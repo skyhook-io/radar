@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect, type ReactNode } from 'react'
+import { useCertificateClock } from '../../../hooks/useCertificateClock'
 import { AlertTriangle, Copy, Check, Shield, Pencil, Save, XCircle, RefreshCw, Eye, EyeOff } from 'lucide-react'
 import { clsx } from 'clsx'
 import { stringify as yamlStringify } from 'yaml'
@@ -8,6 +9,7 @@ import { showApiError } from '../../ui/Toast'
 import { ReflectorSummary, ReflectorSection, isReflectorMirror, reflectorEditNotice } from './ReflectorSection'
 import type { SecretCertificateInfo, CertificateInfo, Relationships, ResourceRef } from '../../../types'
 import { formatDuration } from '../resource-utils'
+import { certificateExpiryHealth } from '../../../utils/certificate-expiry'
 import { cleanResourceForYaml } from '../../../utils/yaml'
 import { copyText } from '../../../utils/clipboard'
 import { isFetchError } from '../../../types/fetch-error'
@@ -21,8 +23,6 @@ interface SecretRendererProps {
   onSaveSecretValue?: (yaml: string) => Promise<void>
   isSaving?: boolean
 }
-
-const DAY = 24 * 60 * 60 * 1000
 
 function formatDate(dateStr: string): string {
   if (!dateStr) return '-'
@@ -287,15 +287,12 @@ function secretSaveErrorMessage(error: unknown): { reason?: string } {
 }
 
 function SecretCertificates({ info, children }: { info: SecretCertificateInfo; children: ReactNode }) {
-  const [now, setNow] = useState(Date.now)
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), 30_000)
-    return () => window.clearInterval(timer)
-  }, [])
+  const now = useCertificateClock()
 
   const primary = info.certificates
   const leafCert = primary?.[0]
   const leafRemaining = leafCert ? Date.parse(leafCert.notAfter) - now : Infinity
+  const leafHealth = certificateExpiryHealth(leafRemaining, leafCert?.expiryPolicy)
   const chains = Object.entries(info.additionalKeys ?? {}).sort(([a], [b]) => a.localeCompare(b))
   if (primary?.length) chains.unshift(['tls.crt', primary])
 
@@ -304,10 +301,11 @@ function SecretCertificates({ info, children }: { info: SecretCertificateInfo; c
   let expiringCount = 0
   const certificateSections = chains.flatMap(([key, chain], groupIndex) => chain.map((cert, index) => {
     const remaining = Date.parse(cert.notAfter) - now
+    const expiryHealth = certificateExpiryHealth(remaining, cert.expiryPolicy)
     if (remaining <= 0) expiredCount++
-    else if (remaining <= 30 * DAY) expiringCount++
+    else if (expiryHealth === 'degraded' || expiryHealth === 'unhealthy') expiringCount++
     const position = chain.length > 1 ? ` (${index + 1}/${chain.length}) · ${cert.subject}` : ''
-    const status = remaining <= 0 ? ' · Expired' : remaining <= 30 * DAY ? ` · Expires in ${formatDuration(remaining)}` : ''
+    const status = remaining <= 0 ? ' · Expired' : expiryHealth === 'degraded' || expiryHealth === 'unhealthy' ? ` · Expires in ${formatDuration(remaining)}` : ''
     return (
       <CertificateInfoSection
         key={`${key}/${index}`}
@@ -326,9 +324,9 @@ function SecretCertificates({ info, children }: { info: SecretCertificateInfo; c
   const summary = [`Certificates (${certificateCount})`, expiredCount && `${expiredCount} expired`, expiringCount && `${expiringCount} expiring`].filter(Boolean).join(' · ')
   return (
     <>
-      {leafCert && leafRemaining <= 30 * DAY && (
+      {leafCert && (leafHealth === 'degraded' || leafHealth === 'unhealthy') && (
         <AlertBanner
-          variant={leafRemaining <= 7 * DAY ? 'error' : 'warning'}
+          variant={leafHealth === 'unhealthy' ? 'error' : 'warning'}
           title={leafRemaining <= 0 ? 'Certificate has expired' : `Certificate expires in ${formatDuration(leafRemaining)}`}
           message={`${leafRemaining <= 0 ? 'Expired' : 'Expires'} ${formatDate(leafCert.notAfter)} · tls.crt`}
         />
@@ -351,10 +349,10 @@ export function CertificateInfoSection({ cert, index, total, title: titleOverrid
   children?: ReactNode
 }) {
   const expired = remaining <= 0
-  const daysLeft = remaining / DAY
-  const expiryTextColor = expired || daysLeft <= 7
+  const expiryHealth = certificateExpiryHealth(remaining, cert.expiryPolicy)
+  const expiryTextColor = expired || expiryHealth === 'unhealthy'
     ? 'text-semantic-error'
-    : daysLeft <= 30 ? 'text-warning-text' : 'text-theme-text-secondary'
+    : expiryHealth === 'degraded' ? 'text-warning-text' : 'text-theme-text-secondary'
   const duration = formatDuration(Math.abs(remaining))
 
   const title = titleOverride ?? (total > 1

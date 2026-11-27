@@ -1,3 +1,4 @@
+import type { CertificateExpiryWindows } from '@skyhook-io/k8s-ui/types'
 import { Database } from 'lucide-react'
 import { CNPGClusterRenderer as BaseCNPGClusterRenderer } from '@skyhook-io/k8s-ui/components/resources/renderers/CNPGClusterRenderer'
 import { Section, RelationshipGroup, getCNPGDeclarativeStatus } from '@skyhook-io/k8s-ui'
@@ -17,9 +18,11 @@ const CNPG_GROUP = 'postgresql.cnpg.io'
  */
 export function CNPGClusterRenderer({
   data,
+  certificateExpiryPolicy,
   onNavigate,
 }: {
   data: any
+  certificateExpiryPolicy?: CertificateExpiryWindows
   onNavigate?: (ref: ResourceRef) => void
 }) {
   const namespace = data?.metadata?.namespace ?? ''
@@ -64,6 +67,7 @@ export function CNPGClusterRenderer({
     <>
       <BaseCNPGClusterRenderer
         data={data}
+        certificateExpiryPolicy={certificateExpiryPolicy}
         onNavigate={onNavigate}
         declared={
           <Section title="Declared Objects" icon={Database} defaultExpanded={notApplied > 0}>

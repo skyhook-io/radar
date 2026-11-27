@@ -35,6 +35,7 @@ import (
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/internal/traffic"
 	versionpkg "github.com/skyhook-io/radar/internal/version"
+	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/prom"
 )
 
@@ -42,8 +43,9 @@ var clusterConnectionProbe = k8s.TestClusterConnection
 
 // AppConfig holds all parsed configuration for the Radar application.
 type AppConfig struct {
-	Kubeconfig     string
-	KubeconfigDirs []string
+	CertificateExpiryPolicy health.CertificateExpiryPolicy
+	Kubeconfig              string
+	KubeconfigDirs          []string
 	// Zero value is the deliberate one: an entrypoint that never sets this
 	// starts on the kubeconfig's current-context. Only cmd/desktop opts in.
 	RestoreLastDesktopContext   bool
@@ -550,6 +552,7 @@ func CreateServer(cfg AppConfig) *server.Server {
 		kubecostClusterIDContext = costConfig.ClusterIDContext
 	}
 	effectiveCfg := &config.Config{
+		CertificateWarningPercent: cfg.CertificateExpiryPolicy.Setting(),
 		Kubeconfig:                cfg.Kubeconfig,
 		KubeconfigDirs:            cfg.KubeconfigDirs,
 		Namespace:                 cfg.Namespace,
@@ -581,25 +584,26 @@ func CreateServer(cfg AppConfig) *server.Server {
 	}
 
 	serverCfg := server.Config{
-		Port:                  cfg.Port,
-		PortFallback:          cfg.PortFallback,
-		ListenAddress:         cfg.ListenAddress,
-		BasePath:              cfg.BasePath,
-		TrustedOrigins:        cfg.TrustedOrigins,
-		AllowedHosts:          cfg.AllowedHosts,
-		StartupLog:            true,
-		RemoteAccessHint:      cfg.ShowRemoteAccessHint,
-		DevMode:               cfg.DevMode,
-		EnablePprof:           cfg.EnablePprof,
-		StaticFS:              static.FS,
-		StaticRoot:            "dist",
-		EffectiveConfig:       effectiveCfg,
-		PrometheusURLFlag:     cfg.PrometheusURLFlag,
-		PrometheusHeaderFlags: cfg.PrometheusHeaderFlags,
-		LocalConnections:      cfg.LocalConnections,
-		LocalRuntime:          cfg.LocalRuntime,
-		OpenCostCurrency:      cfg.OpenCostCurrency,
-		OpenCostManaged:       cfg.OpenCostFlagSet,
+		CertificateExpiryPolicy: cfg.CertificateExpiryPolicy,
+		Port:                    cfg.Port,
+		PortFallback:            cfg.PortFallback,
+		ListenAddress:           cfg.ListenAddress,
+		BasePath:                cfg.BasePath,
+		TrustedOrigins:          cfg.TrustedOrigins,
+		AllowedHosts:            cfg.AllowedHosts,
+		StartupLog:              true,
+		RemoteAccessHint:        cfg.ShowRemoteAccessHint,
+		DevMode:                 cfg.DevMode,
+		EnablePprof:             cfg.EnablePprof,
+		StaticFS:                static.FS,
+		StaticRoot:              "dist",
+		EffectiveConfig:         effectiveCfg,
+		PrometheusURLFlag:       cfg.PrometheusURLFlag,
+		PrometheusHeaderFlags:   cfg.PrometheusHeaderFlags,
+		LocalConnections:        cfg.LocalConnections,
+		LocalRuntime:            cfg.LocalRuntime,
+		OpenCostCurrency:        cfg.OpenCostCurrency,
+		OpenCostManaged:         cfg.OpenCostFlagSet,
 		DiagConfig: &server.DiagConfig{
 			Port:                 cfg.Port,
 			DevMode:              cfg.DevMode,

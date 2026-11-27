@@ -30,6 +30,15 @@ func TestStandaloneRejectsDisabledMCPBeforeBoot(t *testing.T) {
 	}
 }
 
+func TestStandaloneRejectsInvalidCertificatePolicyBeforeBoot(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("RADAR_CERTIFICATE_WARNING_PERCENT", "101")
+	_, _, err := bootEphemeral("")
+	if err == nil || !strings.Contains(err.Error(), "certificate-warning-percent") {
+		t.Fatalf("boot: %v", err)
+	}
+}
+
 func TestStandaloneRejectsMalformedMCPBeforeBoot(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

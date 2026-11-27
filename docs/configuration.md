@@ -1,5 +1,32 @@
 # Configuration
 
+## TLS certificate expiry warnings
+
+Certificate expiry warnings adjust automatically to each certificate's actual validity. Radar warns in the last third of its lifetime, capped at 30 days. High starts at 7/30 of that warning period. A 90-day or one-year certificate therefore keeps the 30-day warning and 7-day High windows. A one-hour certificate warns with 20 minutes left and becomes High with 4 minutes 40 seconds left.
+
+No configuration is required. Radar uses the issued certificate's start and expiry dates, including cert-manager status. Missing or invalid validity dates retain the conservative 30-day warning and 7-day High windows. A shorter window is not proof that renewal failed; explicit renewal failures and future-validity checks remain independent. Expired certificates always trigger an alert.
+
+To change the warning threshold, set the percentage of total validity remaining. For example, 20 means warn in the last 20% of the certificate's lifetime. High is calculated automatically and the 30-day cap still applies:
+
+```bash
+radar --certificate-warning-percent=20
+```
+
+CLI and Desktop accept the same flag. The equivalent config.json field is `certificateWarningPercent` (a string such as `"20"` or `"auto"`), and the environment variable is `RADAR_CERTIFICATE_WARNING_PERCENT`. Flags override environment variables, which override the file. Use `auto` to restore automatic behavior. Changes require restarting Radar.
+
+For Helm, including Self-Managed Cloud-connected agents:
+
+```yaml
+certificateExpiry:
+  warningPercent: 20 # optional; empty uses the last third of validity
+```
+
+Updating this value changes the Deployment's startup arguments and restarts its Pods. Empty chart values omit the flag, preserving environment and file settings. Configure the Radar agent chart, rather than the Hub chart or the OSS-only `audit` values. Use a whole percentage from 1 to 100; durations such as `10m` are not accepted. Invalid settings stop startup; Desktop shows the error in a window.
+
+Live TLS Issues for qualifying Ingresses and Gateways use the certificate's warning period, capped at 24 hours. CNPG user-supplied certificates reported only as expiry dates use the conservative unknown-lifetime fallback; Radar does not read additional Secret contents for that view. CNPG's own automatic-renewal deadline, node certificate events, TLS probe verification and CSR issuance status keep their separate rules.
+
+The percentage applies separately to each certificate read by that Radar process. Lowering it also reduces notice for manually renewed certificates. When lifetime is unavailable, the conservative fallback is retained regardless of the percentage override. Effective settings and resolved per-certificate windows are returned in API metadata; fleet certificate health uses the agent's classification.
+
 This document covers Radar's command-line flags and cluster connection behavior. The [CLI reference](https://radarhq.io/docs/configuration/cli) on the docs site covers subcommands.
 
 ## CLI flags

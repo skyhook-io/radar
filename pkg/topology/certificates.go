@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	"github.com/skyhook-io/radar/pkg/health"
 	"math"
 	"strings"
 	"time"
@@ -171,14 +172,21 @@ func ecCurveName(curve elliptic.Curve) string {
 
 // CertExpiry is a lightweight certificate expiry entry for list views.
 type CertExpiry struct {
-	DaysLeft int  `json:"daysLeft"`
-	Expired  bool `json:"expired,omitempty"`
+	Expiry       string                          `json:"expiry"`
+	Health       health.Level                    `json:"health"`
+	ExpiryPolicy health.CertificateExpiryWindows `json:"expiryPolicy"`
+	DaysLeft     int                             `json:"daysLeft"`
+	Expired      bool                            `json:"expired,omitempty"`
 }
 
 // GetCertificateExpiry returns certificate expiry for all TLS secrets,
 // keyed by "namespace/name". If namespaces is non-empty, only matching
 // namespaces are included.
 func GetCertificateExpiry(provider ResourceProvider, namespaces []string) (map[string]CertExpiry, error) {
+	return GetCertificateExpiryWithPolicy(provider, namespaces, health.CertificateExpiryPolicy{})
+}
+
+func GetCertificateExpiryWithPolicy(provider ResourceProvider, namespaces []string, policy health.CertificateExpiryPolicy) (map[string]CertExpiry, error) {
 	secrets, err := provider.Secrets()
 	if err != nil {
 		// RBAC not granted or lister unavailable — return empty (not an error).
@@ -187,6 +195,7 @@ func GetCertificateExpiry(provider ResourceProvider, namespaces []string) (map[s
 	}
 
 	result := make(map[string]CertExpiry)
+	now := time.Now()
 	for _, secret := range secrets {
 		if !MatchesNamespace(namespaces, secret.Namespace) {
 			continue
@@ -203,9 +212,21 @@ func GetCertificateExpiry(provider ResourceProvider, namespaces []string) (map[s
 			continue
 		}
 		key := secret.Namespace + "/" + secret.Name
+		expiry, err := time.Parse(time.RFC3339, certs[0].NotAfter)
+		if err != nil {
+			continue
+		}
+		var notBefore *time.Time
+		if start, err := time.Parse(time.RFC3339, certs[0].NotBefore); err == nil {
+			notBefore = &start
+		}
+		thresholds := policy.Resolve(notBefore, &expiry)
 		result[key] = CertExpiry{
-			DaysLeft: certs[0].DaysLeft,
-			Expired:  certs[0].Expired,
+			Expiry:       certs[0].NotAfter,
+			Health:       thresholds.Classify(&expiry, now),
+			ExpiryPolicy: thresholds.Windows(),
+			DaysLeft:     certs[0].DaysLeft,
+			Expired:      certs[0].Expired,
 		}
 	}
 

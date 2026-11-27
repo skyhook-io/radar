@@ -1275,6 +1275,7 @@ export function useUpdateAuditSettings() {
 
 // Certificate expiry for TLS secrets (used in secrets list view)
 export interface CertExpiry {
+  expiry?: string; health?: string; expiryPolicy?: import('@skyhook-io/k8s-ui/types').CertificateExpiryWindows
   daysLeft: number;
   expired?: boolean;
 }

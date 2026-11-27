@@ -30,7 +30,7 @@ import (
 // between a namespaced and a cluster-wide index — search returns mixed
 // kinds in one response, so a single index can't get both right.
 func (s *Server) newResourceSummaryContextBuilder(r *http.Request, namespaces []string) summarycontext.Builder {
-	provider := issues.NewCacheProvider()
+	provider := s.newIssueProvider()
 	if provider == nil {
 		return nil
 	}
@@ -59,7 +59,7 @@ func (s *Server) newResourceSummaryContextBuilder(r *http.Request, namespaces []
 // (cluster-wide user) — both indexes would be identical, so one pass
 // suffices.
 func (s *Server) newSearchSummaryContextBuilder(r *http.Request, scanNamespaces []string, statusOnly bool) summarycontext.Builder {
-	provider := issues.NewCacheProvider()
+	provider := s.newIssueProvider()
 	if provider == nil {
 		return nil
 	}

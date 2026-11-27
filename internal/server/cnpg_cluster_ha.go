@@ -36,5 +36,10 @@ func (s *Server) handleCNPGClusterHA(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available")
 		return
 	}
-	s.writeJSON(w, reader.ClusterHA(r.Context(), cnpgsvc.HAClients{Typed: typed, Dynamic: dyn, Metadata: meta}, cache, cluster, time.Now().UTC()))
+	result := reader.ClusterHA(r.Context(), cnpgsvc.HAClients{Typed: typed, Dynamic: dyn, Metadata: meta}, cache, cluster, time.Now().UTC())
+	windows := s.certificateExpiryPolicy.Windows()
+	for i := range result.Certificates {
+		result.Certificates[i].ExpiryPolicy = &windows
+	}
+	s.writeJSON(w, result)
 }

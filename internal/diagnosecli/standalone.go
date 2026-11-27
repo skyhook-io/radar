@@ -31,6 +31,10 @@ func bootEphemeral(kubeconfig string) (base string, shutdown func(), err error) 
 	if err != nil {
 		return "", nil, err
 	}
+	policy, err := config.RegisterCertificateExpiryFlags(flag.NewFlagSet("standalone-certificates", flag.ContinueOnError), fileCfg).Resolve()
+	if err != nil {
+		return "", nil, err
+	}
 	mode, err := config.RegisterMCPFlags(flag.NewFlagSet("standalone", flag.ContinueOnError), fileCfg).Resolve()
 	if err != nil {
 		return "", nil, err
@@ -59,15 +63,16 @@ func bootEphemeral(kubeconfig string) (base string, shutdown func(), err error) 
 
 	app.DisableMCPPortFile()
 	cfg := app.AppConfig{
-		Kubeconfig:      kubeconfig,
-		Port:            0, // random free port
-		ListenAddress:   "127.0.0.1",
-		NoBrowser:       true,
-		HistoryLimit:    1000, // in-memory timeline floor; this instance lives minutes
-		MCPEnabled:      true,
-		MCPReadOnly:     mode.ReadOnly,
-		AIHistory:       true,
-		TimelineStorage: "memory",
+		CertificateExpiryPolicy: policy,
+		Kubeconfig:              kubeconfig,
+		Port:                    0, // random free port
+		ListenAddress:           "127.0.0.1",
+		NoBrowser:               true,
+		HistoryLimit:            1000, // in-memory timeline floor; this instance lives minutes
+		MCPEnabled:              true,
+		MCPReadOnly:             mode.ReadOnly,
+		AIHistory:               true,
+		TimelineStorage:         "memory",
 	}
 	app.SetGlobals(cfg)
 	if err := app.InitializeK8s(cfg); err != nil {

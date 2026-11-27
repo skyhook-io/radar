@@ -9,7 +9,7 @@ import (
 
 func auditOptions(ctx context.Context) *audit.RunOptions {
 	if auth.UserFromContext(ctx) == nil {
-		return nil
+		return &audit.RunOptions{CertificateExpiryPolicy: audit.CertificateExpiryPolicyFromContext(ctx)}
 	}
 	namespaces := filterNamespacesForUser(ctx, nil)
 	secrets := namespaces
@@ -18,5 +18,5 @@ func auditOptions(ctx context.Context) *audit.RunOptions {
 	}
 	secrets = filterNamespacesByCanRead(ctx, "", "secrets", "list", secrets)
 	scope := audit.ResolveReadScope(namespaces, secrets, func(group, resource, ns string) bool { return canReadInNamespace(ctx, group, resource, ns, "list") })
-	return &audit.RunOptions{Scope: scope}
+	return &audit.RunOptions{Scope: scope, CertificateExpiryPolicy: audit.CertificateExpiryPolicyFromContext(ctx)}
 }

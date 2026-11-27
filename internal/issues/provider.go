@@ -17,6 +17,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/pkg/cnpg"
+	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/timeutil"
@@ -49,7 +50,7 @@ type CacheProvider struct {
 
 // NewCacheProvider returns a Provider over the live radar caches, or
 // nil if the typed cache isn't ready (cluster connection still pending).
-func NewCacheProvider() *CacheProvider {
+func NewCacheProvider(policies ...health.CertificateExpiryPolicy) *CacheProvider {
 	cache := k8s.GetResourceCache()
 	if cache == nil {
 		return nil
@@ -58,8 +59,24 @@ func NewCacheProvider() *CacheProvider {
 		cache:       cache,
 		dynamic:     k8s.GetDynamicResourceCache(),
 		discovery:   k8s.GetResourceDiscovery(),
-		detectScope: k8s.NewDetectScope(),
+		detectScope: k8s.NewDetectScope(policies...),
 	}
+}
+
+func (p *CacheProvider) CertificateExpiryPolicy() health.CertificateExpiryPolicy {
+	if p != nil && p.detectScope != nil {
+		return p.detectScope.CertificateExpiryPolicy
+	}
+	return health.CertificateExpiryPolicy{}
+}
+
+func certificatePolicyForProvider(p Provider) health.CertificateExpiryPolicy {
+	if configured, ok := p.(interface {
+		CertificateExpiryPolicy() health.CertificateExpiryPolicy
+	}); ok {
+		return configured.CertificateExpiryPolicy()
+	}
+	return health.CertificateExpiryPolicy{}
 }
 
 func (p *CacheProvider) CacheIdentity() (*k8s.ResourceCache, *k8s.DynamicResourceCache, *k8s.ResourceDiscovery) {

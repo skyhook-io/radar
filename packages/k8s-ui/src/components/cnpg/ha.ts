@@ -9,6 +9,8 @@ import { CNPG_PROMETHEUS_NOT_CONNECTED, cnpgFormatLag, cnpgLagTone, cnpgReplicat
 import { type Fact } from '../facts'
 import { type FoldSummary } from '../ui/FoldSection'
 import { worseTone } from '../ui/status-tone'
+import { certificateExpiryHealth } from '../../utils/certificate-expiry'
+import type { CertificateExpiryWindows } from '../../types'
 
 export type CNPGHASourceState = 'ok' | 'denied' | 'notFound' | 'notInstalled' | 'unavailable' | 'error'
 
@@ -96,6 +98,7 @@ export interface CNPGHAJob {
 }
 
 export interface CNPGHACertificate {
+  expiryPolicy?: CertificateExpiryWindows
   secret: string
   purposes?: string[]
   raw: string
@@ -289,19 +292,18 @@ export interface CNPGCertificateView extends CNPGHACertificate {
 }
 
 /**
- * The same thresholds as the Issues engine: a certificate its owner renews is
- * flagged from 30 days; the operator renews its own, so those only matter once
- * renewal is overdue.
+ * User-renewed certificates follow the agent's expiry windows. Certificates
+ * renewed by the operator retain its independent renewal deadline.
  */
 export function cnpgCertificateViews(certs: CNPGHACertificate[] | undefined, now = Date.now()): CNPGCertificateView[] {
   return (certs ?? []).map((c) => {
     if (!c.expiresAt) return { ...c, tone: 'unknown' as HealthLevel }
     const ms = Date.parse(c.expiresAt) - now
+    if (!Number.isFinite(ms)) return { ...c, tone: 'unknown' as HealthLevel }
     const daysLeft = Math.floor(ms / 86_400_000)
     let tone: HealthLevel = 'healthy'
     if (ms <= 0) tone = 'unhealthy'
-    else if (c.renewal === 'user' && ms < 7 * 86_400_000) tone = 'unhealthy'
-    else if (c.renewal === 'user' && ms < 30 * 86_400_000) tone = 'degraded'
+    else if (c.renewal === 'user') tone = certificateExpiryHealth(ms, c.expiryPolicy)
     else if (c.renewal === 'operator' && ms < 86_400_000) tone = 'unhealthy'
     return { ...c, daysLeft, tone }
   })

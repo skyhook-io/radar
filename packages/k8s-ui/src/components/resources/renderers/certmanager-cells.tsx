@@ -1,6 +1,7 @@
 // cert-manager cell components for ResourcesView table — extracted from ResourcesView.tsx
 
 import { clsx } from 'clsx'
+import type { CertificateExpiryWindows } from '../../../types'
 import { Tooltip } from '../../ui/Tooltip'
 import {
   getCertificateStatus,
@@ -23,7 +24,7 @@ import {
   getChallengePresented,
 } from '../resource-utils'
 
-export function CertificateCell({ resource, column }: { resource: any; column: string }) {
+export function CertificateCell({ resource, column, certificateExpiryPolicy, now }: { resource: any; column: string; certificateExpiryPolicy?: CertificateExpiryWindows; now?: number }) {
   switch (column) {
     case 'status': {
       const status = getCertificateStatus(resource)
@@ -46,7 +47,7 @@ export function CertificateCell({ resource, column }: { resource: any; column: s
       return <span className="text-sm text-theme-text-secondary">{issuer}</span>
     }
     case 'expires': {
-      const expiry = getCertificateExpiry(resource)
+      const expiry = getCertificateExpiry(resource, certificateExpiryPolicy, now)
       return (
         <span title={expiry.text} className={clsx(
           'text-sm font-medium truncate block',

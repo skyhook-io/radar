@@ -75,6 +75,7 @@ func main() {
 	timelineMaxSize := flag.String("timeline-max-size", fileCfg.TimelineMaxSizeOr("1Gi"), "Maximum SQLite timeline storage size before pruning oldest events (e.g. 800Mi, 8Gi). 0 disables size-based pruning.")
 	prometheusURL := flag.String("prometheus-url", fileCfg.PrometheusURL, "Manual Prometheus/VictoriaMetrics URL (skips auto-discovery)")
 	openCostCurrency := flag.String("opencost-currency", fileCfg.OpenCostCurrency, "Override the ISO 4217 currency label for OpenCost values (empty: auto-detect, then USD)")
+	certificateFlags := config.RegisterCertificateExpiryFlags(flag.CommandLine, fileCfg)
 	mcpFlags := config.RegisterMCPFlags(flag.CommandLine, fileCfg)
 	noVersionCheck := flag.Bool("no-version-check", fileCfg.NoVersionCheck, "Disable automatic checks for newer Radar versions and releases; manual Desktop checks remain available (also enabled via RADAR_DISABLE_VERSION_CHECK=1)")
 	flag.Parse()
@@ -92,6 +93,11 @@ func main() {
 		return
 	}
 
+	certificatePolicy, err := certificateFlags.Resolve()
+	if err != nil {
+		showCertificateStartupError(err)
+		log.Fatal(err)
+	}
 	mcpMode, err := mcpFlags.Resolve()
 	if err != nil {
 		log.Fatal(err)
@@ -199,6 +205,7 @@ func main() {
 	}
 
 	cfg := app.AppConfig{
+		CertificateExpiryPolicy:   certificatePolicy,
 		Kubeconfig:                resolvedKubeconfig,
 		KubeconfigDirs:            resolvedKubeconfigDirs,
 		RestoreLastDesktopContext: fileCfg.RestoreLastDesktopContextOr(true),

@@ -224,6 +224,10 @@ spec:
             {{- range $k, $v := .Values.traffic.prometheusHeadersFromEnv }}
             - {{ printf "--prometheus-header-from-env=%s=%s" $k $v | quote }}
             {{- end }}
+            {{- $certificateExpiry := .Values.certificateExpiry | default dict }}
+            {{- with $certificateExpiry.warningPercent }}
+            - {{ printf "--certificate-warning-percent=%v" . | quote }}
+            {{- end }}
             {{- if .Values.disableExec }}
             - --disable-exec
             {{- end }}

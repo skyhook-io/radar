@@ -2,6 +2,7 @@ package issues
 
 import (
 	"fmt"
+	"github.com/skyhook-io/radar/pkg/health"
 	"sort"
 	"strings"
 	"time"
@@ -58,8 +59,6 @@ func CNPGUserCertificateSecrets(u *unstructured.Unstructured) map[string]string 
 }
 
 const (
-	cnpgCertWarnWithin     = 30 * 24 * time.Hour
-	cnpgCertCriticalWithin = 7 * 24 * time.Hour
 	// The operator renews its own certificates when they are within its
 	// expiring threshold (7 days by default, EXPIRING_CHECK_THRESHOLD). An
 	// operator-managed certificate this close to expiry means renewal has not
@@ -70,7 +69,11 @@ const (
 
 // detectCNPGCertificateIssues reports certificates close to expiry. One issue
 // per Secret, so two expiring certificates stay two causes.
-func detectCNPGCertificateIssues(gvr schema.GroupVersionResource, kind string, u *unstructured.Unstructured, now time.Time) []Issue {
+func detectCNPGCertificateIssues(gvr schema.GroupVersionResource, kind string, u *unstructured.Unstructured, now time.Time, policies ...health.CertificateExpiryPolicy) []Issue {
+	policy := health.CertificateExpiryPolicy{}
+	if len(policies) > 0 {
+		policy = policies[0]
+	}
 	exp, _, _ := unstructured.NestedStringMap(u.Object, "status", "certificates", "expirations")
 	if len(exp) == 0 {
 		return nil
@@ -91,6 +94,7 @@ func detectCNPGCertificateIssues(gvr schema.GroupVersionResource, kind string, u
 		}
 		left := at.Sub(now)
 		_, userProvided := user[secret]
+		certificateHealth := policy.Resolve(nil, &at).Classify(&at, now)
 		var sev Severity
 		var msg string
 		reason := ReasonCNPGCertificateExpiring
@@ -98,10 +102,10 @@ func detectCNPGCertificateIssues(gvr schema.GroupVersionResource, kind string, u
 		case left <= 0:
 			sev, reason = SeverityCritical, ReasonCNPGCertificateExpired
 			msg = fmt.Sprintf("The certificate in Secret %s expired %s", secret, at.UTC().Format(time.RFC3339))
-		case userProvided && left < cnpgCertCriticalWithin:
+		case userProvided && certificateHealth == health.LevelUnhealthy:
 			sev = SeverityCritical
 			msg = fmt.Sprintf("The certificate in Secret %s expires in %s (%s); its owner renews it, not the operator", secret, cnpgDaysLeft(left), at.UTC().Format(time.RFC3339))
-		case userProvided && left < cnpgCertWarnWithin:
+		case userProvided && certificateHealth == health.LevelDegraded:
 			sev = SeverityWarning
 			msg = fmt.Sprintf("The certificate in Secret %s expires in %s (%s); its owner renews it, not the operator", secret, cnpgDaysLeft(left), at.UTC().Format(time.RFC3339))
 		case !userProvided && left < cnpgOperatorCertOverdueWithin:

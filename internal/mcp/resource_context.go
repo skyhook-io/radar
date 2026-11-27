@@ -95,7 +95,7 @@ func computeMCPIssueContext(ctx context.Context, cache *k8s.ResourceCache, group
 	if cache == nil {
 		return nil, nil, nil
 	}
-	provider := issues.NewCacheProvider()
+	provider := newIssueProvider(ctx)
 	if provider == nil {
 		return nil, nil, nil
 	}

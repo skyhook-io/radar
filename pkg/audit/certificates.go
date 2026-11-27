@@ -5,12 +5,24 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/certs"
+	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/timeutil"
 	corev1 "k8s.io/api/core/v1"
 )
 
-func checkTLSCertificateExpiry(tr *evalTracker, secrets []*corev1.Secret, now time.Time) []Finding {
-	sources := certs.Sources{Now: now}
+func auditNow(now time.Time) time.Time {
+	if now.IsZero() {
+		return time.Now()
+	}
+	return now
+}
+
+func checkTLSCertificateExpiry(tr *evalTracker, secrets []*corev1.Secret, now time.Time, policies ...health.CertificateExpiryPolicy) []Finding {
+	var policy health.CertificateExpiryPolicy
+	if len(policies) > 0 {
+		policy = policies[0]
+	}
+	sources := certs.Sources{Now: now, ExpiryPolicy: policy}
 	for _, secret := range secrets {
 		if input, ok := certs.FromTLSSecret(secret); ok && input.NotAfter != nil {
 			sources.TLSSecrets = append(sources.TLSSecrets, input)

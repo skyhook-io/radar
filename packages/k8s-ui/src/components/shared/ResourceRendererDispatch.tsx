@@ -1,3 +1,4 @@
+import type { CertificateExpiryWindows } from '../../types'
 import { getCRDStatus } from '../resources/resource-utils-crd'
 import { FLUX_OPERATOR_GROUP, FLUX_OPERATOR_PLURALS, getFluxOperatorStatus } from '../resources/resource-utils-flux-operator'
 import { getStrimziConnectorStatus, getStrimziClusterStatus, isStrimziKafka, isStrimziKafkaNodePool } from '../resources/resource-utils-strimzi'
@@ -413,6 +414,7 @@ export interface RendererOverrides {
   // CNPG Cluster: the host wraps it to add the reverse lookup of declarative
   // objects, which needs three list fetches.
   CNPGClusterRenderer?: React.ComponentType<{
+    certificateExpiryPolicy?: CertificateExpiryWindows
     data: any
     onNavigate?: (ref: ResourceRef) => void
   }>
@@ -670,6 +672,7 @@ interface ResourceRendererDispatchProps {
   /** See RelatedResourcesSection. */
   trackedBy?: string
   certificateInfo?: SecretCertificateInfo
+  certificateExpiryPolicy?: CertificateExpiryWindows
   certificateSigningRequest?: CertificateSigningRequestDetails
   hpaDiagnosis?: HPADiagnosis
   scalerDiagnostics?: ScalerDiagnosis[]
@@ -719,6 +722,7 @@ export function ResourceRendererDispatch({
   relationships,
   trackedBy,
   certificateInfo,
+  certificateExpiryPolicy,
   certificateSigningRequest,
   hpaDiagnosis,
   scalerDiagnostics,
@@ -1044,7 +1048,7 @@ export function ResourceRendererDispatch({
         {kind === 'analysisruns' && <AnalysisRunRenderer data={data} onNavigate={onNavigate} />}
         {(kind === 'analysistemplates' || kind === 'clusteranalysistemplates') && <AnalysisTemplateRenderer data={data} />}
         {kind === 'experiments' && isApiGroup(data?.apiVersion, 'argoproj.io') && <ExperimentRenderer data={data} onNavigate={onNavigate} />}
-        {kind === 'certificates' && isApiGroup(data?.apiVersion, 'cert-manager.io') && <CertificateRenderer data={data} />}
+        {kind === 'certificates' && isApiGroup(data?.apiVersion, 'cert-manager.io') && <CertificateRenderer data={data} certificateExpiryPolicy={certificateExpiryPolicy} />}
         {kind === 'workflows' && <WorkflowRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'persistentvolumes' && <PersistentVolumeRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'storageclasses' && <StorageClassRenderer data={data} />}
@@ -1145,7 +1149,7 @@ export function ResourceRendererDispatch({
         {kind === 'externalsecrets' && <ExternalSecretRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'clusterexternalsecrets' && <ClusterExternalSecretRenderer data={data} onNavigate={onNavigate} />}
         {(kind === 'secretstores' || kind === 'clustersecretstores') && <SecretStoreRenderer data={data} />}
-        {kind === 'clusters' && isApiGroup(data?.apiVersion, CNPG_GROUP) && <CNPGClusterComp data={data} onNavigate={onNavigate} />}
+        {kind === 'clusters' && isApiGroup(data?.apiVersion, CNPG_GROUP) && <CNPGClusterComp certificateExpiryPolicy={certificateExpiryPolicy} data={data} onNavigate={onNavigate} />}
         {kind === 'clusters' && isApiGroup(data?.apiVersion, 'cluster.x-k8s.io') && <CAPIClusterComp data={data} onNavigate={onNavigate} />}
         {kind === 'scheduledbackups' && isApiGroup(data?.apiVersion, CNPG_GROUP) && <CNPGScheduledBackupRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'poolers' && isApiGroup(data?.apiVersion, CNPG_GROUP) && <CNPGPoolerRenderer data={data} onNavigate={onNavigate} />}

@@ -2,6 +2,7 @@ package audit
 
 import (
 	"github.com/skyhook-io/radar/pkg/checks"
+	"github.com/skyhook-io/radar/pkg/health"
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	batchv1 "k8s.io/api/batch/v1"
@@ -10,12 +11,16 @@ import (
 	policyv1 "k8s.io/api/policy/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"time"
 )
 
 // CheckInput contains the typed K8s resources to check.
 // Each field is optional — checks are skipped for nil/empty slices.
 // Callers populate this from their own cache or API client.
 type CheckInput struct {
+	CertificateExpiryPolicy health.CertificateExpiryPolicy
+	// Now anchors certificate expiry only; zero uses the current clock.
+	Now                      time.Time
 	ConfigReferenceEvidence  *ConfigReferenceEvidence
 	Pods                     []*corev1.Pod
 	Deployments              []*appsv1.Deployment

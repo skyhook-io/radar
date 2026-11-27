@@ -9,12 +9,8 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/pkg/certs"
+	certhealth "github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/topology"
-)
-
-const (
-	certExpiryWarningDays  = 30
-	certExpiryCriticalDays = 7
 )
 
 // Type aliases so existing server code continues to compile unchanged.
@@ -67,7 +63,7 @@ func (s *Server) handleCertificates(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	src := certs.Sources{Now: time.Now().UTC()}
+	src := certs.Sources{Now: time.Now().UTC(), ExpiryPolicy: s.certificateExpiryPolicy}
 
 	// cert-manager Certificate CRs. ?group disambiguates from other ecosystems'
 	// "Certificate" kinds. An absent CRD (ErrUnknownDynamicKind) just means the
@@ -162,6 +158,11 @@ func projectCertManagerCert(obj map[string]any) certs.Input {
 			in.NotAfter = &t
 		}
 	}
+	if value := mapString(status, "notBefore"); value != "" {
+		if at, err := time.Parse(time.RFC3339, value); err == nil {
+			in.NotBefore = &at
+		}
+	}
 	return in
 }
 
@@ -195,7 +196,7 @@ func (s *Server) handleSecretCertExpiry(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Cert expiry is read from TLS Secrets — gate by per-user secrets RBAC.
-	result, err := topology.GetCertificateExpiry(provider, s.secretReadableNamespaces(r, namespaces))
+	result, err := topology.GetCertificateExpiryWithPolicy(provider, s.secretReadableNamespaces(r, namespaces), s.certificateExpiryPolicy)
 	if err != nil {
 		log.Printf("[certificate] Failed to get certificate expiry: %v", err)
 		s.writeError(w, http.StatusInternalServerError, "Failed to list secrets")
@@ -226,7 +227,7 @@ func (s *Server) getDashboardCertificateHealth(namespaces []string) *DashboardCe
 
 	provider := k8s.NewTopologyResourceProvider(cache)
 
-	expiry, err := topology.GetCertificateExpiry(provider, namespaces)
+	expiry, err := topology.GetCertificateExpiryWithPolicy(provider, namespaces, s.certificateExpiryPolicy)
 	if err != nil {
 		log.Printf("[certificate] Failed to list secrets for dashboard health: %v", err)
 		return nil
@@ -242,9 +243,9 @@ func (s *Server) getDashboardCertificateHealth(namespaces []string) *DashboardCe
 		switch {
 		case ce.Expired:
 			health.Expired++
-		case ce.DaysLeft < certExpiryCriticalDays:
+		case ce.Health == certhealth.LevelUnhealthy:
 			health.Critical++
-		case ce.DaysLeft < certExpiryWarningDays:
+		case ce.Health == certhealth.LevelDegraded:
 			health.Warning++
 		default:
 			health.Healthy++

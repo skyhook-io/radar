@@ -190,6 +190,7 @@ func (s *Server) resolveGitOpsTree(r *http.Request, req *gitopsRequest) (*gitops
 		return s.canAccessGitOpsRef(r, req, group, kind, namespace, name, false)
 	}
 	resolver := newInsightsResolver(r.Context(), req.Cache, req.AllowedNamespaces, canAccess)
+	resolver.certificateExpiryPolicy = s.certificateExpiryPolicy
 	resolver.canReadClusterScoped = s.issueClusterScopedAccess(r)
 	resolver.canReadSubject = s.issueSubjectAccess(r)
 	resolver.canReadEvidence = s.issueEvidenceAccess(r)
@@ -950,13 +951,14 @@ func namespaceAllowedForGitOps(allowed []string, namespace string) bool {
 // pkg/gitops/insights API. Per-request: ctx + namespace allowlist captured
 // once at construction; lookups are namespace-filtered to enforce RBAC.
 type insightsResolver struct {
-	ctx                  context.Context
-	cache                *k8s.ResourceCache
-	allowedNamespaces    []string
-	canAccess            func(group, kind, namespace, name string) bool
-	canReadClusterScoped func(kind, group string) bool
-	canReadSubject       func(issues.Ref) bool
-	canReadEvidence      func(issues.EvidenceRead) bool
+	certificateExpiryPolicy health.CertificateExpiryPolicy
+	ctx                     context.Context
+	cache                   *k8s.ResourceCache
+	allowedNamespaces       []string
+	canAccess               func(group, kind, namespace, name string) bool
+	canReadClusterScoped    func(kind, group string) bool
+	canReadSubject          func(issues.Ref) bool
+	canReadEvidence         func(issues.EvidenceRead) bool
 
 	// The cluster-wide issue set is composed at most once per insights request
 	// (lazily, only if a degraded managed resource asks for it) and reused
@@ -1258,7 +1260,7 @@ func (r *insightsResolver) RecentEvents(group, kind, namespace, name string) []g
 // composeIssues runs the cluster-wide issues engine for this request's
 // namespaces, redacting related refs the caller can't read.
 func (r *insightsResolver) composeIssues() ([]issues.Issue, []issues.Issue) {
-	flat := issues.Compose(issues.NewCacheProvider(), issues.Filters{
+	flat := issues.Compose(issues.NewCacheProvider(r.certificateExpiryPolicy), issues.Filters{
 		SkipPodTemplateContext: true,
 		Namespaces:             r.allowedNamespaces,
 		Limit:                  issues.NoLimit,

@@ -30,7 +30,7 @@ func (s *Server) cnpgIssueRows(r *http.Request, namespaces []string) []issues.Is
 	if readscope.NoNamespaceAccess(namespaces) {
 		return nil
 	}
-	provider := issues.NewCacheProvider()
+	provider := s.newIssueProvider()
 	if provider == nil {
 		return nil
 	}

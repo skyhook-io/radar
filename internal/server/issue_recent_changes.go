@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/internal/issuecorrelation"
-	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/readreason"
 )
@@ -56,7 +55,7 @@ func (s *Server) handleIssueRecentChanges(w http.ResponseWriter, r *http.Request
 	if !s.requireConnected(w) {
 		return
 	}
-	provider := issues.NewCacheProvider()
+	provider := s.newIssueProvider()
 	if provider == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "Resource cache not available")
 		return

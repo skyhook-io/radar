@@ -1,3 +1,6 @@
+import type { CertificateExpiryWindows } from '../../types'
+import { certificateExpiryHealth, resolveCertificateExpiryWindows } from '../../utils/certificate-expiry'
+import { formatDuration } from './resource-utils'
 // cert-manager CRD utility functions — extracted from resource-utils.ts
 
 import type { StatusBadge, HealthLevel } from './resource-utils'
@@ -33,24 +36,11 @@ export function getCertificateIssuer(cert: any): string {
   return ref.name || '-'
 }
 
-export function getCertificateExpiry(cert: any): { text: string; level: HealthLevel } {
-  const notAfter = cert.status?.notAfter
-  if (!notAfter) return { text: '-', level: 'unknown' }
-
-  const expiryDate = new Date(notAfter)
-  const now = new Date()
-  const daysUntilExpiry = Math.floor((expiryDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
-
-  if (daysUntilExpiry < 0) {
-    return { text: `Expired ${-daysUntilExpiry}d ago`, level: 'unhealthy' }
-  }
-  if (daysUntilExpiry < 7) {
-    return { text: `${daysUntilExpiry}d`, level: 'unhealthy' }
-  }
-  if (daysUntilExpiry < 30) {
-    return { text: `${daysUntilExpiry}d`, level: 'degraded' }
-  }
-  return { text: `${daysUntilExpiry}d`, level: 'healthy' }
+export function getCertificateExpiry(cert: { status?: { notBefore?: string; notAfter?: string } }, windows?: CertificateExpiryWindows, now = Date.now()): { text: string; level: HealthLevel } {
+  const remaining = new Date(cert.status?.notAfter ?? '').getTime() - now
+  const level = certificateExpiryHealth(remaining, resolveCertificateExpiryWindows(windows, cert.status?.notBefore, cert.status?.notAfter))
+  if (level === 'unknown') return { text: '-', level }
+  return { text: remaining <= 0 ? `Expired ${formatDuration(-remaining)} ago` : formatDuration(remaining), level }
 }
 
 // ============================================================================

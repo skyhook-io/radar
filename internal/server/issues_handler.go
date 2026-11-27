@@ -83,7 +83,7 @@ func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
 	}
-	provider := issues.NewCacheProvider()
+	provider := s.newIssueProvider()
 	if provider == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "Resource cache not available")
 		return
@@ -288,7 +288,7 @@ func (s *Server) handleResourceIssues(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
 	}
-	provider := issues.NewCacheProvider()
+	provider := s.newIssueProvider()
 	if provider == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "Resource cache not available")
 		return

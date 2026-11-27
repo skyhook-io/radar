@@ -13,6 +13,18 @@ const cluster = (phase: string, readyInstances: number, extra: any = {}) => ({
 
 const html = (resource: any) => renderToString(<CNPGClusterRenderer data={resource} />)
 
+it.each(['user', 'operator'])('warns when a %s certificate expiry cannot be read', (renewal) => {
+  const resource = {
+    ...cluster('Cluster in healthy state', 3),
+    spec: { instances: 3, certificates: renewal === 'user' ? { serverTLSSecret: 'tls' } : {} },
+    status: { phase: 'Cluster in healthy state', readyInstances: 3, certificates: { expirations: { tls: 'invalid' } } },
+  }
+  const out = html(resource)
+  expect(out).toContain('Certificate expiry unavailable')
+  expect(out).toContain('tls: the reported expiry date could not be read.')
+  expect(out).not.toContain('Certificate Expired')
+})
+
 describe('CNPGClusterRenderer — the drawer must not contradict the badge', () => {
   it('does not raise Degraded for a shortfall the phase already explains', () => {
     // Mid-switchover at 2/3 is the operation, not a fault. The badge says

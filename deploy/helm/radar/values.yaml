@@ -13,6 +13,9 @@ replicaCount: 1
 # null retains Radar's default ignored system namespaces. To include all
 # namespaces, set audit: {ignoredNamespaces: [], disabledChecks: []}.
 audit: null
+certificateExpiry:
+  # Empty uses the last third of validity. Override with 1-100 percent. High is automatic.
+  warningPercent: ""
 # audit:
 #   ignoredNamespaces: [kube-system, kube-node-lease, kube-public, "*-system"]
 #   disabledChecks: [] # Check IDs from GET /api/audit -> checks
