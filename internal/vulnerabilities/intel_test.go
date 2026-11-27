@@ -239,3 +239,24 @@ func TestKEVSortsFirstWithinASeverity(t *testing.T) {
 		t.Fatalf("image with a KEV Critical first: %s", byImage.Images[0].Image)
 	}
 }
+
+// Under the Known exploited filter the CSV leaves out clean images and
+// workloads, as it does under a severity or fix filter.
+func TestKEVExportLeavesOutCleanRows(t *testing.T) {
+	items, targets := intelFixture()
+	items = append(items, vulnReport(reportSpec{name: "q", ns: "shop", ownerKind: "ReplicaSet", ownerName: "quiet-1", container: "app", repo: "acme/quiet", tag: "1", digest: "sha256:q", scanned: "2026-11-10T00:00:00Z"}))
+	targets = append(targets, liveTarget("shop", "ReplicaSet", "quiet-1", "app", "acme/quiet:1", "", WorkloadRef{Kind: "Deployment", Group: "apps", Namespace: "shop", Name: "quiet"}))
+	for _, view := range []View{ViewImage, ViewWorkload} {
+		f := Filter{KEVOnly: true}
+		resp, err := buildWithIntel(context.Background(), items, targets, view, f, true, nil, readyIntel(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Intel = intelOf(readyIntel(t))
+		for _, r := range exportRows(t, resp, f) {
+			if r["image"] == "acme/quiet:1" || r["workload"] == "quiet" {
+				t.Fatalf("%s: a clean row under Known exploited: %v", view, r)
+			}
+		}
+	}
+}
