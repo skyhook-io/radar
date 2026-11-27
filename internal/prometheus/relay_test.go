@@ -74,7 +74,7 @@ func withRelayTestClient(t *testing.T) (*atomic.Int32, string) {
 		globalClient, activeRelay = saved, savedRelay
 		clientMu.Unlock()
 	})
-	Initialize(fake.NewClientset(), nil, "relay-test")
+	Initialize(fake.NewClientset(), nil, "relay-test", nil)
 	return &promHits, promSrv.URL
 }
 
@@ -303,7 +303,7 @@ func TestRelaySurvivesReinitialize(t *testing.T) {
 	if err := EnableRelay(testRelayConfig(&fakeRelayTransport{}, nil)); err != nil {
 		t.Fatal(err)
 	}
-	Reinitialize(fake.NewClientset(), nil, "relay-test")
+	Reinitialize(fake.NewClientset(), nil, "relay-test", nil)
 	st := GetClient().GetStatus()
 	if st.Source == nil || st.Address != "Radar Hub relay" {
 		t.Fatalf("relay lost on reinitialize: %+v", st)
@@ -406,7 +406,7 @@ func TestRelaySavedScopeDoesNotFollowAnotherContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	Retire()
-	Reinitialize(fake.NewClientset(), nil, "ctx-b")
+	Reinitialize(fake.NewClientset(), nil, "ctx-b", nil)
 	DisableRelay()
 	c := GetClient()
 	if scope, _, ok := c.workloadMetricsConfig(); ok {
@@ -432,7 +432,7 @@ func TestRelaySavedScopeClearedOnReinitializeToAnotherContext(t *testing.T) {
 	if err := EnableRelay(testRelayConfig(&fakeRelayTransport{}, nil)); err != nil {
 		t.Fatal(err)
 	}
-	Reinitialize(fake.NewClientset(), nil, "ctx-b")
+	Reinitialize(fake.NewClientset(), nil, "ctx-b", nil)
 	DisableRelay()
 	if scope, _, ok := GetClient().workloadMetricsConfig(); ok {
 		t.Fatalf("context A's scope applied to context B: %+v", scope)
@@ -448,7 +448,7 @@ func TestRelaySavedScopeKeptOnSameContextReinitialize(t *testing.T) {
 	if err := EnableRelay(testRelayConfig(&fakeRelayTransport{}, nil)); err != nil {
 		t.Fatal(err)
 	}
-	Reinitialize(fake.NewClientset(), nil, "relay-test")
+	Reinitialize(fake.NewClientset(), nil, "relay-test", nil)
 	DisableRelay()
 	c := GetClient()
 	scope, _, ok := c.workloadMetricsConfig()

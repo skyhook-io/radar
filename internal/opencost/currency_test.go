@@ -450,7 +450,7 @@ func TestCurrencyResolverDoesNotRetainDetectionWhenActiveConfigBecomesAmbiguous(
 }
 
 func TestClusterCurrencyDetectionAllowed(t *testing.T) {
-	prometheuspkg.Initialize(nil, nil, "")
+	prometheuspkg.Initialize(nil, nil, "", nil)
 	originalCostConfig := ConfigSnapshot()
 	t.Cleanup(func() {
 		prometheuspkg.SetManualURL("")

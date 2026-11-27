@@ -1,13 +1,21 @@
 package server
 
 import (
+	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+
 	"github.com/skyhook-io/radar/internal/cloudinstall"
+	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/subject"
 )
 
@@ -129,5 +137,70 @@ func TestVerifiedControllerIgnoresCandidateOrder(t *testing.T) {
 	}
 	if verifiedController(candidates[:1]) != nil {
 		t.Fatal("a stale-only candidate list must not yield an owner")
+	}
+}
+
+// setSelfServiceAccount installs Radar's own client, answering only the NKP
+// namespace read, so a test can tell it apart from the signed-in user's.
+func setSelfServiceAccount(t *testing.T, nkp bool) {
+	t.Helper()
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/namespaces/kommander-flux" || !nkp {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(corev1.Namespace{
+			TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "Namespace"},
+			ObjectMeta: metav1.ObjectMeta{Name: "kommander-flux"},
+		})
+	}))
+	t.Cleanup(api.Close)
+	client, err := kubernetes.NewForConfig(&rest.Config{Host: api.URL})
+	if err != nil {
+		t.Fatalf("create Kubernetes client: %v", err)
+	}
+	// Hide the shared fixture's cache: its namespace list would answer the
+	// NKP question before the ServiceAccount client is asked.
+	restore := k8s.SwapResourceCacheForTest(nil)
+	k8s.SetTestClient(client)
+	k8s.InvalidatePlatformCache()
+	t.Cleanup(func() {
+		restore()
+		k8s.InvalidatePlatformCache()
+	})
+}
+
+func TestRouteNKPSendsNKPClustersToTheNKPSteps(t *testing.T) {
+	s := &Server{cloudConnectCfg: CloudConnectConfig{HubAppURL: "https://app.radarhq.io"}}
+	flux := "https://app.radarhq.io/install?existing=1&method=flux&ns=ws&release=ws-radar"
+	for _, tc := range []struct {
+		name string
+		nkp  bool
+		in   cloudConnectSelf
+	}{
+		{name: "NKP, install recognized", nkp: true, in: cloudConnectSelf{Ownership: "gitops", WizardURL: flux}},
+		{name: "NKP, install not recognized", nkp: true, in: cloudConnectSelf{Ownership: "unknown"}},
+		{name: "not NKP", nkp: false, in: cloudConnectSelf{Ownership: "gitops", WizardURL: flux}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setSelfServiceAccount(t, tc.nkp)
+			self := tc.in
+			s.routeNKP(context.Background(), &self)
+			if !tc.nkp {
+				if self.Platform != "" || self.WizardURL != flux {
+					t.Fatalf("non-NKP cluster changed: %#v", self)
+				}
+				return
+			}
+			u, err := url.Parse(self.WizardURL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			q := u.Query()
+			if self.Platform != "nkp" || u.Path != "/install" || q.Get("platform") != "nkp" || q.Get("clusters") != "many" || q.Has("existing") {
+				t.Fatalf("NKP cluster got %#v", self)
+			}
+		})
 	}
 }

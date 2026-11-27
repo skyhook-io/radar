@@ -7,6 +7,7 @@ import (
 	"maps"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -111,8 +112,15 @@ func (r *PermissionCheckResult) CredentialRejectedNamespaces(resource string, na
 	return out
 }
 
+type OwnerAccessSetup struct {
+	Mode    string            `json:"mode"`
+	Blocked map[string]string `json:"blocked,omitempty"`
+}
+
 // Capabilities represents the features available based on RBAC permissions
 type Capabilities struct {
+	OwnerAccess            *[]string                `json:"ownerAccess,omitempty"`
+	OwnerAccessSetup       *OwnerAccessSetup        `json:"ownerAccessSetup,omitempty"`
 	ConfigManagement       string                   `json:"configManagement"`
 	Exec                   bool                     `json:"exec"` // Can create pods/exec (terminal feature)
 	PodExecUID             bool                     `json:"podExecUID,omitempty"`
@@ -230,6 +238,7 @@ type FeatureCapabilities struct {
 	ServiceEndpointSlices        bool `json:"serviceEndpointSlices"`    // GET /api/services/{namespace}/{name}/endpointslices
 	TrafficRecords               bool `json:"trafficRecords"`           // GET /api/traffic/flows/records
 	GitOpsWriteEvidence          bool `json:"gitopsWriteEvidence"`      // POST /api/gitops/write-evidence
+	OwnerAccessGrantReview       bool `json:"ownerAccessGrantReview"`   // GET /api/cloud/owner-access/review
 	GitOpsActionCapabilities     bool `json:"gitopsActionCapabilities"` // GET /api/gitops/capabilities/{kind}/{namespace}/{name}
 	AgentSigninCheck             bool `json:"agentSigninCheck"`         // GET /api/agents/signin
 	// POST /api/argo/applications/{namespace}/{name}/rollback starts a sync to
@@ -271,6 +280,8 @@ type FeatureCapabilities struct {
 	LokiConnection          bool `json:"lokiConnection"` // GET /api/loki/status
 	LokiPodHistory          bool `json:"lokiPodHistory"` // GET /api/loki/pods/{namespace}/{name}/logs
 	LokiJobRuns             bool `json:"lokiJobRuns"`    // GET /api/loki/jobs/{namespace}/{name}/logs
+	// GET /api/traefik/routes
+	TraefikRoutes bool `json:"traefikRoutes"`
 	// POST /api/cronjobs/{namespace}/{name}/trigger accepts {"jobName": ...};
 	// an older Radar ignores the body and names the Job itself.
 	CronJobTriggerJobName bool `json:"cronJobTriggerJobName"`
@@ -397,6 +408,7 @@ type DeploymentInfo struct {
 }
 
 type permissionState struct {
+	readCaches          sync.Map // host permission cache -> cache for reads bound to this connection
 	resourcePermsMu     sync.RWMutex
 	cachedPermResult    *PermissionCheckResult
 	resourcePermsExpiry time.Time
@@ -426,6 +438,25 @@ func (c *Connection) permissions() *permissionState {
 	}
 	c.perms.CompareAndSwap(nil, &permissionState{})
 	return c.perms.Load()
+}
+
+// PermissionCacheFor returns the permission cache for ctx's bound connection.
+// Each connection has a separate cache per host cache. Without a bound
+// connection or when host is nil, it returns host.
+func PermissionCacheFor(ctx context.Context, host *pkgauth.PermissionCache) *pkgauth.PermissionCache {
+	conn := ConnectionFrom(ctx)
+	if conn == nil || host == nil {
+		return host
+	}
+	caches := &conn.permissions().readCaches
+	if found, ok := caches.Load(host); ok {
+		return found.(*pkgauth.PermissionCache)
+	}
+	// Keyed like the host's, so discovery and reviews on this connection's
+	// cache are accepted for it.
+	generation := strconv.FormatUint(conn.ClientGeneration(), 10)
+	found, _ := caches.LoadOrStore(host, pkgauth.NewPermissionCache().WithConnectionKey(func() string { return generation }))
+	return found.(*pkgauth.PermissionCache)
 }
 
 // ResetPermissions retires in-flight checks along with their cache. Each

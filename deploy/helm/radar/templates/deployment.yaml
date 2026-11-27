@@ -85,7 +85,10 @@
 {{- end }}
 {{- end }}
 {{- if and $basePath .Values.cloud.enabled }}
-{{- fail "basePath is not supported with cloud.enabled=true: Radar Cloud owns the URL path, and the binary refuses the combination at startup — unset one of them" }}
+{{- /* Radar Cloud reaches Radar at the root path, and the binary refuses a
+       prefix in Cloud mode. Installs that set basePath by default (NKP's
+       catalog) can't unset it, only override it, so name the override. */}}
+{{- fail (printf "basePath %q is not supported with cloud.enabled=true. To connect this Radar to Radar Cloud, set basePath: \"\" (an empty string), or turn Radar Cloud off with cloud.enabled: false." $basePath) }}
 {{- end }}
 {{- /* URLs registered at the IdP have to carry the prefix: Radar's OIDC routes
        move under it, and an unprefixed URI is not routed here, so login fails
@@ -411,6 +414,11 @@ spec:
             # startup-config fields that don't apply under hosted Radar Cloud.
             - name: RADAR_CLOUD_MODE
               value: "true"
+            {{- $ownerAccess := include "radar.ownerAccessPolicy" . | fromJson }}
+            - name: RADAR_CLOUD_OWNER_ACCESS
+              value: {{ $ownerAccess.grants | keys | sortAlpha | join "," | quote }}
+            - name: RADAR_CLOUD_OWNER_ACCESS_SETUP
+              value: {{ $ownerAccess.setup | toJson | quote }}
             {{- if include "radar.userTokenMode" . | eq "true" }}
             - name: RADAR_AUTH_K8S_CREDENTIALS
               value: "user-token"

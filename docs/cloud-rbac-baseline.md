@@ -99,7 +99,7 @@ Karpenter wildcard. The old Karpenter/Cilium/Prometheus rules do not follow `all
 the new baseline does, for its named tuples only. Namespaced PrometheusRules and
 CiliumNetworkPolicies are intentionally also in the new namespaced role, so they
 do not depend on enabling cluster infrastructure reads. Turning off the new
-add-on does not revoke those old grants. Member/owner write permissions are unchanged.
+add-on does not revoke those old grants. See [Managed Owner permissions](#managed-owner-permissions) for the write grants.
 
 Enterprise customers who want only their own group bindings can set
 `cloud.defaultRbac.create=false`. The Hub can still forward IdP groups as
@@ -108,15 +108,16 @@ namespace RoleBinding does not restrict an existing cluster-wide default binding
 so disable the defaults first. Product organization roles and saved-investigation
 sharing are separate concerns; this chart change does not redefine them.
 
-## Argo CD Application actions
+## Managed Owner permissions
 
-The chart grants `get` and `patch` on `argoproj.io/applications` to
-`radar:owner` and `cloud:owner`. This supports Refresh and Sync on standard
-Cloud installs. The grant follows `rbac.namespaces` when configured and
-defaults on for chart-managed Owners, including with a custom base role.
-Set `cloud.defaultRbac.integrationWrite.argocd.owner=false` to opt out.
-The [chart README](../deploy/helm/radar/README.md#cloud-owner-access-to-argo-cd)
-describes the permission and the Argo CD controller's deployment authority.
+The chart binds each approved grant to a dedicated
+`radar:owner-access:<grant>` group. Hub forwards the active groups for an
+eligible Owner on direct cluster requests, including MCP. The agent accepts only
+groups its Helm release approves. Kubernetes enforces the resulting resource
+permissions alongside the caller’s other bindings.
+
+Use the [chart guide](../deploy/helm/radar/README.md#cloud-owner-permissions)
+for the defaults, scope, opt-outs and upgrade order.
 
 ## Rollout and verification
 

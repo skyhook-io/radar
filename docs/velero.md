@@ -2,6 +2,9 @@
 
 Radar's Velero views answer two questions the per-kind pages cannot: **are the schedules still producing good backups**, and **where do the backups go**. They do not answer whether a namespace is protected or whether a backup would restore: those need the coverage model, which is not built.
 
+For Radar Cloud, see the [Velero Owner grants](../deploy/helm/radar/README.md#cloud-owner-permissions)
+for backup and schedule actions, backup data access and deletion.
+
 ## Where it lives
 
 | Screen | Route | Answers |

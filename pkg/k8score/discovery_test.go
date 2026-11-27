@@ -450,3 +450,18 @@ func TestNamespacedGVRReadsTheExactVersion(t *testing.T) {
 		t.Error("a version discovery doesn't serve must be unknown")
 	}
 }
+
+func TestDiscoveryKeepsKubectlShortNames(t *testing.T) {
+	client := &snapshotDiscovery{resources: []*metav1.APIResourceList{{
+		GroupVersion: "policy/v1",
+		APIResources: []metav1.APIResource{{Name: "poddisruptionbudgets", Kind: "PodDisruptionBudget", ShortNames: []string{"pdb"}}},
+	}}}
+	d, err := NewResourceDiscovery(client)
+	if err != nil {
+		t.Fatalf("NewResourceDiscovery: %v", err)
+	}
+	pdb, ok := d.GetResourceWithGroup("PodDisruptionBudget", "policy")
+	if !ok || len(pdb.ShortNames) != 1 || pdb.ShortNames[0] != "pdb" {
+		t.Fatalf("ShortNames = %v, ok=%v, want [pdb]", pdb.ShortNames, ok)
+	}
+}

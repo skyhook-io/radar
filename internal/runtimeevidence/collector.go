@@ -265,26 +265,9 @@ func imageRepository(image string) string {
 	return image
 }
 
-type contextTransport struct {
-	ctx  context.Context
-	base http.RoundTripper
-}
-
-func (t contextTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	return t.base.RoundTrip(req.WithContext(t.ctx))
-}
 func startTunnel(ctx context.Context, client kubernetes.Interface, config *rest.Config, namespace, pod string, port int) (tunnel, error) {
 	req := client.CoreV1().RESTClient().Post().Resource("pods").Name(pod).Namespace(namespace).SubResource("portforward").VersionedParams(&corev1.PodPortForwardOptions{Ports: []int32{int32(port)}}, scheme.ParameterCodec)
-	cfg := rest.CopyConfig(config)
-	cfg.Timeout = 15 * time.Second
-	previous := cfg.WrapTransport
-	cfg.WrapTransport = func(rt http.RoundTripper) http.RoundTripper {
-		if previous != nil {
-			rt = previous(rt)
-		}
-		return contextTransport{ctx, rt}
-	}
-	dialer, err := pfpkg.NewDialer(cfg, req.URL())
+	dialer, err := pfpkg.NewDialerWithContext(ctx, config, req.URL())
 	if err != nil {
 		return tunnel{}, err
 	}

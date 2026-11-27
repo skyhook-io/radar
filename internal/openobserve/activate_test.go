@@ -52,7 +52,7 @@ func kubeWithUID(uid string, pods ...*corev1.Pod) *fake.Clientset {
 
 func withMetricsClient(t *testing.T) {
 	t.Helper()
-	prometheus.Initialize(fake.NewClientset(), nil, "test")
+	prometheus.Initialize(fake.NewClientset(), nil, "test", nil)
 	t.Cleanup(func() {
 		prometheus.DisableRelay()
 		prometheus.SetSourceNote(nil)

@@ -1,6 +1,8 @@
+import { AppIssuePanelContext, AppIssueRows, useAppIssueGroups, type AppIssueLinkRenderer } from './AppIssueList';
+import type { AppRow } from '../../utils/applications';
 import { IssueGuidance, issueGuidanceSummary } from './IssueGuidance'
 import { summarizeSchedulerMessage } from '../resources/resource-utils'
-import { Fragment, useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from 'react';
+import { Fragment, useContext, useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from 'react';
 import { AlertOctagon, AlertTriangle, ArrowRight, CircleCheck, Clock, Eraser, ExternalLink, History, Layers, Terminal, Workflow } from 'lucide-react';
 import { CardSection, ClusterName, Disclosure, EmptyState, KIND_CHIP_CLASS, TerminalBlock } from '../ui';
 import { Collapse, CollapseChevron, useDisclosure } from '../ui/Collapse';
@@ -58,6 +60,16 @@ export interface IssuesViewProps {
   /** Grouped live issues — one row per subject+category. Typically flattened
    *  across the fleet by the host (the hub) or a single cluster (OSS). */
   issues: Issue[];
+  /** Optional application ownership for the cluster-wide queue. */
+  appForIssue?: (issue: Issue) => Pick<AppRow, 'key' | 'name'> | undefined;
+  /** A single app's already-scoped issues, shown under an Issues heading. */
+  application?: Pick<AppRow, 'key' | 'name'>;
+  /** Application detail navigation supplied by the host router. */
+  renderAppLink?: AppIssueLinkRenderer<Issue>;
+  /** A single-cluster URL's issue ID. Open both its disclosure and its detail. */
+  linkedIssueId?: string;
+  /** Dismiss the URL selection when the reader chooses a row or closes its group. */
+  onManualIssueToggle?: () => void;
   /** True when at least one source returned issue data — distinguishes "clean"
    *  from "nothing connected / everything errored". */
   anyData: boolean;
@@ -97,7 +109,7 @@ export interface IssuesViewProps {
 // The queue list. Filtering/faceting is the host page's job (FleetPageShell on
 // the hub, a thin wrapper in OSS) — this renders the rows + the healthy /
 // no-data terminal states only.
-export function IssuesView({ issues, anyData, resourceHref, onResourceClick, clusterLabel, emptyAction, renderActions, onOpenIssueChange, expandedIssue, rowChanges, onVisibleIssuesChange, timelineLinks }: IssuesViewProps) {
+export function IssuesView({ issues, appForIssue: resolveAppForIssue, application, renderAppLink, linkedIssueId, onManualIssueToggle, anyData, resourceHref, onResourceClick, clusterLabel, emptyAction, renderActions, onOpenIssueChange, expandedIssue, rowChanges, onVisibleIssuesChange, timelineLinks }: IssuesViewProps) {
   // Single-open accordion: opening a row collapses the previous one, so the
   // queue stays scannable and you never lose your place to a wall of expansions.
   const [openId, setOpenId] = useState<string | null>(null);
@@ -105,8 +117,33 @@ export function IssuesView({ issues, anyData, resourceHref, onResourceClick, clu
   // Stable order keyed on severity → observed age → identity (see compareIssues), so
   // the queue doesn't reshuffle under the host's auto-refresh.
   const sorted = useMemo(() => [...issues].sort(compareIssues), [issues]);
-  useOpenIssueNotice(sorted, openId, issueRowKey, onOpenIssueChange);
-  const listRef = useVisibleIssues(sorted, onVisibleIssuesChange);
+  const linked = linkedIssueId && sorted.find(issue => issue.id === linkedIssueId);
+  const resolvedKey = linked ? issueRowKey(linked) : undefined;
+  // Resolve a URL once, including when the first poll arrives later. Changing a
+  // filter and restoring it must not take the reader back to the linked issue.
+  const [selection, setSelection] = useState<{ id?: string; key?: string }>({});
+  if (selection.id !== linkedIssueId || (resolvedKey && resolvedKey !== selection.key)) {
+    setSelection({ id: linkedIssueId, key: resolvedKey });
+    if (resolvedKey) setOpenId(resolvedKey);
+  }
+  const linkedKey = selection.id === linkedIssueId ? selection.key : undefined;
+  const appForIssue = useMemo(() => application ? () => application : resolveAppForIssue, [application, resolveAppForIssue]);
+  const layout = useAppIssueGroups({ issues: sorted, issueKey: issueRowKey, appForIssue, linkedIssueKey: linkedKey, openDetailKey: openId });
+  const displayed = layout.groups.flatMap(group => group.visible);
+  useOpenIssueNotice(displayed, openId, issueRowKey, onOpenIssueChange);
+  const listRef = useVisibleIssues(displayed, onVisibleIssuesChange, '[data-app-issue-row]');
+  const linkedApp = linked ? appForIssue?.(linked)?.key : undefined;
+  const scrolled = useRef<{ key?: string; app?: string }>({});
+  useEffect(() => {
+    if (!linkedKey) { scrolled.current = {}; return; }
+    if (scrolled.current.key === linkedKey && (!linkedApp || scrolled.current.app === linkedApp)) return;
+    const element = Array.from(listRef.current?.querySelectorAll<HTMLElement>('[data-app-issue-row]') ?? [])
+      .find(row => row.dataset.appIssueRow === linkedKey);
+    if (element) {
+      element.scrollIntoView?.({ block: 'nearest' });
+      scrolled.current = { key: linkedKey, app: linkedApp };
+    }
+  }, [linkedKey, linkedApp, listRef]);
 
   if (sorted.length === 0) {
     return anyData ? (
@@ -123,21 +160,25 @@ export function IssuesView({ issues, anyData, resourceHref, onResourceClick, clu
   }
 
   return (
-    <ol ref={listRef} className="flex flex-col gap-1.5">
-      {sorted.map((issue) => {
-        // Stable identity for the React key + open-accordion state, so a row
-        // survives auto-refresh in place. cluster_id scopes the id across the
-        // fleet (the hub renders issues from many clusters in one list).
+    <AppIssueRows layout={layout} applicationOverview={!!application} renderAppLink={renderAppLink} listRef={listRef} issueKey={issueRowKey}
+      onCollapse={(appKey, hidden) => {
+        if (hidden.some(issue => issueRowKey(issue) === openId)) setOpenId(null);
+        if (linkedApp === appKey) onManualIssueToggle?.();
+      }}
+      renderIssue={(issue) => {
         const rowKey = issueRowKey(issue);
         const open = openId === rowKey;
         return (
           <IssueRow
-            key={rowKey}
+            as="div"
             issue={issue}
             expandedIssue={open ? expandedIssue?.(issue) : undefined}
             clusterLabel={clusterLabel}
             open={open}
-            onToggle={() => setOpenId((cur) => (cur === rowKey ? null : rowKey))}
+            onToggle={() => {
+              setOpenId((cur) => (cur === rowKey ? null : rowKey));
+              onManualIssueToggle?.();
+            }}
             resourceHref={resourceHref}
             onResourceClick={onResourceClick}
             renderActions={renderActions}
@@ -145,15 +186,14 @@ export function IssuesView({ issues, anyData, resourceHref, onResourceClick, clu
             timelineLinks={timelineLinks}
           />
         );
-      })}
-    </ol>
+      }} />
   );
 }
 
-/** Reports which rows of an <ol> of issue rows are on screen (each child is
- *  the row for rows[index]), in list order, whenever that set changes. Rows a
+/** Reports which rows of an <ol> of issue rows are on screen (each row element
+ *  corresponds to rows[index]), in list order, whenever that set changes. Rows a
  *  little below the fold count, so a short scroll finds them ready. */
-export function useVisibleIssues(rows: Issue[], onVisibleIssuesChange?: (issues: Issue[]) => void) {
+export function useVisibleIssues(rows: Issue[], onVisibleIssuesChange?: (issues: Issue[]) => void, rowSelector?: string) {
   const listRef = useRef<HTMLOListElement>(null);
   const notify = useRef(onVisibleIssuesChange);
   notify.current = onVisibleIssuesChange;
@@ -177,7 +217,7 @@ export function useVisibleIssues(rows: Issue[], onVisibleIssuesChange?: (issues:
       report(rowsRef.current);
       return;
     }
-    const children = Array.from(list.children);
+    const children = Array.from(rowSelector ? list.querySelectorAll(rowSelector) : list.children);
     const onScreen = new Set<Element>();
     const observer = new IntersectionObserver((entries) => {
       for (const entry of entries) {
@@ -188,7 +228,7 @@ export function useVisibleIssues(rows: Issue[], onVisibleIssuesChange?: (issues:
     }, { rootMargin: '0px 0px 400px 0px' });
     children.forEach((child) => observer.observe(child));
     return () => observer.disconnect();
-  }, [enabled, rowsKey]);
+  }, [enabled, rowsKey, rowSelector]);
   useEffect(() => () => notify.current?.([]), []);
   return listRef;
 }
@@ -322,6 +362,7 @@ export function IssueRow({
   timelineLinks,
   ResourceLinkIcon = ExternalLink,
 }: IssueRowProps) {
+  const inAppPanel = useContext(AppIssuePanelContext);
   const issue = open && expandedIssue?.issue ? expandedIssue.issue : listIssue;
   // An answer read for an earlier occurrence of this issue id describes
   // another window, so it isn't shown.
@@ -427,20 +468,21 @@ export function IssueRow({
   return (
     <Container
       className={[
-        'relative isolate rounded-xl border bg-theme-surface transition-[border-color,box-shadow] duration-200',
+        'relative isolate bg-theme-surface',
+        !inAppPanel && 'rounded-xl border transition-[border-color,box-shadow] duration-200',
         // The open card lifts via elevation — heavier shadow + a bright
         // emphasis edge that clearly separates it from sibling cards. Severity
         // stays rationed to the rail, band + pill; separation is depth, not more color.
         // ring-1 widens the edge to 2px without the layout shift a border-2
         // swap would cause on expand.
-        open ? 'border-[var(--border-emphasis)] ring-1 ring-[var(--border-emphasis)] shadow-theme-md' : 'border-theme-border shadow-theme-sm',
+        !inAppPanel && (open ? 'border-[var(--border-emphasis)] ring-1 ring-[var(--border-emphasis)] shadow-theme-md' : 'border-theme-border shadow-theme-sm'),
         dimmed ? 'opacity-60' : '',
         className ?? '',
       ].filter(Boolean).join(' ')}
     >
-      <SeverityRail open={open} className={ISSUE_SEVERITY_RAIL_CLASS[severity]} />
-      {/* Clips the header band and body to the rounded corners, inside the border the rail paints over. */}
-      <div className="overflow-hidden rounded-[11px]" style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 70px' }}>
+      {!inAppPanel && <SeverityRail open={open} className={ISSUE_SEVERITY_RAIL_CLASS[severity]} />}
+      {/* A panel reveals rows at their measured height. An offscreen size estimate would shift the rows as the clip passes them. */}
+      <div className={inAppPanel ? 'overflow-hidden' : 'overflow-hidden rounded-[11px]'} style={inAppPanel ? undefined : { contentVisibility: 'auto', containIntrinsicSize: 'auto 70px' }}>
         {/* The whole header is the single toggle target. The leading severity
             icon is the at-a-glance cue; a trailing chevron shows open/closed.
             Deep-links live in the expanded body (a link nested in a button would

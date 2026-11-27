@@ -1,12 +1,13 @@
 package helm
 
 import (
-	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"sync"
 	"testing"
+
+	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 
 	"helm.sh/helm/v3/pkg/cli"
 	"k8s.io/client-go/rest"
@@ -27,7 +28,7 @@ func TestRollbackImpersonatesTheCaller(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := &Client{settings: cli.New(), restConfig: &rest.Config{Host: srv.URL}}
+	c := &Client{repositorySettings: &repositorySettings{settings: cli.New()}, restConfig: &rest.Config{Host: srv.URL}}
 	ctx := pkgauth.ContextWithUser(t.Context(), &pkgauth.User{Username: "alice", Groups: []string{"radar:idp:team-a"}})
 	cfg, err := c.actionConfigForWrite(ctx, "team-a")
 	if err != nil {

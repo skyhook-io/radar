@@ -1,17 +1,70 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"k8s.io/client-go/openapi"
+	"k8s.io/client-go/rest"
 
 	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/k8s"
 )
+
+func TestWriteJSONResourceSchemasMatchesStock(t *testing.T) {
+	const raw = `{"components":{"schemas":{
+		"Widget": {
+			"x-kubernetes-group-version-kind": [{"group":"example.io","version":"v1","kind":"Widget"}],
+			"description":"<Widget>",
+			"properties":{"spec":{"$ref":"#/components/schemas/WidgetSpec"}}
+		},
+		"WidgetSpec":{"type":"object"}
+	}}}`
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/openapi/v3":
+			io.WriteString(w, `{"paths":{"apis/example.io/v1":{"serverRelativeURL":"/openapi/v3/apis/example.io/v1"}}}`)
+		case "/openapi/v3/apis/example.io/v1":
+			io.WriteString(w, raw)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(api.Close)
+	oldStatus := k8s.GetConnectionStatus()
+	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	t.Cleanup(func() { k8s.SetConnectionStatus(oldStatus) })
+	oldConfig := k8s.SetTestConfig(&rest.Config{Host: api.URL})
+	t.Cleanup(func() { k8s.SetTestConfig(oldConfig) })
+
+	req := httptest.NewRequest(http.MethodPost, "/api/resources/schemas",
+		strings.NewReader(`{"documents":[{"index":0,"apiVersion":"example.io/v1","kind":"Widget"}]}`))
+	rec := httptest.NewRecorder()
+	testServerSrv.Handler().ServeHTTP(rec, req)
+
+	want := stockJSONResponse(t, yamlSchemaResponse{
+		Documents: []yamlSchemaDocument{{Index: 0, Status: "available", BundleKey: "apis/example.io/v1", SchemaRef: "#/definitions/Widget"}},
+		Bundles: map[string]yamlSchemaBundle{"apis/example.io/v1": {Definitions: map[string]any{
+			"Widget": map[string]any{
+				"x-kubernetes-group-version-kind": []any{map[string]any{"group": "example.io", "version": "v1", "kind": "Widget"}},
+				"description":                     "<Widget>",
+				"properties":                      map[string]any{"spec": map[string]any{"$ref": "#/definitions/WidgetSpec"}},
+			},
+			"WidgetSpec": map[string]any{"type": "object"},
+		}}},
+	})
+	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "application/json" || !bytes.Equal(rec.Body.Bytes(), want) {
+		t.Fatalf("schema response = %d %v %q, want 200 application/json %q", rec.Code, rec.Header(), rec.Body, want)
+	}
+}
 
 func TestYAMLSchemaCachePrincipalSeparatesUsersAndGroups(t *testing.T) {
 	request := httptest.NewRequest("POST", "/", nil)

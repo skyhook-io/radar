@@ -143,7 +143,7 @@ func TestCostSummaryWithTwoUnlabeledClusters(t *testing.T) {
 	t.Cleanup(k8s.ResetTestState)
 	t.Cleanup(func() {
 		prometheuspkg.Reset()
-		prometheuspkg.Initialize(nil, nil, "")
+		prometheuspkg.Initialize(nil, nil, "", nil)
 	})
 
 	for _, tc := range []struct {
@@ -160,7 +160,7 @@ func TestCostSummaryWithTwoUnlabeledClusters(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			store := &unlabeledCostStore{foreign: tc.foreign}
 			prometheuspkg.Reset()
-			prometheuspkg.Initialize(nil, nil, "test")
+			prometheuspkg.Initialize(nil, nil, "test", nil)
 			prometheuspkg.SetManualURL(store.serve(t).URL)
 			if tc.configured {
 				if err := prometheuspkg.SetWorkloadMetricsScope(prom.WorkloadMetricsScope{ClusterLabels: map[string]string{"cluster": "a"}}, ""); err != nil {
@@ -233,7 +233,7 @@ func TestNamespaceCostsCheckOnlyTheirNamespace(t *testing.T) {
 	t.Cleanup(k8s.ResetTestState)
 	t.Cleanup(func() {
 		prometheuspkg.Reset()
-		prometheuspkg.Initialize(nil, nil, "")
+		prometheuspkg.Initialize(nil, nil, "", nil)
 	})
 
 	workloads := func(p PromCost) (bool, string, *pkgopencost.ClusterScope) {
@@ -257,7 +257,7 @@ func TestNamespaceCostsCheckOnlyTheirNamespace(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			store := &unlabeledCostStore{foreignPodsIn: tc.foreignIn}
 			prometheuspkg.Reset()
-			prometheuspkg.Initialize(nil, nil, "test")
+			prometheuspkg.Initialize(nil, nil, "test", nil)
 			prometheuspkg.SetManualURL(store.serve(t).URL)
 			if err := prometheuspkg.SetWorkloadMetricsScope(prom.WorkloadMetricsScope{ClusterLabels: map[string]string{"cluster": "a"}}, ""); err != nil {
 				t.Fatal(err)

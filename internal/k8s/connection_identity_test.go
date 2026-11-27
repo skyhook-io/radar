@@ -2,8 +2,12 @@ package k8s
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/skyhook-io/radar/internal/portforward"
+	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 
 	"k8s.io/client-go/kubernetes/fake"
 )
@@ -139,6 +143,44 @@ func TestReadmissionKeepsTheConnectionsPermissionResult(t *testing.T) {
 	}
 }
 
+func TestNamespaceScopeStaysWithCapturedBuild(t *testing.T) {
+	t.Cleanup(SnapshotTestConnection())
+	clearTestConnectionIdentity()
+	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "prod"})
+	clientMu.RLock()
+	previous := namespaceScopeOverride
+	clientMu.RUnlock()
+	t.Cleanup(func() { SetNamespaceScopeOverride(previous) })
+	SetNamespaceScopeOverride("team-a")
+	a := Current()
+	ResetResourceDiscovery()
+	SetNamespaceScopeOverride("team-b")
+	if got := a.NamespaceScopeTarget(); got != "team-a" {
+		t.Fatalf("previous build's namespace = %q", got)
+	}
+	if got := Current().NamespaceScopeTarget(); got != "team-b" {
+		t.Fatalf("new build's namespace = %q", got)
+	}
+}
+
+func TestReadmissionKeepsHelmReadPermissions(t *testing.T) {
+	t.Cleanup(SnapshotTestConnection())
+	clearTestConnectionIdentity()
+	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "prod"})
+	conn := Current()
+	host := pkgauth.NewPermissionCache()
+	perms := PermissionCacheFor(WithConnection(t.Context(), conn), host)
+	perms.Set("alice", nil, &pkgauth.UserPermissions{AllowedNamespaces: []string{"team-a"}})
+	RetireServingConnection()
+	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "prod"})
+	if got := PermissionCacheFor(CaptureConnection(t.Context()), host).Get("alice", nil); got == nil || !slices.Equal(got.AllowedNamespaces, []string{"team-a"}) {
+		t.Fatalf("lost permissions on readmission: %v", got)
+	}
+	if got := PermissionCacheFor(WithConnection(t.Context(), conn.fresh()), host).Get("alice", nil); got != nil {
+		t.Fatalf("fresh build inherited permissions: %v", got)
+	}
+}
+
 // The typed cache is part of what a re-admitted connection keeps: it is still
 // running, and a copy without it would serve nothing and leak its informers.
 func TestReadmissionKeepsTheConnectionsTypedCache(t *testing.T) {
@@ -214,5 +256,45 @@ func TestReadmissionKeepsTheSameConnection(t *testing.T) {
 	built.publishDiscovery(buildFakeDiscoveryCore(t))
 	if GetResourceDiscovery() == nil {
 		t.Fatal("discovery that finished after the re-admission isn't served")
+	}
+}
+
+func TestReadmissionKeepsPortForwardManager(t *testing.T) {
+	t.Cleanup(SnapshotTestConnection())
+	installedConn.Store(&Connection{})
+	clearTestConnectionIdentity()
+	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "a"})
+	manager := Current().PortForwards()
+	RetireServingConnection()
+	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "a"})
+	if manager == nil || Current().PortForwards() != manager {
+		t.Fatal("readmission replaced the forward manager")
+	}
+	contextSwitchMu.Lock()
+	previousReset := trafficResetFunc
+	trafficResetFunc = func() {
+		if !manager.Closed() {
+			t.Error("traffic reset ran before pending forwards were stopped")
+		}
+	}
+	contextSwitchMu.Unlock()
+	t.Cleanup(func() { contextSwitchMu.Lock(); trafficResetFunc = previousReset; contextSwitchMu.Unlock() })
+	ResetAllSubsystems()
+	if Current().PortForwards() == manager {
+		t.Fatal("rebuild reused the closed forward manager")
+	}
+	if _, err := manager.Start(context.Background(), "cost", "ns", "svc", 80); err != portforward.ErrClosed {
+		t.Fatalf("start after teardown: %v", err)
+	}
+}
+
+func TestDisplacingUnadmittedConnectionClosesItsForwardManager(t *testing.T) {
+	t.Cleanup(SnapshotTestConnection())
+	installedConn.Store(&Connection{})
+	ResetResourceDiscovery()
+	inBetween := Current().PortForwards()
+	dropClusterClients()
+	if _, err := inBetween.Start(t.Context(), "cost", "ns", "svc", 80); err != portforward.ErrClosed {
+		t.Fatalf("displaced manager can still start: %v", err)
 	}
 }
