@@ -67,8 +67,8 @@ func reportHeader(u *unstructured.Unstructured) (report, bool) {
 	if osInfo, _ := body["os"].(map[string]any); osInfo != nil {
 		r.osFamily = str(osInfo["family"])
 		r.os = strings.TrimSpace(r.osFamily + " " + str(osInfo["name"]))
-		r.osKnown = r.os != ""
 		r.osEOL, _ = osInfo["eosl"].(bool)
+		r.osKnown = r.os != "" || r.osEOL
 	}
 	if sc, _ := body["scanner"].(map[string]any); sc != nil {
 		r.scanner = Scanner{Name: str(sc["name"]), Version: str(sc["version"])}
@@ -1233,9 +1233,6 @@ func (j *rollup) workloads(f Filter) (rows, clean, unscanned []Workload) {
 		if !m.workloadKept([]WorkloadRef{ref}) {
 			continue
 		}
-		if m.f.OSEndOfLifeOnly && !slices.ContainsFunc(slices.Collect(maps.Keys(a.images)), func(id string) bool { return j.images[id].report.osEOL }) {
-			continue
-		}
 		routes := j.exposure[ref]
 		a.row.Routes, a.row.RoutesTotal = routes[:min(len(routes), j.lim.routesPerWorkload)], len(routes)
 		a.row.ExposureUnknown = len(routes) == 0 && j.exposureUnknownIn(ref.Namespace)
@@ -1251,6 +1248,13 @@ func (j *rollup) workloads(f Filter) (rows, clean, unscanned []Workload) {
 		slices.SortFunc(a.row.Containers, func(x, y WorkloadContainer) int {
 			return cmp.Or(cmp.Compare(x.Name, y.Name), cmp.Compare(x.Image, y.Image))
 		})
+		if m.f.OSEndOfLifeOnly && !j.runsEndOfLifeOS(a.images) {
+			// An unscanned container's OS is unknown, so it might be one.
+			if rowMatched && slices.ContainsFunc(a.row.Containers, func(c WorkloadContainer) bool { return !c.Scanned }) {
+				unscanned = append(unscanned, a.row)
+			}
+			continue
+		}
 		if allClean && (m.query == "" || !rowMatched || m.narrowsFindings()) {
 			if rowMatched {
 				clean = append(clean, a.row)
@@ -1527,6 +1531,17 @@ func sortedKeys(set map[string]bool) []string {
 func asMap(v any) map[string]any {
 	m, _ := v.(map[string]any)
 	return m
+}
+
+// runsEndOfLifeOS is whether any of the images has an OS the scanner reports
+// as end of life.
+func (j *rollup) runsEndOfLifeOS(images map[string]bool) bool {
+	for id := range images {
+		if j.images[id].report.osEOL {
+			return true
+		}
+	}
+	return false
 }
 
 // timeOf reads an RFC 3339 timestamp; Trivy omits a date it doesn't know.
