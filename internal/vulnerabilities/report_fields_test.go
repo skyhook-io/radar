@@ -223,6 +223,15 @@ func TestExportReportFields(t *testing.T) {
 		t.Fatalf("not scanned: %v", pending)
 	}
 
+	// An OS block that says end of life without naming the OS still reads yes.
+	nameless, namelessTargets := reportFieldsFixture()
+	nameless[0].Object["report"].(map[string]any)["os"] = map[string]any{"eosl": true}
+	for _, r := range exportRows(t, mustExport(t, nameless, namelessTargets, ViewImage, Filter{}), Filter{}) {
+		if r["image"] == "acme/old:1" && (r["os"] != "" || r["os_end_of_life"] != "yes") {
+			t.Fatalf("nameless end-of-life OS: %v", r)
+		}
+	}
+
 	// The export follows the eol filter.
 	f := Filter{OSEndOfLifeOnly: true}
 	rows = withStatus(exportRows(t, mustExport(t, items, targets, ViewFindings, f), f), StatusOK)

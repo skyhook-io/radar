@@ -67,8 +67,8 @@ func reportHeader(u *unstructured.Unstructured) (report, bool) {
 	if osInfo, _ := body["os"].(map[string]any); osInfo != nil {
 		r.osFamily = str(osInfo["family"])
 		r.os = strings.TrimSpace(r.osFamily + " " + str(osInfo["name"]))
-		r.osKnown = r.os != ""
 		r.osEOL, _ = osInfo["eosl"].(bool)
+		r.osKnown = r.os != "" || r.osEOL
 	}
 	if sc, _ := body["scanner"].(map[string]any); sc != nil {
 		r.scanner = Scanner{Name: str(sc["name"]), Version: str(sc["version"])}
