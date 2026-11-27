@@ -200,6 +200,11 @@ func TestTrafficCountsOnlyTheRoutesPorts(t *testing.T) {
 	if !slices.Equal(resp.Traffic.Workloads, []WorkloadRef{frontend}) {
 		t.Fatalf("istio, by the exposed Service: %+v", resp.Traffic.Workloads)
 	}
+	udp := flow(world, front)
+	udp.Protocol = "udp"
+	if got := seen(trafficFixture(t, "hubble", udp)); len(got) != 0 {
+		t.Fatalf("UDP on the route's port number: %+v", got)
+	}
 	if got := seen(trafficFixture(t, "istio", onPort(front, 0))); len(got) != 0 {
 		t.Fatalf("no port and no Service: %+v", got)
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -219,7 +220,15 @@ func fetchVulnerabilityTraffic(ctx context.Context, mgr *traffic.Manager) (*vuln
 		return nil, false
 	}
 	cache := k8s.GetResourceCache()
-	flows := resolveFlowWorkloads(cache, resp.Flows)
+	flows := resp.Flows
+	// The window shown is cut to where every node's history reaches; a
+	// quieter node's older flows would otherwise count from before it.
+	if resp.CoveredSince != nil {
+		flows = slices.DeleteFunc(slices.Clone(flows), func(f traffic.Flow) bool {
+			return !f.LastSeen.IsZero() && f.LastSeen.Before(*resp.CoveredSince)
+		})
+	}
+	flows = resolveFlowWorkloads(cache, flows)
 	window, limited := vulnTrafficWindow, resp.Source == "hubble"
 	if resp.CoveredSince != nil {
 		limited = true

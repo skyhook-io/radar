@@ -104,6 +104,11 @@ func NewTrafficEvidence(source string, window time.Duration, historyLimited bool
 		if port <= 0 && service == "" {
 			continue
 		}
+		// Routes carry TCP (HTTP and gRPC ride on it); a UDP or SCTP flow
+		// on the same port number isn't traffic through them.
+		if p := strings.ToLower(f.Protocol); p == "udp" || p == "sctp" {
+			continue
+		}
 		key := ns + "/" + name
 		if e.seen[key] == nil {
 			e.seen[key] = map[string]*arrivals{}
