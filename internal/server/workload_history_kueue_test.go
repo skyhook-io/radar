@@ -109,8 +109,8 @@ func TestWorkloadHistoryCoverage(t *testing.T) {
 	if got == nil || !got.Incomplete || !got.CompleteSince.Equal(started.UTC()) || !slices.Equal(got.Reasons, []issuesapi.HistoryGapReason{issuesapi.HistoryObservationStartedLate}) {
 		t.Fatalf("a Job older than Radar's observation = %+v", got)
 	}
-	if got := workloadHistoryCoverage(t.Context(), store, ctx, key, liveObject("job-2", started.Add(-time.Hour), nil), time.Time{}, false); got == nil || !got.CompleteSince.IsZero() {
-		t.Fatalf("a namespace-limited caller gets the store-wide time: %+v", got)
+	if got := workloadHistoryCoverage(t.Context(), store, ctx, key, liveObject("job-2", started.Add(-time.Hour), nil), time.Time{}, false); got == nil || !got.CompleteSince.Equal(started.UTC()) {
+		t.Fatalf("a namespace-limited caller gets Radar's start time: %+v", got)
 	}
 
 	watched := started.Add(10 * time.Minute)

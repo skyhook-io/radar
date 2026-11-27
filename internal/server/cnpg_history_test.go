@@ -64,12 +64,12 @@ func useCNPGHistoryPrometheusAnswering(t *testing.T, answer func(q string) strin
 			_, _ = io.WriteString(w, empty("vector"))
 		}
 	}))
-	prometheuspkg.Initialize(nil, nil, "test")
+	prometheuspkg.Initialize(nil, nil, "test", nil)
 	prometheuspkg.SetManualURL(srv.URL)
 	t.Cleanup(func() {
 		srv.Close()
 		prometheuspkg.Reset()
-		prometheuspkg.Initialize(nil, nil, "")
+		prometheuspkg.Initialize(nil, nil, "", nil)
 	})
 	return &seen
 }

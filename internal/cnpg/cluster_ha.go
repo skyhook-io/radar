@@ -139,6 +139,12 @@ type CNPGHAPDB struct {
 	// Observed is false when the disruption controller has not caught up with
 	// the budget's current generation; its numbers are then stale.
 	Observed bool `json:"observed"`
+	// Protection reads the primary budget against the Cluster's layout:
+	// expected (healthy HA, the operator moves the primary), singleInstance,
+	// or blocking with ProtectionReason. Empty when unknown, such as when the
+	// caller can't read the Pods or Nodes it rests on.
+	Protection       string `json:"protection,omitempty"`
+	ProtectionReason string `json:"protectionReason,omitempty"`
 }
 
 // CNPGHALease is one Lease. Expired compares renewTime + duration with now.
@@ -239,8 +245,13 @@ func (s *Reader) ClusterHA(callerCtx context.Context, c HAClients, cache *k8s.Re
 
 	resp.Quorum = s.hAQuorum(ctx, callerCtx, c, cluster, pods, resp.Pods.State == cnpgHAStateOK)
 	resp.PDBs = s.hAPDBs(callerCtx, cache, cluster)
+	// Issues verifies the same reading with list nodes; get nodes (zones) is not enough.
+	if s.Access.CanRead(callerCtx, "", "nodes", "", "list") {
+		cnpgHAPrimaryProtection(&resp, cache, cluster, pods)
+	}
 	resp.PrimaryLease = s.hAPrimaryLease(ctx, callerCtx, c, cluster, now)
 	resp.OperatorLease = s.hAOperatorLease(ctx, callerCtx, c, cache, now)
+	cnpgHAOperatorNotLeading(&resp)
 	resp.Jobs = s.hAJobs(callerCtx, cache, cluster)
 	for _, job := range resp.Jobs.Items {
 		if job.Instance != "" && (job.Role == "join" || job.Role == "initdb") && (job.Phase == "active" || job.Phase == "pending") {
@@ -773,4 +784,59 @@ func (s *Reader) hACertificates(ctx context.Context, callerCtx context.Context, 
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Secret < out[j].Secret })
 	return out
+}
+
+// cnpgHAPrimaryProtection explains the primary budget with the classifier
+// Issues uses, from what this response read as the caller. Without the
+// caller's Pods and Nodes the answer is unknown and the field stays empty.
+func cnpgHAPrimaryProtection(resp *CNPGClusterHAResponse, cache *k8s.ResourceCache, cluster *unstructured.Unstructured, pods []*corev1.Pod) {
+	// Nodes as Issues reads them: the cache, behind the caller's list nodes
+	// (checked by ClusterHA), not the get nodes the zones need.
+	if resp.Pods.State != cnpgHAStateOK || resp.PDBs.State != cnpgHAStateOK || cache.Nodes() == nil ||
+		cnpgUncachedReason("Nodes", "Nodes", "", cache.AssessKindRead("nodes", nil)) != "" {
+		return
+	}
+	// Every budget in the namespace: another one selecting the primary matters.
+	all, ok := readableIn[*policyv1.PodDisruptionBudget](cache, "poddisruptionbudgets", cluster.GetNamespace(), labels.Everything())
+	if !ok {
+		return
+	}
+	missed := false
+	node := func(name string) *corev1.Node {
+		n, err := cache.Nodes().Get(name)
+		if err != nil {
+			missed = true
+			return nil
+		}
+		return n
+	}
+	for i := range resp.PDBs.Items {
+		item := &resp.PDBs.Items[i]
+		if item.Role != "primary" {
+			continue
+		}
+		for _, p := range all {
+			if p.Name == item.Name {
+				item.Protection, item.ProtectionReason = k8s.ClassifyCNPGPrimaryPDB(p, cluster, pods, all, node)
+				// As in Issues: a reason drawn from a Node Radar doesn't hold is a guess.
+				if missed && item.Protection == "blocking" {
+					item.Protection, item.ProtectionReason = "", ""
+				}
+			}
+		}
+	}
+}
+
+// cnpgHAOperatorNotLeading: "expected" rests on the operator switching over
+// before a drain, so an expired leader Lease (no operator instance leading)
+// makes it not idle. Only from a Lease the caller read; otherwise unchanged.
+func cnpgHAOperatorNotLeading(resp *CNPGClusterHAResponse) {
+	if resp.OperatorLease.State != cnpgHAStateOK || resp.OperatorLease.Expired == nil || !*resp.OperatorLease.Expired {
+		return
+	}
+	for i := range resp.PDBs.Items {
+		if item := &resp.PDBs.Items[i]; item.Protection == "expected" {
+			item.Protection, item.ProtectionReason = "blocking", "no CloudNativePG operator instance is leading: its leader Lease has expired"
+		}
+	}
 }

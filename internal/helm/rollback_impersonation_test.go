@@ -1,12 +1,13 @@
 package helm
 
 import (
-	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"sync"
 	"testing"
+
+	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 
 	"helm.sh/helm/v3/pkg/cli"
 	"k8s.io/client-go/rest"
@@ -14,7 +15,7 @@ import (
 
 // The streaming rollback is a cluster write; when a user is attached it must
 // reach the API server as that user, never as Radar's ServiceAccount.
-func TestRollbackWithProgressAsUser_Impersonates(t *testing.T) {
+func TestRollbackImpersonatesTheCaller(t *testing.T) {
 	var mu sync.Mutex
 	var seen []string
 	var groups [][]string
@@ -27,8 +28,13 @@ func TestRollbackWithProgressAsUser_Impersonates(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := &Client{settings: cli.New(), restConfig: &rest.Config{Host: srv.URL}}
-	if err := c.RollbackWithProgressAsUser("team-a", "web", 1, &pkgauth.User{Username: "alice", Groups: []string{"radar:idp:team-a"}}, nil); err == nil {
+	c := &Client{repositorySettings: &repositorySettings{settings: cli.New()}, restConfig: &rest.Config{Host: srv.URL}}
+	ctx := pkgauth.ContextWithUser(t.Context(), &pkgauth.User{Username: "alice", Groups: []string{"radar:idp:team-a"}})
+	cfg, err := c.actionConfigForWrite(ctx, "team-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.rollbackWithProgressUsing(cfg, "web", 1, nil); err == nil {
 		t.Fatal("rollback succeeded against a server that forbids everything")
 	}
 

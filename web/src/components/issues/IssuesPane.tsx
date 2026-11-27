@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
-import { useIssues, useSubjectIssues, type SubjectIssuesResponse } from "../../api/client";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { useApplications, useIssues, useSubjectIssues, type SubjectIssuesResponse } from "../../api/client";
 import {
   useAPIResources,
   karpenterCapacityAvailable,
@@ -22,12 +22,15 @@ import {
   type IssueSeverity,
   type SummaryTone,
 } from "@skyhook-io/k8s-ui";
+import { buildIssueAppIndex } from "@skyhook-io/k8s-ui/components/issues";
 import { builtinGroupForKind } from "@skyhook-io/k8s-ui/utils/api-resources";
 import { AlertTriangle } from "lucide-react";
 import { IssueDiagnoseButton } from "../diagnose/LocalDiagnoseAction";
 import { recordUsageEvent } from "../../api/usage-data";
 import { uncheckedSourceLines, uncheckedSubjectWhy } from "./uncheckedSources";
 import { UncheckedSourceHelp } from "./UncheckedSourceHelp";
+import { useClearLinkedIssue } from "../../utils/page-links";
+import { useIssueExpansion, useIssueRowNotes } from "./useIssueExpansion";
 
 // A capacity-relevant issue links to its Karpenter diagnosis. Karpenter is
 // always single-cluster (unlike Argo hub-and-spoke), so the issue and the
@@ -184,9 +187,16 @@ export function IssuesPane({
   showNamespace,
 }: IssuesPaneProps) {
   const [searchParams, setSearchParams] = useSearchParams();
+  const clearLinkedIssue = useClearLinkedIssue();
+  const linkedIssueId = searchParams.get("issue") || undefined;
   const subject = useMemo(() => issueSubjectFromParams(searchParams), [searchParams]);
   const { data, isLoading, isFetching, error, dataUpdatedAt, refetch } =
     useIssues(namespaces, !subject);
+  const canGroup = !subject && (data?.issues.length ?? 0) > 1;
+  const { data: inventory } = useApplications(namespaces, { enabled: canGroup });
+  const appForIssue = useMemo(() => canGroup && inventory
+    ? buildIssueAppIndex(inventory.applications, { complete: namespaces.length === 0 && inventory.access?.restricted === false })
+    : undefined, [canGroup, inventory, namespaces.length]);
   const { connection } = useConnection();
   const navigate = useNavigate();
   const apiResources = useAPIResources();
@@ -198,9 +208,22 @@ export function IssuesPane({
     new Set(),
   );
 
+  // A new link reveals its target even if the last view filtered its severity.
+  // Removing the link after a click keeps the user's new choice intact.
+  const [previousLink, setPreviousLink] = useState(linkedIssueId);
+  if (previousLink !== linkedIssueId) {
+    setPreviousLink(linkedIssueId);
+    if (linkedIssueId && severityFilter.size) setSeverityFilter(new Set());
+  }
+
   const subjectHidden =
     !!subject?.namespace && namespaces.length > 0 && !namespaces.includes(subject.namespace);
   const related = useSubjectIssues(subject, !subjectHidden);
+  const expansion = useIssueExpansion(() => {
+    if (subject) void related.refetch();
+    else void refetch();
+  });
+  const rowNotes = useIssueRowNotes();
   const subjectState = subject
     ? issueSubjectState(subject, namespaces, related)
     : null;
@@ -222,6 +245,7 @@ export function IssuesPane({
     setSearchParams(
       (prev) => {
         const next = new URLSearchParams(prev);
+        next.delete("issue");
         next.delete("kind");
         next.delete("apiGroup");
         next.delete("resource");
@@ -230,13 +254,15 @@ export function IssuesPane({
       { replace: true },
     );
 
-  const toggleSeverity = (s: IssueSeverity) =>
+  const toggleSeverity = (s: IssueSeverity) => {
+    clearLinkedIssue();
     setSeverityFilter((prev) => {
       const next = new Set(prev);
       if (next.has(s)) next.delete(s);
       else next.add(s);
       return next;
     });
+  };
 
   const onResourceClick = (ref: IssueResourceRef) => {
     recordUsageEvent({ type: "ui", name: "issue_action:open" });
@@ -265,7 +291,7 @@ export function IssuesPane({
       <PageHeader
         icon={AlertTriangle}
         title="Issues"
-        description="Live cluster problems — crashes, scheduling failures, bad references — grouped by the resource they affect."
+        description="Live cluster problems, with critical issues first."
         actions={
           <>
             {subjectHidden ? null : <FreshnessControl
@@ -300,6 +326,10 @@ export function IssuesPane({
           </>
         }
       />
+
+      {!subject && linkedIssueId && data && !pageIssues.some((issue) => issue.id === linkedIssueId) && (
+        <p className="text-sm text-theme-text-secondary">The linked issue is outside the current results.</p>
+      )}
 
       {!subject && error && (
         <div className="flex items-start gap-2 rounded-lg border border-theme-border bg-theme-elevated px-3 py-2 text-xs text-theme-text-secondary">
@@ -357,7 +387,7 @@ export function IssuesPane({
               {showNamespace && (
                 <button
                   type="button"
-                  onClick={() => showNamespace.show(subject.namespace)}
+                  onClick={() => { clearLinkedIssue(); showNamespace.show(subject.namespace); }}
                   className="text-accent-text hover:underline"
                 >
                   {showNamespace.mode === "add" ? "Add" : "Switch to"}{" "}
@@ -396,7 +426,7 @@ export function IssuesPane({
           <p>No issues match the selected severity.</p>
           <button
             type="button"
-            onClick={() => setSeverityFilter(new Set())}
+            onClick={() => { clearLinkedIssue(); setSeverityFilter(new Set()); }}
             className="text-xs text-skyhook-600 hover:text-skyhook-500 dark:text-skyhook-400"
           >
             Clear filter
@@ -422,8 +452,21 @@ export function IssuesPane({
            list then means "nothing broken" rather than "not connected". */
         <IssuesView
           issues={shown}
+          appForIssue={appForIssue}
+          renderAppLink={(key, label) => {
+            const params = new URLSearchParams({ app: key });
+            if (namespaces.length) params.set("namespaces", namespaces.join(","));
+            return <Link to={{ pathname: "/applications", search: params.toString() }}>{label}</Link>;
+          }}
+          linkedIssueId={linkedIssueId}
+          onManualIssueToggle={clearLinkedIssue}
           anyData={subject ? !!related.data : !!data}
           onResourceClick={onResourceClick}
+          onOpenIssueChange={expansion.onOpenIssueChange}
+          expandedIssue={expansion.expandedIssue}
+          timelineLinks={expansion.timelineLinks}
+          rowChanges={rowNotes.rowChanges}
+          onVisibleIssuesChange={rowNotes.onVisibleIssuesChange}
           renderActions={({ issue }) => {
             const capacityHref = capacityHrefForIssue(issue, hasKarpenter);
             return (

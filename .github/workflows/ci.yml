@@ -16,6 +16,11 @@ concurrency:
 # earlier run; PRs keep the cache. Go applies -count only to go test.
 env:
   GOFLAGS: ${{ github.event_name == 'push' && '-count=1' || '' }}
+  # Go jobs save their build cache only from main, pruned to what the run used
+  # (.github/actions/go-cache-save); PRs restore the newest one.
+  GO_CACHE_SAVE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+# go test runs below pass -ldflags=-w: test binaries without DWARF link in
+# about a third of the time; nothing debugs them here.
 
 jobs:
   # Decides which jobs a PR needs from every file it changes, not only those in
@@ -120,10 +125,12 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
+          # Exercise pkg with the Go version Radar Hub uses.
           go-version: '1.26'
-          # Its own build cache: sharing the root module's key let this job,
-          # which finishes first, save a cache holding only pkg's packages.
-          cache-dependency-path: pkg/go.sum
+          cache: false
+
+      - name: Restore Go caches
+        uses: ./.github/actions/go-cache-restore
 
       - name: Download dependencies
         run: go mod download
@@ -132,15 +139,19 @@ jobs:
         run: go vet ./...
 
       - name: Run tests
-        run: go test ./...
+        run: go test -ldflags=-w ./...
 
       - name: Evaluate workload PromQL in Prometheus
         env:
           RADAR_TEST_PROMTOOL_IMAGE: prom/prometheus:v3.5.0
-        run: go test ./prom -run '^TestWorkload(History)?PromQL$' -count=1
+        run: go test -ldflags=-w ./prom -run '^TestWorkload(History)?PromQL$' -count=1
 
       - name: Build
         run: go build ./...
+
+      - name: Save Go build cache
+        if: env.GO_CACHE_SAVE == 'true'
+        uses: ./.github/actions/go-cache-save
 
   backend:
     name: Backend
@@ -167,10 +178,60 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version: '1.26'
-          cache-dependency-path: |
-            go.sum
-            pkg/go.sum
+          go-version: '1.27'
+          cache: false
+
+      - name: Restore Go caches
+        uses: ./.github/actions/go-cache-restore
+
+      - name: Download dependencies
+        run: go mod download
+
+      # internal/server runs in its own job; it is the slowest package by far.
+      # The assignment fails the step if go list does; an argument would not.
+      # The PostgreSQL tests (internal/timeline, internal/k8s) run here too,
+      # against the service above.
+      - name: Run tests
+        env:
+          RADAR_TEST_POSTGRES_DSN: postgres://radar:radar@localhost:5432/radar?sslmode=disable
+          # Turns a missing DSN into a failure instead of a silent skip: without
+          # it, losing the service or the env block above would leave the whole
+          # PostgreSQL backend untested while this job still reported green.
+          RADAR_REQUIRE_POSTGRES_TESTS: "1"
+        run: |
+          pkgs=$(go list ./...)
+          go test -ldflags=-w $(grep -vx 'github.com/skyhook-io/radar/internal/server' <<<"$pkgs")
+
+      - name: Evaluate PVC and CNPG PromQL in Prometheus
+        env:
+          RADAR_TEST_PROMTOOL_IMAGE: prom/prometheus:v3.5.0
+        run: go test -ldflags=-w ./internal/prometheus -run '^(TestPVCScopePromQL|TestCNPGDiskGrowthPromQL)$' -count=1
+
+      - name: Build
+        run: go build -o explorer ./cmd/explorer
+
+  # gofmt and vet in their own job, so they run alongside the tests instead of
+  # before them in the slowest job.
+
+      - name: Save Go build cache
+        if: env.GO_CACHE_SAVE == 'true'
+        uses: ./.github/actions/go-cache-save
+  backend-vet:
+    name: Backend (vet)
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.27'
+          cache: false
+
+      - name: Restore Go caches
+        uses: ./.github/actions/go-cache-restore
 
       - name: Download dependencies
         run: go mod download
@@ -189,28 +250,9 @@ jobs:
       - name: Vet
         run: go vet ./...
 
-      # internal/server runs in its own job; it is the slowest package by far.
-      # The assignment fails the step if go list does; an argument would not.
-      # The PostgreSQL tests (internal/timeline, internal/k8s) run here too,
-      # against the service above.
-      - name: Run tests
-        env:
-          RADAR_TEST_POSTGRES_DSN: postgres://radar:radar@localhost:5432/radar?sslmode=disable
-          # Turns a missing DSN into a failure instead of a silent skip: without
-          # it, losing the service or the env block above would leave the whole
-          # PostgreSQL backend untested while this job still reported green.
-          RADAR_REQUIRE_POSTGRES_TESTS: "1"
-        run: |
-          pkgs=$(go list ./...)
-          go test $(grep -vx 'github.com/skyhook-io/radar/internal/server' <<<"$pkgs")
-
-      - name: Evaluate PVC and CNPG PromQL in Prometheus
-        env:
-          RADAR_TEST_PROMTOOL_IMAGE: prom/prometheus:v3.5.0
-        run: go test ./internal/prometheus -run '^(TestPVCScopePromQL|TestCNPGDiskGrowthPromQL)$' -count=1
-
-      - name: Build
-        run: go build -o explorer ./cmd/explorer
+      - name: Save Go build cache
+        if: env.GO_CACHE_SAVE == 'true'
+        uses: ./.github/actions/go-cache-save
 
   backend-server:
     name: Backend (internal/server)
@@ -223,19 +265,24 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version: '1.26'
-          cache-dependency-path: |
-            go.sum
-            pkg/go.sum
+          go-version: '1.27'
+          cache: false
+
+      - name: Restore Go caches
+        uses: ./.github/actions/go-cache-restore
 
       - name: Download dependencies
         run: go mod download
 
       - name: Run tests
-        run: go test ./internal/server
+        run: go test -ldflags=-w ./internal/server
 
   # TestNoEffortNotesReferencedFromSource scans the whole repo (.ts, .md, .sh,
   # .yaml, ...), not only Go code. When Backend is skipped, run it alone.
+
+      - name: Save Go build cache
+        if: env.GO_CACHE_SAVE == 'true'
+        uses: ./.github/actions/go-cache-save
   repo-hygiene:
     name: Repo hygiene
     needs: changes
@@ -247,13 +294,18 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version: '1.26'
-          cache-dependency-path: |
-            go.sum
-            pkg/go.sum
+          go-version: '1.27'
+          cache: false
+
+      - name: Restore Go caches
+        uses: ./.github/actions/go-cache-restore
 
       - name: Check for effort-note paths
-        run: go test ./internal/server -run '^TestNoEffortNotesReferencedFromSource$'
+        run: go test -ldflags=-w ./internal/server -run '^TestNoEffortNotesReferencedFromSource$'
+
+      - name: Save Go build cache
+        if: env.GO_CACHE_SAVE == 'true'
+        uses: ./.github/actions/go-cache-save
 
   frontend:
     name: Frontend
@@ -292,6 +344,10 @@ jobs:
         run: npm run build
         working-directory: web
 
+      - name: Check startup bundle
+        run: npm run check:startup-bundle
+        working-directory: web
+
   settings-browser:
     name: Settings browser journeys
     needs: changes
@@ -302,10 +358,10 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
-          go-version: '1.26'
-          cache-dependency-path: |
-            go.sum
-            pkg/go.sum
+          go-version: '1.27'
+          cache: false
+      - name: Restore Go caches
+        uses: ./.github/actions/go-cache-restore
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
@@ -326,6 +382,10 @@ jobs:
       - run: go build -o /dev/null ./cmd/testserver
       - run: npm run test:e2e:settings
         working-directory: web
+
+      - name: Save Go build cache
+        if: env.GO_CACHE_SAVE == 'true'
+        uses: ./.github/actions/go-cache-save
 
   k8s-ui:
     name: k8s-ui (shared UI)
@@ -444,7 +504,7 @@ jobs:
         run: ./scripts/test-chart.sh
 
       - name: Intall helmfile
-        uses: helmfile/helmfile-action@v2.4.8
+        uses: helmfile/helmfile-action@v2.4.9
         with:
           # Auto-init bypasses helm-version and keeps the earlier Helm 4 binary.
           helmfile-auto-init: 'false'

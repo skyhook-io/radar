@@ -50,6 +50,8 @@ const (
 //   - AccessibleNamespaces is the picker source — what the user can choose
 //     from. Authoritative=false means it's a best-effort short list (the
 //     user lacks list-namespace RBAC; other namespaces may exist).
+//   - Collection says where Radar keeps the kinds it collects in only some
+//     namespaces. That is Radar's own scope, not the user's pick or access.
 type NamespaceScopeResponse struct {
 	Actives              []string           `json:"actives"`
 	Context              string             `json:"context,omitempty"`
@@ -63,6 +65,11 @@ type NamespaceScopeResponse struct {
 	CacheScoped          bool               `json:"cacheScoped"`
 	CacheScopeNamespace  string             `json:"cacheScopeNamespace,omitempty"`
 	NamespaceRescope     bool               `json:"namespaceRescope"`
+	// ListFailed: the namespace LIST failed for a reason other than RBAC.
+	// AccessibleNamespaces is then the synced cache's list, or only the seeds
+	// when there is none; either way the UI asks again until a LIST succeeds.
+	ListFailed bool                 `json:"listFailed,omitempty"`
+	Collection *NamespaceCollection `json:"collection,omitempty"`
 }
 
 // nsPreferenceKey builds the per-user, per-context key for nsPreferences.
@@ -189,7 +196,6 @@ func (s *Server) invalidatePostContextSwitchCaches() {
 	if s.openCostCurrency != nil {
 		s.openCostCurrency.Invalidate()
 	}
-	k8s.InvalidateUserCapabilitiesCache()
 	usagedata.ContextSwitched()
 	clearPackagesCache()
 	clearApplicationsCache()
@@ -501,7 +507,7 @@ func (s *Server) handleGetNamespaceScope(w http.ResponseWriter, r *http.Request)
 	// or access check says nothing about the picks, so it must not erase them.
 	// A nil list means no namespace could be enumerated at all (LIST denied
 	// with no fallback); like a failed lookup, it says nothing about a pick.
-	accessChecked := !discoveryFailed && source != k8s.NamespaceListFailed && namespaces != nil
+	accessChecked := !discoveryFailed && source != k8s.NamespaceListFailed && source != k8s.NamespaceListCache && namespaces != nil
 	if len(actives) > 0 && accessChecked {
 		survivors := intersectPicksWithAllowed(actives, namespaces)
 		if len(survivors) != len(actives) {
@@ -558,6 +564,20 @@ func (s *Server) handleGetNamespaceScope(w http.ResponseWriter, r *http.Request)
 	}
 	denied := deniedNamespaces(namespaces, k8s.GetCachedPermissionResult(), k8s.ForceNamespaceScope, cacheScopeNs)
 
+	// Pinned, the picker already says what Radar watches; a failed load leaves no visible list.
+	var collection *NamespaceCollection
+	if !k8s.ForceNamespaceScope && !discoveryFailed && source != k8s.NamespaceListFailed {
+		var radarList []string
+		if !source.Complete() {
+			radarList = saAccessible
+			if radarList == nil {
+				radarList = []string{}
+			}
+		}
+		cache := readCache()
+		collection = namespaceCollectionFor(cache, cache.PermissionResult(), dynamicBuiltinCollection(), namespaces, radarList)
+	}
+
 	s.writeJSON(w, NamespaceScopeResponse{
 		Actives:              actives,
 		Context:              pickCtx,
@@ -571,6 +591,8 @@ func (s *Server) handleGetNamespaceScope(w http.ResponseWriter, r *http.Request)
 		CacheScoped:          k8s.ForceNamespaceScope,
 		CacheScopeNamespace:  cacheScopeNs,
 		NamespaceRescope:     k8s.ForceNamespaceScope && !s.authConfig.Enabled() && s.configManagement() != "operator",
+		ListFailed:           source == k8s.NamespaceListFailed || source == k8s.NamespaceListCache,
+		Collection:           collection,
 	})
 }
 

@@ -10,6 +10,7 @@ interface NamespaceSwitcherProps {
   className?: string
   disabled?: boolean
   disabledTooltip?: string
+  onApply?: () => void
   variant?: 'chip' | 'segment'
   label?: string
 }
@@ -20,7 +21,7 @@ interface NamespaceSwitcherProps {
  * hooks; Radar Hub supplies its own container over the per-cluster apiBase.
  */
 export const NamespaceSwitcher = forwardRef<NamespaceSwitcherHandle, NamespaceSwitcherProps>(function NamespaceSwitcher(
-  { className, disabled, disabledTooltip, variant, label },
+  { className, disabled, disabledTooltip, onApply, variant, label },
   ref,
 ) {
   const { data: scope, isLoading } = useNamespaceScope()
@@ -33,7 +34,9 @@ export const NamespaceSwitcher = forwardRef<NamespaceSwitcherHandle, NamespaceSw
   // per-user RBAC filter on a shared install, where neither applies.
   const canConfigureNamespaces = capabilities?.deployment?.mode === 'local' && authMe?.authEnabled === false
 
-  const limitedListHelp = canConfigureNamespaces ? (
+  // A failed list is a transient read error, retried by the scope query; it
+  // says nothing about which namespaces the user can configure.
+  const limitedListHelp = canConfigureNamespaces && !scope?.listFailed ? (
     <a href={NAMESPACES_HELP_URL} target="_blank" rel="noreferrer" className="text-accent-text hover:underline">
       How to add namespaces
     </a>
@@ -45,7 +48,10 @@ export const NamespaceSwitcher = forwardRef<NamespaceSwitcherHandle, NamespaceSw
       scope={scope}
       loading={isLoading}
       pending={setActive.isPending}
-      onApply={namespaces => setActive.mutate({ namespaces })}
+      onApply={namespaces => {
+        onApply?.()
+        setActive.mutate({ namespaces })
+      }}
       disabled={disabled}
       disabledTooltip={disabledTooltip}
       className={className}

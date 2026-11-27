@@ -15,6 +15,16 @@ import (
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 )
 
+// unlabeledCostScope decides every cost check as a single unlabeled store
+// does: nothing filtered, the unscoped queries.
+func unlabeledCostScope(_ context.Context, req prometheuspkg.ViewScopeRequest) (prometheuspkg.ViewScope, error) {
+	filters := map[string]string{}
+	for _, m := range req.Metrics {
+		filters[m.Name] = ""
+	}
+	return prometheuspkg.ViewScope{State: prometheuspkg.ViewScopeUnlabeled, Filters: filters, Note: "unlabeled"}, nil
+}
+
 func TestCostInterfaceThroughMCP(t *testing.T) {
 	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -54,13 +64,14 @@ func TestCostInterfaceThroughMCP(t *testing.T) {
 	if err := opencost.Configure(opencost.ManagerConfig{Source: opencost.SourcePrometheus}); err != nil {
 		t.Fatal(err)
 	}
-	prometheuspkg.Initialize(nil, nil, "test")
+	prometheuspkg.Initialize(nil, nil, "test", nil)
 	prometheuspkg.SetManualURL(source.URL)
 	t.Cleanup(func() {
 		prometheuspkg.Reset()
-		prometheuspkg.Initialize(nil, nil, "")
+		prometheuspkg.Initialize(nil, nil, "", nil)
 		_ = opencost.Configure(original)
 	})
+	t.Cleanup(opencost.SetScopeResolverForTesting(unlabeledCostScope))
 	session := connectTestServer(t)
 	var summaries []any
 	for _, mode := range []string{"omitted", "false", "true"} {
@@ -256,5 +267,95 @@ func TestCostAndRightsizingSchemaRejections(t *testing.T) {
 				t.Fatalf("expected actionable %s rejection: %+v", tc.field, result)
 			}
 		})
+	}
+}
+
+// costScopeResolver withholds every check, or only the ones that read the
+// usage metrics.
+func costScopeResolver(usageOnly bool) func(context.Context, prometheuspkg.ViewScopeRequest) (prometheuspkg.ViewScope, error) {
+	return func(ctx context.Context, req prometheuspkg.ViewScopeRequest) (prometheuspkg.ViewScope, error) {
+		withheld := !usageOnly
+		for _, m := range req.Metrics {
+			if m.Name == "container_cpu_usage_seconds_total" {
+				withheld = true
+			}
+		}
+		if withheld {
+			return prometheuspkg.ViewScope{State: prometheuspkg.ViewScopeSeveralClusters, Withheld: true, Note: "several clusters"}, nil
+		}
+		return unlabeledCostScope(ctx, req)
+	}
+}
+
+func TestGetCostCarriesTheClusterScopeReason(t *testing.T) {
+	var queries []string
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		query := r.URL.Query().Get("query")
+		queries = append(queries, query)
+		if query == "up" {
+			fmt.Fprint(w, `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"job":"prometheus"},"value":[1700000000,"1"]}]}}`)
+			return
+		}
+		fmt.Fprint(w, `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"namespace":"app"},"value":[1700000000,"2"]}]}}`)
+	}))
+	defer source.Close()
+	original := opencost.ConfigSnapshot()
+	if err := opencost.Configure(opencost.ManagerConfig{Source: opencost.SourcePrometheus}); err != nil {
+		t.Fatal(err)
+	}
+	prometheuspkg.Initialize(nil, nil, "test", nil)
+	prometheuspkg.SetManualURL(source.URL)
+	t.Cleanup(func() {
+		prometheuspkg.Reset()
+		prometheuspkg.Initialize(nil, nil, "", nil)
+		_ = opencost.Configure(original)
+	})
+	session := connectTestServer(t)
+	call := func(view string) map[string]any {
+		t.Helper()
+		result, err := session.CallTool(context.Background(), &mcpsdk.CallToolParams{Name: "get_cost", Arguments: map[string]any{"view": view}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw := renderContent(result.Content)
+		if result.IsError {
+			t.Fatal(raw)
+		}
+		var response map[string]any
+		if err := json.Unmarshal([]byte(raw), &response); err != nil {
+			t.Fatal(err)
+		}
+		return response
+	}
+
+	restore := opencost.SetScopeResolverForTesting(costScopeResolver(false))
+	for _, view := range []string{"summary", "nodes", "trend"} {
+		queries = nil
+		response := call(view)
+		scope, _ := response["clusterScope"].(map[string]any)
+		if response["available"] != false || response["reason"] != "cluster_scope" || scope["state"] != "several_clusters" || response["totals"] != nil {
+			t.Fatalf("%s: %v", view, response)
+		}
+		if remediation, _ := response["remediation"].(string); !strings.Contains(remediation, "not zero cost") {
+			t.Fatalf("%s remediation = %q", view, remediation)
+		}
+		for _, q := range queries {
+			if strings.Contains(q, "hourly_cost") || strings.Contains(q, "allocation") {
+				t.Fatalf("%s: withheld view still queried costs: %s", view, q)
+			}
+		}
+	}
+	restore()
+
+	t.Cleanup(opencost.SetScopeResolverForTesting(costScopeResolver(true)))
+	response := call("summary")
+	totals, _ := response["totals"].(map[string]any)
+	usage, _ := response["usageClusterScope"].(map[string]any)
+	if response["available"] != true || totals == nil || usage["state"] != "several_clusters" || totals["efficiencyPercent"] != nil {
+		t.Fatalf("usage-withheld summary: %v", response)
+	}
+	if guidance, _ := json.Marshal(response["guidance"]); !strings.Contains(string(guidance), "unmeasured, not zero") {
+		t.Fatalf("guidance = %s", guidance)
 	}
 }

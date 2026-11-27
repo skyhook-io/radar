@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -14,7 +15,9 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	fakediscovery "k8s.io/client-go/discovery/fake"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -171,7 +174,7 @@ func TestGitopsRequestHasNamespaceAccess(t *testing.T) {
 }
 
 func TestFilterGitOpsTreeForUserAppliesNamespaceAndClusterScope(t *testing.T) {
-	s := &Server{permCache: auth.NewPermissionCache()}
+	s := &Server{permCache: auth.NewPermissionCache().WithConnectionKey(currentPermissionConnection)}
 	s.permCache.Set("gitops-tree-user", nil, &auth.UserPermissions{AllowedNamespaces: []string{"team-a"}})
 	s.permCache.Get("gitops-tree-user", nil).SetCanI("get", "apps", "deployments", "team-a", true)
 	req := &gitopsRequest{AllowedNamespaces: []string{"team-a"}}
@@ -268,7 +271,7 @@ func TestGitOpsFinalizerOwnerMayRunOffCluster(t *testing.T) {
 }
 
 func TestGitOpsTreeDeniesUnreadableKindInsideAllowedNamespace(t *testing.T) {
-	s := &Server{permCache: auth.NewPermissionCache()}
+	s := &Server{permCache: auth.NewPermissionCache().WithConnectionKey(currentPermissionConnection)}
 	s.permCache.Set("source-user", nil, &auth.UserPermissions{AllowedNamespaces: []string{"team"}})
 	s.permCache.Get("source-user", nil).SetCanI("get", "", "secrets", "team", false)
 	req := &gitopsRequest{AllowedNamespaces: []string{"team"}}
@@ -289,7 +292,7 @@ func TestGitOpsTreeDeniesUnreadableKindInsideAllowedNamespace(t *testing.T) {
 }
 
 func TestGitOpsUnknownNamespacedDeclarationIsNotReadDenied(t *testing.T) {
-	s := &Server{permCache: auth.NewPermissionCache()}
+	s := &Server{permCache: auth.NewPermissionCache().WithConnectionKey(currentPermissionConnection)}
 	s.permCache.Set("declaration-user", nil, &auth.UserPermissions{AllowedNamespaces: []string{"team"}})
 	r := httptest.NewRequest(http.MethodGet, "/api/gitops/tree", nil)
 	r = r.WithContext(auth.ContextWithUser(r.Context(), &auth.User{Username: "declaration-user"}))
@@ -306,7 +309,7 @@ func TestGitOpsUnknownNamespacedDeclarationIsNotReadDenied(t *testing.T) {
 }
 
 func TestSyntheticPodGroupReadsPodsInsteadOfPodGroupAPIs(t *testing.T) {
-	s := &Server{permCache: auth.NewPermissionCache()}
+	s := &Server{permCache: auth.NewPermissionCache().WithConnectionKey(currentPermissionConnection)}
 	permissions := &auth.UserPermissions{AllowedNamespaces: []string{"team"}}
 	permissions.SetCanI("get", "", "pods", "team", true)
 	s.permCache.Set("group-user", nil, permissions)
@@ -323,7 +326,7 @@ func TestSyntheticPodGroupReadsPodsInsteadOfPodGroupAPIs(t *testing.T) {
 }
 
 func TestRemoteDeclaredTreeNodePreservesRootInventory(t *testing.T) {
-	s := &Server{permCache: auth.NewPermissionCache()}
+	s := &Server{permCache: auth.NewPermissionCache().WithConnectionKey(currentPermissionConnection)}
 	s.permCache.Set("fleet-user", nil, &auth.UserPermissions{AllowedNamespaces: []string{"argocd"}})
 	root := gitopstree.Node{ID: "root", Role: gitopstree.RoleRoot}
 	remote := gitopstree.Node{ID: "remote", Role: gitopstree.RoleDeclared, Remote: true, Ref: gitopstree.ResourceRef{Kind: "Secret", Namespace: "remote", Name: "declared"}, Sync: "Synced"}
@@ -337,7 +340,7 @@ func TestRemoteDeclaredTreeNodePreservesRootInventory(t *testing.T) {
 }
 
 func TestRemoteInsightPreservesOnlyRemoteInventoryDeclarations(t *testing.T) {
-	s := &Server{permCache: auth.NewPermissionCache()}
+	s := &Server{permCache: auth.NewPermissionCache().WithConnectionKey(currentPermissionConnection)}
 	s.permCache.Set("fleet-user", nil, &auth.UserPermissions{AllowedNamespaces: []string{"argocd"}})
 	remote := gitopstree.Node{ID: "remote", Role: gitopstree.RoleDeclared, Remote: true, Ref: gitopstree.ResourceRef{Kind: "Secret", Namespace: "destination", Name: "declared"}}
 	tree := &gitopstree.ResourceTree{Nodes: []gitopstree.Node{remote}}
@@ -353,7 +356,7 @@ func TestRemoteInsightPreservesOnlyRemoteInventoryDeclarations(t *testing.T) {
 }
 
 func TestFluxSourceInsightDropsDeniedStatusText(t *testing.T) {
-	s := &Server{permCache: auth.NewPermissionCache()}
+	s := &Server{permCache: auth.NewPermissionCache().WithConnectionKey(currentPermissionConnection)}
 	permissions := &auth.UserPermissions{AllowedNamespaces: []string{"team", "shared"}}
 	s.permCache.Set("source-user", nil, permissions)
 	r := httptest.NewRequest(http.MethodGet, "/api/gitops/insights", nil)
@@ -375,7 +378,7 @@ func TestFluxSourceInsightDropsDeniedStatusText(t *testing.T) {
 }
 
 func TestFluxTreeResummarizesDependenciesAfterFiltering(t *testing.T) {
-	s := &Server{permCache: auth.NewPermissionCache()}
+	s := &Server{permCache: auth.NewPermissionCache().WithConnectionKey(currentPermissionConnection)}
 	permissions := &auth.UserPermissions{AllowedNamespaces: []string{"team"}}
 	permissions.SetCanI("get", "apps", "deployments", "team", true)
 	s.permCache.Set("tree-user", nil, permissions)
@@ -391,7 +394,7 @@ func TestFluxTreeResummarizesDependenciesAfterFiltering(t *testing.T) {
 }
 
 func TestFluxBlockerConditionSurvivesDeniedSource(t *testing.T) {
-	s := &Server{permCache: auth.NewPermissionCache()}
+	s := &Server{permCache: auth.NewPermissionCache().WithConnectionKey(currentPermissionConnection)}
 	s.permCache.Set("blocker-user", nil, &auth.UserPermissions{AllowedNamespaces: []string{"team"}})
 	r := httptest.NewRequest(http.MethodGet, "/api/gitops/insights", nil)
 	r = r.WithContext(auth.ContextWithUser(r.Context(), &auth.User{Username: "blocker-user"}))
@@ -425,5 +428,117 @@ func TestWriteGitOpsBuildErrorRefusesNonGitOpsRoot(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "Application.app.k8s.io shop/wordpress is not a supported Argo CD or Flux resource") {
 		t.Fatalf("body = %s", rec.Body.String())
+	}
+}
+
+func TestFluxChainHidesUnreadableSource(t *testing.T) {
+	fd := &fakediscovery.FakeDiscovery{Fake: &k8stesting.Fake{}}
+	fd.Resources = []*metav1.APIResourceList{{GroupVersion: "source.toolkit.fluxcd.io/v1", APIResources: []metav1.APIResource{
+		{Name: "gitrepositories", Kind: "GitRepository", Namespaced: true, Verbs: metav1.Verbs{"get", "list", "watch"}},
+	}}}
+	restore, err := k8s.SetTestResourceDiscovery(fd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(restore)
+	s := &Server{permCache: auth.NewPermissionCache()}
+	s.permCache.Set("chain-user", nil, &auth.UserPermissions{AllowedNamespaces: []string{"team"}})
+	s.permCache.Get("chain-user", nil).SetCanI("get", "source.toolkit.fluxcd.io", "gitrepositories", "team", false)
+	req := &gitopsRequest{AllowedNamespaces: []string{"team"}}
+	root := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "kustomize.toolkit.fluxcd.io/v1", "kind": "Kustomization",
+		"metadata": map[string]any{"namespace": "team", "name": "app"},
+		"spec":     map[string]any{"sourceRef": map[string]any{"kind": "GitRepository", "name": "repo"}},
+		"status":   map[string]any{"lastAppliedRevision": "main@sha1:aaa"},
+	}}
+	tree := &gitopstree.ResourceTree{
+		Root: gitopstree.Node{ID: "root", Role: gitopstree.RoleRoot},
+		Nodes: []gitopstree.Node{
+			{ID: "root", Role: gitopstree.RoleRoot},
+			{ID: "repo", Role: gitopstree.RoleDeclared, Dependency: true, Ref: gitopstree.ResourceRef{Group: "source.toolkit.fluxcd.io", Kind: "GitRepository", Namespace: "team", Name: "repo"}, Data: map[string]any{"artifactRevision": "main@sha1:bbb"}},
+		},
+		Edges: []gitopstree.Edge{{Source: "repo", Target: "root", Type: gitopstree.EdgeSource}},
+	}
+	r := httptest.NewRequest(http.MethodGet, "/api/gitops/tree", nil)
+	r = r.WithContext(auth.ContextWithUser(r.Context(), &auth.User{Username: "chain-user"}))
+	summary := gitopsinsights.Build(root, s.filterGitOpsTreeForUser(r, req, tree), nil).Summary
+	if summary.SourceRevision != "" || summary.Pending != nil || summary.AppliedRevision != "main@sha1:aaa" {
+		t.Fatalf("hidden source fed the chain: %+v", summary)
+	}
+}
+
+func TestWriteGitOpsPermissionDenied(t *testing.T) {
+	original := apierrors.NewForbidden(schema.GroupResource{Group: "source.toolkit.fluxcd.io", Resource: "gitrepositories"}, "repo", fmt.Errorf("User opaque-user cannot get resource"))
+	denied := &gitops.PermissionDenied{Verb: "get", Group: "source.toolkit.fluxcd.io", Resource: "gitrepositories", Namespace: "sources", Err: original}
+	w := httptest.NewRecorder()
+	(&Server{}).writeGitOpsError(w, fmt.Errorf("wrapped: %w", denied), "flux", "sync-with-source", "apps", "demo")
+	var body map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if w.Code != 403 || w.Header().Get("Content-Type") != "application/json" || body["error_code"] != "rbac_denied" || body["verb"] != "get" || body["summary"] != denied.Summary() || body["error"] != "wrapped: "+original.Error() || body["namespace"] != "sources" || body["resource"] != "gitrepositories" || body["group"] != "source.toolkit.fluxcd.io" {
+		t.Fatalf("response=%d %v %v", w.Code, w.Header(), body)
+	}
+}
+
+func TestWriteGitOpsAdmissionDenied(t *testing.T) {
+	gr := schema.GroupResource{Group: "argoproj.io", Resource: "applications"}
+	policyDenial := func(reason metav1.StatusReason, code int32) error {
+		err := apierrors.NewForbidden(gr, "demo", errors.New(`ValidatingAdmissionPolicy 'freeze' with binding 'freeze' denied request: Application demo is change-frozen`))
+		err.ErrStatus.Reason, err.ErrStatus.Code = reason, code
+		return err
+	}
+	for _, tc := range []struct {
+		name    string
+		err     error
+		summary string
+	}{
+		{"webhook", apierrors.NewForbidden(gr, "demo", errors.New(`admission webhook "validation.gatekeeper.sh" denied the request: missing owner`)), "Request for Application argocd/demo rejected by admission webhook validation.gatekeeper.sh: missing owner"},
+		{"policy default reason", policyDenial(metav1.StatusReasonInvalid, http.StatusUnprocessableEntity), "Request for Application argocd/demo rejected by ValidatingAdmissionPolicy freeze: Application demo is change-frozen"},
+		{"policy forbidden reason", policyDenial(metav1.StatusReasonForbidden, http.StatusForbidden), "Request for Application argocd/demo rejected by ValidatingAdmissionPolicy freeze: Application demo is change-frozen"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := gitops.ClassifyPermissionError(tc.err, "patch", schema.GroupVersionResource{Group: "argoproj.io", Resource: "applications"}, "argocd", "demo")
+			w := httptest.NewRecorder()
+			(&Server{}).writeGitOpsError(w, fmt.Errorf("failed to refresh Application argocd/demo: %w", err), "argo", "refresh", "argocd", "demo")
+			var body map[string]any
+			if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if w.Code != 403 || body["error_code"] != "admission_denied" || body["summary"] != tc.summary || body["verb"] != nil {
+				t.Fatalf("%d %v", w.Code, body)
+			}
+		})
+	}
+}
+
+func TestWriteGitOpsPartialSourceErrorPreservesStatusAndNote(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "source.toolkit.fluxcd.io", Resource: "helmcharts"}
+	for _, tc := range []struct {
+		name   string
+		err    error
+		status int
+		code   string
+	}{
+		{"rbac", apierrors.NewForbidden(gvr.GroupResource(), "shared", errors.New(`User "alice" cannot patch resource "helmcharts"`)), http.StatusForbidden, "rbac_denied"},
+		{"admission", apierrors.NewForbidden(gvr.GroupResource(), "shared", errors.New(`admission webhook "freeze" denied the request: frozen`)), http.StatusForbidden, "admission_denied"},
+		{"not found", apierrors.NewNotFound(gvr.GroupResource(), "shared"), http.StatusNotFound, ""},
+		{"timeout", context.DeadlineExceeded, http.StatusGatewayTimeout, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := &gitops.PartialSyncError{Requested: []gitops.SourceRef{{Kind: "HelmRepository", Namespace: "charts", Name: "repo"}}, Err: gitops.ClassifyPermissionError(tc.err, "patch", gvr, "charts", "shared")}
+			w := httptest.NewRecorder()
+			(&Server{}).writeGitOpsError(w, err, "flux", "sync-with-source", "apps", "demo")
+			var body map[string]string
+			if decodeErr := json.Unmarshal(w.Body.Bytes(), &body); decodeErr != nil {
+				t.Fatal(decodeErr)
+			}
+			if w.Code != tc.status || body["error_code"] != tc.code || body["note"] != "Reconcile already requested for HelmRepository charts/repo." || !strings.Contains(body["error"], body["note"]) {
+				t.Fatalf("status=%d body=%v", w.Code, body)
+			}
+			if tc.code == "admission_denied" && body["summary"] != "Request for HelmChart charts/shared rejected by admission webhook freeze: frozen" {
+				t.Fatalf("summary lost the denied source: %v", body)
+			}
+		})
 	}
 }

@@ -90,7 +90,7 @@ func TestReleaseListHealthCoversOnlyWhatEachCallerCanRead(t *testing.T) {
 	client := fake.NewSimpleClientset(helmReleaseSecret(t, "team-a", crossNamespaceRelease(), false))
 	list := func(scope *ObjectScope) HelmRelease {
 		t.Helper()
-		rows, err := listReleasesAcrossNamespacesWithClient(context.Background(), client, "", []string{"team-a"}, true, scope)
+		rows, err := listReleasesAcrossNamespacesWithClient(k8s.CaptureConnection(t.Context()), client, "", []string{"team-a"}, true, scope)
 		if err != nil || len(rows) != 1 {
 			t.Fatalf("rows = %+v, %v", rows, err)
 		}
@@ -121,7 +121,7 @@ func TestReleaseDetailWithholdsStatusOfObjectsTheCallerCantRead(t *testing.T) {
 	}
 	detail := func(scope *ObjectScope) (*HelmReleaseDetail, map[string]OwnedResource) {
 		t.Helper()
-		d, err := getReleaseWith(cfg, "", "team-a", "payments", scope)
+		d, err := getReleaseWith(context.Background(), k8s.Current(), cfg, "", "team-a", "payments", scope)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -177,8 +177,8 @@ func TestNoStatusAccessReadsNoStatus(t *testing.T) {
 	useCrossNamespaceCache(t)
 	for name, access := range map[string]StatusAccess{"nil": nil, "nil scope": (*ObjectScope)(nil)} {
 		t.Run(name, func(t *testing.T) {
-			resources := parseManifestResources(crossNamespaceManifest, "team-a")
-			health, issue, summary := readReleaseStatus(resources, access)
+			resources := parseManifestResources(k8s.Current(), crossNamespaceManifest, "team-a")
+			health, issue, summary := readReleaseStatus(k8s.Current(), resources, access)
 			if health != "unknown" || issue != "" || summary != "" {
 				t.Fatalf("health %q issue %q summary %q", health, issue, summary)
 			}
@@ -216,7 +216,7 @@ func TestReleaseListKeepsHealthAlignedAcrossNamespaces(t *testing.T) {
 	unhealthy.Manifest = "apiVersion: v1\nkind: Pod\nmetadata:\n  name: payments-worker\n  namespace: shared\n"
 	client := fake.NewSimpleClientset(helmReleaseSecret(t, "team-a", healthy, false), helmReleaseSecret(t, "shared", unhealthy, false))
 	for _, namespaces := range [][]string{{"team-a", "shared"}, {"shared", "team-a"}} {
-		rows, err := listReleasesAcrossNamespacesWithClient(context.Background(), client, "", namespaces, true, adminCaller())
+		rows, err := listReleasesAcrossNamespacesWithClient(k8s.CaptureConnection(t.Context()), client, "", namespaces, true, adminCaller())
 		if err != nil || len(rows) != 2 {
 			t.Fatalf("rows=%d err=%v", len(rows), err)
 		}
@@ -233,7 +233,7 @@ func TestReleaseListKeepsHealthAlignedAcrossNamespaces(t *testing.T) {
 func TestLegacyBuiltInGroupsStillReadAndCount(t *testing.T) {
 	useCrossNamespaceCache(t)
 	resources := []OwnedResource{{Kind: "Pod", APIVersion: "v1", Name: "payments-app", Namespace: "team-a"}, {Kind: "Pod", APIVersion: "v1", Name: "payments-worker", Namespace: "shared"}}
-	enrichResourcesWithStatus(resources, adminCaller())
+	enrichResourcesWithStatus(k8s.Current(), resources, adminCaller())
 	legacy := OwnedResource{Kind: "Deployment", APIVersion: "extensions/v1beta1", Name: "old", Status: "Progressing", Ready: "0/1"}
 	if _, ok := builtInGroup(legacy); !ok {
 		t.Fatal("extensions/v1beta1 Deployment isn't treated as a Deployment")
@@ -249,7 +249,7 @@ func TestLegacyBuiltInGroupsStillReadAndCount(t *testing.T) {
 func TestStatusLookupSkipsCustomKindsNamedLikeBuiltIns(t *testing.T) {
 	useCrossNamespaceCache(t)
 	resources := []OwnedResource{{Kind: "Pod", APIVersion: "example.com/v1", Name: "payments-app", Namespace: "team-a"}}
-	enrichResourcesWithStatus(resources, adminCaller())
+	enrichResourcesWithStatus(k8s.Current(), resources, adminCaller())
 	if resources[0].Status != "" {
 		t.Fatalf("custom kind read the core Pod's status %q", resources[0].Status)
 	}
@@ -258,13 +258,13 @@ func TestStatusLookupSkipsCustomKindsNamedLikeBuiltIns(t *testing.T) {
 func TestNamespaceStatusScope(t *testing.T) {
 	useCrossNamespaceCache(t)
 	read := func(scope NamespaceStatusScope) map[string]OwnedResource {
-		resources := parseManifestResources(crossNamespaceManifest+`---
+		resources := parseManifestResources(k8s.Current(), crossNamespaceManifest+`---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: payments-reader
 `, "team-a")
-		enrichResourcesWithStatus(resources, scope)
+		enrichResourcesWithStatus(k8s.Current(), resources, scope)
 		byName := map[string]OwnedResource{}
 		for _, r := range resources {
 			byName[r.Name] = r
@@ -304,8 +304,9 @@ func TestObjectScopeLeavesObjectsOutsideThePinAlone(t *testing.T) {
 		k8s.ForceNamespaceScope = previous
 		k8s.SetNamespaceScopeOverride("")
 	})
-	resources := parseManifestResources(crossNamespaceManifest, "team-a")
-	enrichResourcesWithStatus(resources, adminCaller())
+	pin := k8s.GetNamespaceScopeTarget()
+	resources := parseManifestResources(k8s.Current(), crossNamespaceManifest, "team-a")
+	enrichResourcesWithStatus(k8s.Current(), resources, &ObjectScope{Pin: &pin})
 	for _, r := range resources {
 		if r.Name == "payments-worker" && (r.Status != "" || r.StatusUnread != "") {
 			t.Fatalf("outside the pin = %+v, want no lookup and no marker", r)
@@ -376,7 +377,7 @@ metadata:
 			},
 		}}
 	}
-	rows, err := listReleasesAcrossNamespacesWithClient(context.Background(), client, "", []string{"team-a"}, true, devA())
+	rows, err := listReleasesAcrossNamespacesWithClient(k8s.CaptureConnection(t.Context()), client, "", []string{"team-a"}, true, devA())
 	if err != nil || len(rows) != 12 {
 		t.Fatalf("rows = %d, %v", len(rows), err)
 	}
@@ -386,13 +387,13 @@ metadata:
 	}
 
 	for name, scope := range map[string]func() *ObjectScope{"dev-a": devA, "admin": adminCaller} {
-		rows, err := listReleasesAcrossNamespacesWithClient(context.Background(), client, "", []string{"team-a"}, true, scope())
+		rows, err := listReleasesAcrossNamespacesWithClient(k8s.CaptureConnection(t.Context()), client, "", []string{"team-a"}, true, scope())
 		if err != nil {
 			t.Fatal(err)
 		}
 		for _, row := range rows {
-			perObject := parseManifestResources(manifest, "team-a")
-			enrichResourcesWithStatus(perObject, scope())
+			perObject := parseManifestResources(k8s.Current(), manifest, "team-a")
+			enrichResourcesWithStatus(k8s.Current(), perObject, scope())
 			health, issue, summary := computeResourceHealth(perObject)
 			if row.ResourceHealth != health || row.HealthIssue != issue || row.HealthSummary != summary || row.StatusUnreadCount != statusUnreadCount(perObject) {
 				t.Fatalf("%s row %s = %q %q %q %d, per object %q %q %q %d", name, row.Name,

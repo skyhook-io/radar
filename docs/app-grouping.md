@@ -77,6 +77,26 @@ app keyed `<ns>/JobSet/<name>`; the JobSet is its workload, with lifecycle healt
 from `pkg/jobset`. Member Jobs stay in its graph and open the selected member
 in the JobSet overview.
 
+The climb first follows the controller chain to its top, or to the first
+GitOps manager on it (an Application an ApplicationSet controls ends the climb
+at the Application). An object with no
+controller reference climbs to its owner only when it has exactly one owner
+reference and that owner is readable: several owner references are
+garbage-collection dependencies with no primary. Recording managers stop the climb in this order: Argo CD
+Application, Flux Kustomization, Flux HelmRelease. That order only breaks a tie
+between managers whose status lists record the workload; §4's cascade, which
+puts Flux first, ranks the manager labels a workload carries instead. Within one kind, the recording
+manager the workload's own metadata names wins (an Argo CD tracking ID or instance
+label, or Flux labels; a copied tracking ID names nothing), and otherwise the
+sorted-first one, so the key doesn't depend on read order. A local HelmRelease without readable inventory retains
+its matching origin labels ahead of recorded managers. Attachments come from
+one request-local family batch; the ten-second row cache is shared, and each
+caller's access filters its copy afterward. A build that read a GitOps manager
+or attachment kind still loading, or found a workload the attachment pass hadn't
+read in that version (created, or its spec changed, in between), is answered
+but not cached, so the next request regroups its rows. Cold builds share one process-wide
+slot.
+
 The weaker labels (`part-of`, `name`) are a fallback for loose/raw workloads, not
 an umbrella over independently-released ones. **One honest caveat to the absolute
 claim:** apps are assembled by union-find over *atoms* — each workload contributes
@@ -104,16 +124,16 @@ behavior.)
 A workload flows left-to-right; each layer answers part of the question.
 
 ```
-  workload ──▶ [1] structuralRoot + ──▶ [2] applications_identity ──▶ [3] hub + fleet fold
+  workload ──▶ [1] ownership root + ──▶ [2] applications_identity ──▶ [3] hub + fleet fold
                   pkg/subject            app-instances → logical        logical apps →
               workload → release unit    app + env (identity,           one fleet row
               (composition)              per cluster)                   (identity, x-cluster)
 ```
 
-1. **Composition — `structuralRoot` (topology graph) + `pkg/subject` overlay (per
+1. **Composition — shared ownership + recording managers + `pkg/subject` overlay (per
    cluster).** Climbs each workload's ownership to its **release unit** (the GitOps/
    Helm manager that deploys it) and stops there (§2). The `pkg/subject` overlay
-   then *consolidates* roots the graph can't connect — hub-spoke Argo (controller
+   then *consolidates* roots ownership cannot connect — hub-spoke Argo (controller
    in another cluster), native-Helm release annotations — by reading the workload's
    labels via a **precedence cascade** (§4). Output: every workload tagged with an
    **overlay key** (which release unit / app it belongs to) and a **tier** (how
@@ -140,9 +160,11 @@ A workload flows left-to-right; each layer answers part of the question.
 
 ## 4. The composition cascade (the 9 tiers)
 
-When the topology graph can't connect two roots, `pkg/subject` consolidates them
+When ownership cannot connect two roots, `pkg/subject` consolidates them
 from the workload's labels, walking signals in strict precedence — the **first**
-(lowest-numbered) that matches wins. The ranking is **"how strongly does this
+(lowest-numbered) that matches wins. This ranks the labels and annotations a
+workload carries, Flux first; it isn't §2's order among managers whose status
+lists record the workload, which puts Argo CD first. The ranking is **"how strongly does this
 signal indicate the release unit"**: a GitOps/Helm manager *is* a release unit (it
 deploys a set of workloads together), so it outranks any membership label.
 
@@ -313,7 +335,8 @@ workload rows. After that, the normal portable fold (§6) takes over.
 
 | Concern | File |
 |---------|------|
-| **Composition: the boundary** — `structuralRoot`, `rootOf`, `groupApplications`, `inputAtoms`, the union-find over atoms | `internal/server/applications.go` |
+| **Composition: the boundary** — `applicationStructuralRoot`, `rootOf`, the request attachment batch | `internal/server/applications_relations.go`; shared climb in `pkg/topology/relations_answer.go` (`OwnerAboveToManager`) |
+| Composition: `groupApplications`, `inputAtoms`, the union-find over atoms | `internal/server/applications.go` |
 | Composition: the overlay signal cascade (the 9 tiers, `ResolveOverlay`) | `pkg/subject/overlay.go` |
 | Identity within a cluster: env grouping + `source`/`portable`/`pathKey` | `internal/server/applications_identity.go` |
 | Hub: Join A (key-merge), forward identity, declared-only promotion, hub-spoke claim stamping, add-on fold | `radar-hub: internal/server/fleet_applications.go` → `ComputeFleetApplications` |

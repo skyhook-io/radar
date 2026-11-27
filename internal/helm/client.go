@@ -43,6 +43,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -74,9 +75,14 @@ var httpClient = &http.Client{
 
 // Client provides access to Helm releases
 type Client struct {
-	mu         sync.RWMutex
-	settings   *cli.EnvSettings
-	kubeconfig string
+	*repositorySettings
+	conn       *k8s.Connection
+	restConfig *rest.Config
+}
+
+type repositorySettings struct {
+	mu       sync.RWMutex
+	settings *cli.EnvSettings
 	// chartPathLocator is a test seam for chart transport. Production callers
 	// leave it nil and use locateChartPath, which wires Helm's registry client
 	// for OCI references.
@@ -85,17 +91,11 @@ type Client struct {
 	ociTags ociTagLister
 	// listings shares recent classic-index downloads between version listings.
 	listings recentIndexes
-	// restConfig, when set, is the explicit rest.Config all actions target —
-	// used by callers that resolve the cluster themselves before Radar's k8s
-	// singleton is up (the CLI install driver), so Helm can't diverge onto a
-	// different kubeconfig current-context than the caller's own client.
-	restConfig *rest.Config
 }
 
 var (
 	globalClient *Client
 	clientOnce   sync.Once
-	helmClientMu sync.Mutex
 )
 
 // ensureHelmWritablePaths sets HELM_CACHE_HOME, HELM_CONFIG_HOME, and HELM_DATA_HOME
@@ -138,22 +138,14 @@ func isDirWritable(dir string) bool {
 }
 
 // Initialize sets up the global Helm client
-func Initialize(kubeconfig string) error {
-	var initErr error
+func Initialize() {
 	clientOnce.Do(func() {
 		ensureHelmWritablePaths()
 		settings := cli.New()
-		if kubeconfig != "" {
-			settings.KubeConfig = kubeconfig
-		}
-		globalClient = &Client{
-			settings:   settings,
-			kubeconfig: kubeconfig,
-		}
+		globalClient = &Client{repositorySettings: &repositorySettings{settings: settings}}
 		log.Printf("Helm client initialized (cache=%s, config=%s, data=%s)",
 			settings.RepositoryCache, settings.RepositoryConfig, settings.PluginsDirectory)
 	})
-	return initErr
 }
 
 // InitializeWithRESTConfig sets up the global Helm client to operate against an
@@ -165,76 +157,95 @@ func InitializeWithRESTConfig(restCfg *rest.Config) error {
 	clientOnce.Do(func() {
 		ensureHelmWritablePaths()
 		globalClient = &Client{
-			settings:   cli.New(),
-			restConfig: restCfg,
+			repositorySettings: &repositorySettings{settings: cli.New()},
+			restConfig:         restCfg,
 		}
 	})
 	return nil
 }
 
-// GetClient returns the global Helm client
-func GetClient() *Client {
-	return globalClient
+// GetClient captures the request's connection while sharing the process's
+// repository settings and index. It returns the global client directly if it
+// was initialized with an explicit REST config. It returns nil before
+// initialization or if the connection has neither a REST config nor a client.
+func GetClient(ctx context.Context) *Client {
+	if globalClient == nil {
+		return nil
+	}
+	if globalClient.restConfig != nil {
+		return globalClient
+	}
+	conn := k8s.BoundOrCurrent(ctx)
+	if conn.Config() == nil && conn.Client() == nil {
+		return nil
+	}
+	return globalClient.forConnection(conn)
+}
+
+func (c *Client) forConnection(conn *k8s.Connection) *Client {
+	return &Client{repositorySettings: c.repositorySettings, conn: conn}
+}
+
+func (c *Client) capture(ctx context.Context) (*Client, context.Context) {
+	if c.restConfig != nil {
+		return c, k8s.WithConnection(ctx, nil)
+	}
+	if conn := k8s.ConnectionFrom(ctx); conn != nil {
+		if c.conn == conn {
+			return c, ctx
+		}
+		return c.forConnection(conn), ctx
+	}
+	if c.conn != nil {
+		return c, k8s.WithConnection(ctx, c.conn)
+	}
+	ctx = k8s.CaptureConnection(ctx)
+	return c.forConnection(k8s.ConnectionFrom(ctx)), ctx
+}
+
+func (c *Client) config() *rest.Config {
+	if c.restConfig != nil {
+		return c.restConfig
+	}
+	return c.conn.Config()
 }
 
 // NewStandaloneClient returns a Helm client bound to an explicit rest.Config,
 // independent of the process-global client. Every action configuration it
-// builds targets exactly this config (restConfig wins in restClientGetter), so
+// builds targets exactly this config, so
 // a later kubeconfig context switch in the host process cannot retarget its
 // writes — the property the Cloud install flow depends on while a prepared
 // install waits for Hub approval.
 func NewStandaloneClient(restCfg *rest.Config) *Client {
 	ensureHelmWritablePaths()
 	return &Client{
-		settings:   cli.New(),
-		restConfig: rest.CopyConfig(restCfg),
+		repositorySettings: &repositorySettings{settings: cli.New()},
+		restConfig:         rest.CopyConfig(restCfg),
 	}
-}
-
-// ResetClient clears the Helm client instance
-// This must be called before ReinitClient when switching contexts
-func ResetClient() {
-	helmClientMu.Lock()
-	defer helmClientMu.Unlock()
-
-	globalClient = nil
-	clientOnce = sync.Once{}
-}
-
-// ReinitClient reinitializes the Helm client after a context switch
-// Must call ResetClient first
-func ReinitClient(kubeconfig string) error {
-	return Initialize(kubeconfig)
 }
 
 // getActionConfig creates a new action configuration for the given namespace
 func (c *Client) getActionConfig(namespace string) (*action.Configuration, error) {
-	return c.buildActionConfig(namespace, nil)
+	return c.getActionConfigForUser(namespace, nil)
 }
 
 // getActionConfigForUser creates an action configuration with K8s impersonation set.
 // Used for write operations when auth is enabled.
 func (c *Client) getActionConfigForUser(namespace string, user *pkgauth.User) (*action.Configuration, error) {
-	return c.buildActionConfig(namespace, user)
+	cfg := c.config()
+	if cfg == nil {
+		return nil, fmt.Errorf("helm: no resolved rest.Config available")
+	}
+	return initActionConfig(newRESTConfigGetter(cfg, namespace, user), namespace, user)
 }
 
-// buildActionConfig is the shared init path for both anonymous and
-// impersonated action configurations. When kubeconfig is empty (running
-// in-cluster) we hand Helm an in-cluster RESTClientGetter built from the
-// rest.Config the rest of Radar already uses — Helm's default
-// ConfigFlags only resolves kubeconfig and would otherwise fall through
-// to localhost:8080 inside a pod with no ~/.kube/config.
-func (c *Client) buildActionConfig(namespace string, user *pkgauth.User) (*action.Configuration, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+func (c *Client) actionConfigForWrite(ctx context.Context, namespace string) (*action.Configuration, error) {
+	c, _ = c.capture(ctx)
+	return c.getActionConfigForUser(namespace, pkgauth.UserFromContext(ctx))
+}
 
+func initActionConfig(getter genericclioptions.RESTClientGetter, namespace string, user *pkgauth.User) (*action.Configuration, error) {
 	actionConfig := new(action.Configuration)
-
-	getter, err := c.restClientGetter(namespace, user)
-	if err != nil {
-		return nil, fmt.Errorf("failed to build helm RESTClientGetter: %w", err)
-	}
-
 	if err := actionConfig.Init(getter, namespace, "secrets", log.Printf); err != nil {
 		if user != nil {
 			return nil, fmt.Errorf("failed to initialize helm action config for user %s: %w", user.Username, err)
@@ -243,89 +254,6 @@ func (c *Client) buildActionConfig(namespace string, user *pkgauth.User) (*actio
 	}
 
 	return actionConfig, nil
-}
-
-// restClientGetter picks the RESTClientGetter strategy for this client.
-// Caller must hold c.mu (read or write). Reads global k8s package state
-// (rest.Config, current context); pure logic lives in
-// buildRESTClientGetter so it can be tested without those globals.
-func (c *Client) restClientGetter(namespace string, user *pkgauth.User) (genericclioptions.RESTClientGetter, error) {
-	// An explicit restConfig (CLI install driver) wins and forces the
-	// restConfig getter path (kubeconfig empty), so Helm targets exactly the
-	// cluster the caller resolved.
-	restConfig := c.restConfig
-	kubeconfig := c.kubeconfig
-	if restConfig != nil {
-		kubeconfig = ""
-	} else {
-		restConfig = k8s.GetConfig()
-	}
-	return buildRESTClientGetter(restClientGetterParams{
-		kubeconfig:     kubeconfig,
-		restConfig:     restConfig,
-		currentContext: k8s.GetContextName(),
-		namespace:      namespace,
-		user:           user,
-	})
-}
-
-type restClientGetterParams struct {
-	kubeconfig     string
-	restConfig     *rest.Config
-	currentContext string
-	namespace      string
-	user           *pkgauth.User
-}
-
-// buildRESTClientGetter is the pure logic behind Client.restClientGetter.
-// Two strategies:
-//
-//   - kubeconfig path is set: hand Helm a ConfigFlags pointing at that
-//     single file. This is the dominant OSS path (kubectl plugin /
-//     standalone binary on a laptop with ~/.kube/config).
-//   - kubeconfig path is empty: hand Helm the rest.Config Radar already
-//     resolved at boot. Fires for in-cluster deploys (Hub mode, OSS
-//     Helm-chart deploy — no ~/.kube/config in the pod) and for
-//     multi-source kubeconfig modes (--kubeconfig-dir / multi-path
-//     KUBECONFIG, where there's no single file path to hand Helm).
-func buildRESTClientGetter(p restClientGetterParams) (genericclioptions.RESTClientGetter, error) {
-	// A user token can't ride kubeconfig flags (they'd add the kubeconfig's
-	// own credentials), so user-token mode always uses the resolved config.
-	if p.kubeconfig == "" || (p.user != nil && pkgauth.UserTokenMode()) {
-		if p.restConfig != nil {
-			return newRESTConfigGetter(p.restConfig, p.namespace, p.user), nil
-		}
-		// No kubeconfig path AND no resolved rest.Config — no point in
-		// handing Helm a getter that would fall through to localhost:8080.
-		// Surface the misconfiguration instead.
-		return nil, fmt.Errorf("helm: no kubeconfig path and no resolved rest.Config available")
-	}
-
-	// usePersistentConfig=false avoids caching issues across context switches.
-	configFlags := genericclioptions.NewConfigFlags(false)
-	// Override the default discovery cache dir ($HOME/.kube/cache) to a writable path
-	// when running on a read-only filesystem (e.g. in-cluster with readOnlyRootFilesystem).
-	if homeDir, err := os.UserHomeDir(); err != nil || !isDirWritable(homeDir) {
-		kubeCacheDir := "/tmp/helm/kube-cache"
-		configFlags.CacheDir = &kubeCacheDir
-	}
-	configFlags.KubeConfig = &p.kubeconfig
-	if p.namespace != "" {
-		configFlags.Namespace = &p.namespace
-	}
-
-	// Use Explorer's current context (in-memory) instead of kubeconfig's
-	// current-context, so Helm tracks Explorer through context switches.
-	if p.currentContext != "" && p.currentContext != "in-cluster" {
-		configFlags.Context = &p.currentContext
-	}
-
-	if p.user != nil {
-		configFlags.Impersonate = &p.user.Username
-		configFlags.ImpersonateGroup = &p.user.Groups
-	}
-
-	return configFlags, nil
 }
 
 // GetActionConfig returns an action configuration for the given namespace.
@@ -344,10 +272,11 @@ func (c *Client) GetActionConfigForUser(namespace string, user *pkgauth.User) (*
 // When username is empty, falls back to the ServiceAccount identity (same
 // behavior as ListReleases).
 func (c *Client) ListReleasesAsUser(ctx context.Context, namespace string, user *pkgauth.User, access StatusAccess) ([]HelmRelease, error) {
+	c, ctx = c.capture(ctx)
 	if user == nil {
 		return c.ListReleases(ctx, namespace, access)
 	}
-	contextName := k8s.GetContextName()
+	contextName := c.conn.ContextName()
 	actionConfig, err := c.getActionConfigForUser(namespace, user)
 	if err != nil {
 		return nil, err
@@ -357,7 +286,8 @@ func (c *Client) ListReleasesAsUser(ctx context.Context, namespace string, user 
 
 // ListReleases returns all Helm releases, optionally filtered by namespace
 func (c *Client) ListReleases(ctx context.Context, namespace string, access StatusAccess) ([]HelmRelease, error) {
-	contextName := k8s.GetContextName()
+	c, ctx = c.capture(ctx)
+	contextName := c.conn.ContextName()
 	actionConfig, err := c.getActionConfig(namespace)
 	if err != nil {
 		return nil, err
@@ -379,10 +309,11 @@ func (c *Client) ListReleases(ctx context.Context, namespace string, access Stat
 // every namespace is forbidden is the 403 surfaced, so the UI still shows
 // "Access Restricted" rather than a misleading empty list.
 func (c *Client) ListReleasesAcrossNamespaces(ctx context.Context, namespaces []string, user *pkgauth.User, access StatusAccess) ([]HelmRelease, error) {
+	c, ctx = c.capture(ctx)
 	if namespaces != nil && len(namespaces) == 0 {
 		return []HelmRelease{}, nil
 	}
-	contextName := k8s.GetContextName()
+	contextName := c.conn.ContextName()
 	client, err := c.storageClient(user)
 	if err != nil {
 		return nil, err
@@ -396,6 +327,7 @@ func (c *Client) ListReleasesAcrossNamespaces(ctx context.Context, namespaces []
 // here (nothing read, something denied), not an error. A cluster-wide read
 // (nil namespaces) reports itself as "" in read or denied.
 func (c *Client) ListReleasesRecordingAccess(ctx context.Context, namespaces []string, user *pkgauth.User, access StatusAccess) (rows []HelmRelease, read, denied []string, err error) {
+	c, ctx = c.capture(ctx)
 	if namespaces != nil && len(namespaces) == 0 {
 		return []HelmRelease{}, nil, nil, nil
 	}
@@ -403,7 +335,7 @@ func (c *Client) ListReleasesRecordingAccess(ctx context.Context, namespaces []s
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	return listReleasesRecordingAccess(ctx, client, k8s.GetContextName(), namespaces, access)
+	return listReleasesRecordingAccess(ctx, client, c.conn.ContextName(), namespaces, access)
 }
 
 // contextName is the cluster context the read started on; a release history
@@ -446,7 +378,8 @@ func listReleaseRows(ctx context.Context, contextName string, namespaces []strin
 	if scopes == nil {
 		scopes = []string{""}
 	}
-	fluxMap := fluxHelmReleaseMap(ctx)
+	fluxMap := fluxHelmReleaseMap(ctx, k8s.ConnectionFrom(ctx))
+	k3sMap := k3sHelmChartMap(ctx, k8s.ConnectionFrom(ctx))
 	all := make([]HelmRelease, 0)
 	// Health is added once every scope is read, so the caller's access is
 	// checked once for the objects of every release; rels[i] is all[i]'s.
@@ -470,7 +403,7 @@ func listReleaseRows(ctx context.Context, contextName string, namespaces []strin
 		snapshot, err := read(ctx, ns)
 		if err == nil {
 			var rows []HelmRelease
-			rows, err = helmReleaseRowsFromStorageSnapshot(ctx, snapshot, fluxMap, contextName, access)
+			rows, err = helmReleaseRowsFromStorageSnapshot(ctx, snapshot, fluxMap, k3sMap, contextName, access)
 			if err == nil {
 				authorized = true
 				all = append(all, rows...)
@@ -494,7 +427,7 @@ func listReleaseRows(ctx context.Context, contextName string, namespaces []strin
 		}
 	}
 	if includeResourceHealth {
-		addReleasesHealth(all, rels, access)
+		addReleasesHealth(k8s.ConnectionFrom(ctx), all, rels, access)
 	}
 	// With keepGoing, a namespace the caller was denied is part of the answer
 	// once another was read: those releases weren't checked, and a caller that
@@ -533,6 +466,7 @@ func sortHelmReleases(releases []HelmRelease) {
 // latest stored manifest of each visible Helm release. It follows the same
 // namespace and impersonation rules as ListReleasesAcrossNamespaces.
 func (c *Client) ListManifestResourcesAcrossNamespaces(ctx context.Context, namespaces []string, user *pkgauth.User) ([]ReleaseManifestResource, []string, int, error) {
+	c, ctx = c.capture(ctx)
 	if namespaces == nil {
 		resources, parseErrors, err := c.listManifestResourcesAsUser(ctx, "", user)
 		return resources, nil, parseErrors, err
@@ -609,7 +543,7 @@ func (c *Client) listManifestResourcesAsUser(ctx context.Context, namespace stri
 		if rel == nil {
 			continue
 		}
-		rendered, errors := parseManifestResourceObjects(rel.Manifest, rel.Namespace)
+		rendered, errors := parseManifestResourceObjects(c.conn, rel.Manifest, rel.Namespace)
 		parseErrors += errors
 		for _, resource := range rendered {
 			resources = append(resources, ReleaseManifestResource{
@@ -634,7 +568,7 @@ func (c *Client) listReleasesWith(ctx context.Context, actionConfig *action.Conf
 	return listReleasesAcrossNamespacesWithClient(ctx, client, contextName, []string{namespace}, true, access)
 }
 
-func helmReleaseRowsFromStorageSnapshot(ctx context.Context, snapshot *helmReleaseStorageSnapshot, fluxMap map[string]string, contextName string, access StatusAccess) ([]HelmRelease, error) {
+func helmReleaseRowsFromStorageSnapshot(ctx context.Context, snapshot *helmReleaseStorageSnapshot, fluxMap map[string]string, k3sMap map[string]k3sOwner, contextName string, access StatusAccess) ([]HelmRelease, error) {
 	if snapshot == nil {
 		return nil, nil
 	}
@@ -656,7 +590,8 @@ func helmReleaseRowsFromStorageSnapshot(ctx context.Context, snapshot *helmRelea
 		analysis := analyzeReleaseHistory(contextName, effectiveStorage, rel.Name, rel.Version, snapshot.histories[historyKey], helmhistory.Options{MaxOperations: releaseListMaxOperations})
 		hr.LastOperation = analysis.LastOperation
 		hr.Operations = analysis.Operations
-		hr.ManagedByFlux, hr.ManagedByFluxHelmRelease = scopedFluxOwnership(rel.Name, effectiveStorage, fluxMap, access)
+		hr.ManagedByFlux, hr.ManagedByFluxHelmRelease = scopedFluxOwnership(k8s.ConnectionFrom(ctx).Discovery(), rel.Name, effectiveStorage, fluxMap, access)
+		hr.Controller, hr.ManagedByK3s = scopedReleaseController(k8s.ConnectionFrom(ctx).Discovery(), hr.ManagedByFlux, hr.ManagedByFluxHelmRelease, k3sMap[effectiveStorage+"/"+rel.Name], access)
 		result = append(result, hr)
 	}
 	return result, nil
@@ -664,30 +599,32 @@ func helmReleaseRowsFromStorageSnapshot(ctx context.Context, snapshot *helmRelea
 
 // GetReleaseAsUser is GetRelease with K8s impersonation.
 // When username is empty, falls back to the ServiceAccount identity.
-func (c *Client) GetReleaseAsUser(namespace, name string, user *pkgauth.User, access StatusAccess) (*HelmReleaseDetail, error) {
+func (c *Client) GetReleaseAsUser(ctx context.Context, namespace, name string, user *pkgauth.User, access StatusAccess) (*HelmReleaseDetail, error) {
+	c, ctx = c.capture(ctx)
 	if user == nil {
-		return c.GetRelease(namespace, name, access)
+		return c.GetRelease(ctx, namespace, name, access)
 	}
-	contextName := k8s.GetContextName()
+	contextName := c.conn.ContextName()
 	actionConfig, err := c.getActionConfigForUser(namespace, user)
 	if err != nil {
 		return nil, err
 	}
-	return getReleaseWith(actionConfig, contextName, namespace, name, access)
+	return getReleaseWith(ctx, c.conn, actionConfig, contextName, namespace, name, access)
 }
 
 // GetRelease returns details for a specific release. Its resources carry live
 // status only where access allows; see StatusAccess.
-func (c *Client) GetRelease(namespace, name string, access StatusAccess) (*HelmReleaseDetail, error) {
-	contextName := k8s.GetContextName()
+func (c *Client) GetRelease(ctx context.Context, namespace, name string, access StatusAccess) (*HelmReleaseDetail, error) {
+	c, ctx = c.capture(ctx)
+	contextName := c.conn.ContextName()
 	actionConfig, err := c.getActionConfig(namespace)
 	if err != nil {
 		return nil, err
 	}
-	return getReleaseWith(actionConfig, contextName, namespace, name, access)
+	return getReleaseWith(ctx, c.conn, actionConfig, contextName, namespace, name, access)
 }
 
-func getReleaseWith(actionConfig *action.Configuration, contextName, namespace, name string, access StatusAccess) (*HelmReleaseDetail, error) {
+func getReleaseWith(ctx context.Context, conn *k8s.Connection, actionConfig *action.Configuration, contextName, namespace, name string, access StatusAccess) (*HelmReleaseDetail, error) {
 	// Get the latest release
 	getAction := action.NewGet(actionConfig)
 	rel, err := getAction.Run(name)
@@ -725,11 +662,11 @@ func getReleaseWith(actionConfig *action.Configuration, contextName, namespace, 
 	}
 	analysis := analyzeReleaseHistory(contextName, effectiveStorage, rel.Name, rel.Version, revisions, helmhistory.Options{})
 
-	resources := parseManifestResources(rel.Manifest, rel.Namespace)
-	health, issue, summary := readReleaseStatus(resources, access)
+	resources := parseManifestResources(conn, rel.Manifest, rel.Namespace)
+	health, issue, summary := readReleaseStatus(conn, resources, access)
 
 	// Extract hooks
-	hooks := extractHooks(rel)
+	hooks := extractHooks(conn, rel)
 	hookDiagnostics := extractHookDiagnostics(hooks)
 
 	// Extract README from chart files
@@ -738,7 +675,9 @@ func getReleaseWith(actionConfig *action.Configuration, contextName, namespace, 
 	// Extract dependencies
 	dependencies := extractDependencies(rel)
 
-	managedByFlux, fluxReference := scopedFluxOwnership(rel.Name, effectiveStorage, fluxHelmReleaseMap(context.Background()), access)
+	managedByFlux, fluxReference := scopedFluxOwnership(conn.Discovery(), rel.Name, effectiveStorage, fluxHelmReleaseMap(ctx, conn), access)
+	k3s := k3sHelmChartMap(ctx, conn)[effectiveStorage+"/"+rel.Name]
+	controller, managedByK3s := scopedReleaseController(conn.Discovery(), managedByFlux, fluxReference, k3s, access)
 
 	detail := &HelmReleaseDetail{
 		Name:                     rel.Name,
@@ -766,6 +705,8 @@ func getReleaseWith(actionConfig *action.Configuration, contextName, namespace, 
 		Operations:               analysis.Operations,
 		ManagedByFlux:            managedByFlux,
 		ManagedByFluxHelmRelease: fluxReference,
+		ManagedByK3s:             managedByK3s,
+		Controller:               controller,
 	}
 	detail.OperationInsight = buildOperationInsight(detail)
 	if detail.StorageNamespace == detail.Namespace {
@@ -1135,7 +1076,7 @@ func (c *Client) getHooksDiff(namespace, name string, revision1, revision2 int, 
 	if err != nil {
 		return nil, fmt.Errorf("failed to get release revision %d: %w", revision2, err)
 	}
-	removed, added, modified, unchanged := diffHooks(extractHooks(rel1), extractHooks(rel2))
+	removed, added, modified, unchanged := diffHooks(extractHooks(c.conn, rel1), extractHooks(c.conn, rel2))
 	return &HooksDiff{
 		Revision1: revision1,
 		Revision2: revision2,
@@ -1172,8 +1113,8 @@ func (c *Client) getResourceDiff(namespace, name string, revision1, revision2 in
 	if err != nil {
 		return nil, fmt.Errorf("failed to get release revision %d: %w", revision2, err)
 	}
-	leftResources, leftParseErrors := parseManifestResourceObjects(rel1.Manifest, rel1.Namespace)
-	rightResources, rightParseErrors := parseManifestResourceObjects(rel2.Manifest, rel2.Namespace)
+	leftResources, leftParseErrors := parseManifestResourceObjects(c.conn, rel1.Manifest, rel1.Namespace)
+	rightResources, rightParseErrors := parseManifestResourceObjects(c.conn, rel2.Manifest, rel2.Namespace)
 	removed, added, common := diffResourceRefs(resourceRefsFromRendered(leftResources), resourceRefsFromRendered(rightResources))
 	modified, unchanged := diffRenderedResourceObjects(common, leftResources, rightResources)
 	return &ResourceDiff{
@@ -1526,12 +1467,16 @@ func toHelmReleaseSummary(rel *release.Release, storageNamespace string) HelmRel
 //
 // Returns an empty map (not an error) when the cluster has no Flux CRDs or
 // the cache lookup fails — the badge is best-effort, not load-bearing.
-func fluxHelmReleaseMap(ctx context.Context) map[string]string {
-	cache := k8s.GetResourceCache()
-	if cache == nil {
+func fluxHelmReleaseMap(ctx context.Context, conn *k8s.Connection) map[string]string {
+	disc, cache := conn.Discovery(), conn.DynamicResourceCache()
+	if disc == nil || cache == nil {
 		return nil
 	}
-	hrs, err := cache.ListDynamicWithGroup(ctx, "HelmRelease", "", "helm.toolkit.fluxcd.io")
+	gvr, ok := disc.GetGVRWithGroup(fluxHelmReleaseKind, fluxHelmReleaseGroup)
+	if !ok {
+		return nil
+	}
+	hrs, err := cache.ListContext(ctx, gvr, "")
 	if err != nil || len(hrs) == 0 {
 		return nil
 	}
@@ -1570,7 +1515,7 @@ func fluxHelmReleaseKeys(hrs []*unstructured.Unstructured) map[string]string {
 // controller reference from a namespace the caller cannot read. Nil access
 // is used by internal history/write checks: ownership still blocks direct
 // MCP Helm changes, while no controller identity is returned.
-func scopedFluxOwnership(name, storageNamespace string, fluxMap map[string]string, access StatusAccess) (bool, string) {
+func scopedFluxOwnership(discovery *k8s.ResourceDiscovery, name, storageNamespace string, fluxMap map[string]string, access StatusAccess) (bool, string) {
 	reference := applyFluxOwnership(name, storageNamespace, fluxMap)
 	if reference == "" {
 		return false, ""
@@ -1579,10 +1524,34 @@ func scopedFluxOwnership(name, storageNamespace string, fluxMap map[string]strin
 	if noStatusAccess(access) || !valid {
 		return true, ""
 	}
-	if allowed, _ := access.statusDecision("HelmRelease", "helm.toolkit.fluxcd.io", namespace); !allowed {
+	if allowed, _ := access.statusDecision(discovery, "HelmRelease", "helm.toolkit.fluxcd.io", namespace); !allowed {
 		return true, ""
 	}
 	return true, reference
+}
+
+// scopedReleaseController applies scopedFluxOwnership's rule to the
+// controller: no controller identity from a namespace the caller cannot read,
+// while managedByK3s keeps the k3s ownership fact. Flux ownership with its
+// identity withheld still wins over a k3s HelmChart.
+func scopedReleaseController(discovery *k8s.ResourceDiscovery, managedByFlux bool, fluxReference string, k3s k3sOwner, access StatusAccess) (controller *ReleaseController, managedByK3s bool) {
+	if managedByFlux {
+		if fluxReference == "" {
+			return nil, false
+		}
+		return releaseController(fluxReference, k3s), false
+	}
+	if k3s.chart == "" {
+		return nil, false
+	}
+	namespace, _, _ := strings.Cut(k3s.chart, "/")
+	if noStatusAccess(access) {
+		return nil, true
+	}
+	if allowed, _ := access.statusDecision(discovery, k3sHelmChartKind, k3sHelmGroup, namespace); !allowed {
+		return nil, true
+	}
+	return releaseController("", k3s), true
 }
 
 // applyFluxOwnership stamps ManagedByFluxHelmRelease on a HelmRelease (or
@@ -1597,6 +1566,142 @@ func applyFluxOwnership(name, storageNamespace string, fluxMap map[string]string
 	return fluxMap[storageNamespace+"/"+name]
 }
 
+const (
+	k3sHelmGroup           = "helm.cattle.io"
+	k3sHelmChartKind       = "HelmChart"
+	k3sHelmChartConfigKind = "HelmChartConfig"
+)
+
+// k3sOwner is the k3s/RKE2 HelmChart that installs a release and, when one
+// exists, the HelmChartConfig that overrides its values ("namespace/name").
+// configKnown: the configs were read completely, so an empty config means
+// none exists rather than none was seen.
+// addon: the k3s Addon (server manifest) that applies the HelmChart, if any.
+type k3sOwner struct {
+	chart, config, addon string
+	configKnown          bool
+}
+
+// k3sTarget is the release a HelmChart installs: its own name, in
+// spec.targetNamespace or else the HelmChart's namespace. helm-controller
+// runs helm with that namespace, so the release Secret is stored there.
+func k3sTarget(u *unstructured.Unstructured) releaseKey {
+	ns, _, _ := unstructured.NestedString(u.Object, "spec", "targetNamespace")
+	if ns == "" {
+		ns = u.GetNamespace()
+	}
+	return releaseKey{namespace: ns, name: u.GetName()}
+}
+
+// k3sHelmControllerManages mirrors helm-controller's shouldManage: it skips a
+// HelmChart with no chart, one marked unmanaged, and one another controller
+// claimed. "helm-controller" is the name k3s, RKE2 and the standalone
+// controller register by default; a chart not yet claimed will be.
+func k3sHelmControllerManages(u *unstructured.Unstructured) bool {
+	chart, _, _ := unstructured.NestedString(u.Object, "spec", "chart")
+	content, _, _ := unstructured.NestedString(u.Object, "spec", "chartContent")
+	if chart == "" && content == "" {
+		return false
+	}
+	annotations := u.GetAnnotations()
+	if _, ok := annotations["helmcharts.helm.cattle.io/unmanaged"]; ok {
+		return false
+	}
+	if by, ok := annotations["helmcharts.cattle.io/managed-by"]; ok && by != "helm-controller" {
+		return false
+	}
+	return true
+}
+
+// k3sAddon is the name of the k3s Addon whose manifest applies u: k3s's deploy
+// controller applies server manifests through wrangler with the Addon as owner,
+// and re-applies them, so such a HelmChart comes back after a delete.
+func k3sAddon(u *unstructured.Unstructured) string {
+	annotations := u.GetAnnotations()
+	if annotations["objectset.rio.cattle.io/owner-gvk"] != "k3s.cattle.io/v1, Kind=Addon" {
+		return ""
+	}
+	return annotations["objectset.rio.cattle.io/owner-name"]
+}
+
+// k3sHelmChartKeys maps "targetNamespace/name" to the HelmChart (and its
+// same-named HelmChartConfig) that installs that release. configsKnown says
+// whether configs holds every HelmChartConfig in a namespace, so a missing one
+// can be reported as absent rather than unknown.
+func k3sHelmChartKeys(configsKnown func(namespace string) bool, charts, configs []*unstructured.Unstructured) map[string]k3sOwner {
+	if len(charts) == 0 {
+		return nil
+	}
+	configured := map[string]bool{}
+	for _, c := range configs {
+		configured[c.GetNamespace()+"/"+c.GetName()] = true
+	}
+	out := make(map[string]k3sOwner, len(charts))
+	ambiguous := map[string]bool{}
+	for _, c := range charts {
+		if !k3sHelmControllerManages(c) {
+			continue
+		}
+		target := k3sTarget(c)
+		key := target.namespace + "/" + target.name
+		owner := k3sOwner{chart: c.GetNamespace() + "/" + c.GetName(), addon: k3sAddon(c), configKnown: configsKnown(c.GetNamespace())}
+		if configured[owner.chart] {
+			owner.config = owner.chart
+		}
+		// Two HelmCharts installing one release can't be told apart: credit
+		// neither (unlike Flux, where the last HelmRelease seen is kept).
+		if prev, ok := out[key]; ok && prev.chart != owner.chart {
+			ambiguous[key] = true
+		}
+		out[key] = owner
+	}
+	for key := range ambiguous {
+		delete(out, key)
+	}
+	return out
+}
+
+// k3sHelmChartMap is fluxHelmReleaseMap for k3s: best effort, read from
+// Radar's cache, nil when the cluster has no helm.cattle.io kinds or the read
+// fails. The observed path reads only what the caller can see (stampScan).
+// The objects are read without copying (HelmCharts can carry a whole chart in
+// spec.chartContent); k3sHelmChartKeys only reads them and keeps strings.
+func k3sHelmChartMap(ctx context.Context, conn *k8s.Connection) map[string]k3sOwner {
+	discovery, dc := conn.Discovery(), conn.DynamicResourceCache()
+	if discovery == nil || dc == nil {
+		return nil
+	}
+	list := func(kind string) ([]*unstructured.Unstructured, schema.GroupVersionResource, error) {
+		gvr, ok := discovery.GetGVRWithGroup(kind, k3sHelmGroup)
+		if !ok {
+			return nil, gvr, k8s.ErrUnknownDynamicKind
+		}
+		items, err := dc.ListReadOnlyContext(ctx, gvr, "")
+		return items, gvr, err
+	}
+	charts, _, err := list(k3sHelmChartKind)
+	if err != nil || len(charts) == 0 {
+		return nil
+	}
+	// The read doesn't wait for the watch to sync: absence is claimed only
+	// where the HelmChartConfig informer had synced for that namespace before
+	// the read, so a sync landing between the two can't bless an empty read.
+	synced := map[string]bool{}
+	if configGVR, ok := discovery.GetGVRWithGroup(k3sHelmChartConfigKind, k3sHelmGroup); ok {
+		for _, c := range charts {
+			if ns := c.GetNamespace(); !synced[ns] {
+				synced[ns] = dc.IsNamespaceSynced(configGVR, ns)
+			}
+		}
+	}
+	configs, _, err := list(k3sHelmChartConfigKind)
+	known := func(namespace string) bool { return err == nil && synced[namespace] }
+	return k3sHelmChartKeys(known, charts, configs)
+}
+
+// k3sConfigsUnknown is for reads that may not see every HelmChartConfig.
+func k3sConfigsUnknown(string) bool { return false }
+
 type helmReleaseStorageSnapshot struct {
 	deployed          map[string]*release.Release
 	storageNamespaces map[string]string
@@ -1606,34 +1711,24 @@ type helmReleaseStorageSnapshot struct {
 
 // storageClient reads Helm release Secrets on the same cluster as c's action
 // configurations: the explicit rest.Config when c has one, else Radar's
-// current cluster.
+// captured connection.
 func (c *Client) storageClient(user *pkgauth.User) (kubernetes.Interface, error) {
-	c.mu.RLock()
-	restConfig := c.restConfig
-	c.mu.RUnlock()
-	if restConfig != nil {
-		var client kubernetes.Interface
-		var err error
-		if user != nil {
-			client, err = kubernetes.NewForConfig(k8s.UserRESTConfig(restConfig, user))
-		} else {
-			client, err = kubernetes.NewForConfig(restConfig)
+	if c.restConfig == nil && user == nil {
+		if client := c.conn.ClientInterface(); client != nil {
+			return client, nil
 		}
-		if err != nil {
-			return nil, fmt.Errorf("failed to build client for release storage lookup: %w", err)
-		}
-		return client, nil
-	}
-	client := k8s.GetClientInterface()
-	if user != nil {
-		impersonated, err := k8s.UserClient(user)
-		if err != nil {
-			return nil, fmt.Errorf("failed to build impersonated client for release storage lookup: %w", err)
-		}
-		client = impersonated
-	}
-	if client == nil {
 		return nil, fmt.Errorf("kubernetes client not initialized for release storage lookup")
+	}
+	cfg := c.config()
+	if cfg == nil {
+		return nil, fmt.Errorf("kubernetes config not initialized for release storage lookup")
+	}
+	if user != nil {
+		cfg = k8s.UserRESTConfig(cfg, user)
+	}
+	client, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build client for release storage lookup: %w", err)
 	}
 	return client, nil
 }
@@ -1884,7 +1979,7 @@ type renderedResource struct {
 	Object *unstructured.Unstructured
 }
 
-func parseManifestResourceObjects(manifest, defaultNamespace string) ([]renderedResource, int) {
+func parseManifestResourceObjects(conn *k8s.Connection, manifest, defaultNamespace string) ([]renderedResource, int) {
 	resources := []renderedResource{}
 	parseErrorCount := 0
 	var appendObject func(*unstructured.Unstructured)
@@ -1923,7 +2018,7 @@ func parseManifestResourceObjects(manifest, defaultNamespace string) ([]rendered
 		if group, _, ok := strings.Cut(obj.GetAPIVersion(), "/"); ok {
 			apiGroup = group
 		}
-		clusterScoped, _, _ := k8s.ClassifyKindScope(obj.GetKind(), apiGroup)
+		clusterScoped, _, _ := conn.Discovery().ClassifyKindScope(obj.GetKind(), apiGroup)
 		if obj.GetNamespace() == "" && !clusterScoped {
 			obj.SetNamespace(defaultNamespace)
 		}
@@ -1963,8 +2058,8 @@ func parseManifestResourceObjects(manifest, defaultNamespace string) ([]rendered
 }
 
 // parseManifestResources extracts K8s resources from a rendered manifest
-func parseManifestResources(manifest, defaultNamespace string) []OwnedResource {
-	rendered, _ := parseManifestResourceObjects(manifest, defaultNamespace)
+func parseManifestResources(conn *k8s.Connection, manifest, defaultNamespace string) []OwnedResource {
+	rendered, _ := parseManifestResourceObjects(conn, manifest, defaultNamespace)
 	resources := make([]OwnedResource, 0, len(rendered))
 	for _, resource := range rendered {
 		resources = append(resources, OwnedResource{
@@ -1988,8 +2083,8 @@ func parseManifestResources(manifest, defaultNamespace string) []OwnedResource {
 
 // enrichResourcesWithStatus adds live status from the k8s cache to the
 // built-in objects access lets the caller see, and marks the ones it withholds.
-func enrichResourcesWithStatus(resources []OwnedResource, access StatusAccess) {
-	cache := k8s.GetResourceCache()
+func enrichResourcesWithStatus(conn *k8s.Connection, resources []OwnedResource, access StatusAccess) {
+	cache := conn.ResourceCache()
 	if cache == nil {
 		return
 	}
@@ -1999,7 +2094,7 @@ func enrichResourcesWithStatus(resources []OwnedResource, access StatusAccess) {
 		if !ok {
 			continue
 		}
-		lookup, reason := access.statusDecision(resources[i].Kind, group, resources[i].Namespace)
+		lookup, reason := access.statusDecision(conn.Discovery(), resources[i].Kind, group, resources[i].Namespace)
 		if !lookup {
 			resources[i].StatusUnread = reason
 			continue
@@ -2166,7 +2261,7 @@ func computeLCS(a, b []string) []string {
 }
 
 // extractHooks extracts hook information from a release
-func extractHooks(rel *release.Release) []HelmHook {
+func extractHooks(conn *k8s.Connection, rel *release.Release) []HelmHook {
 	if rel.Hooks == nil {
 		return []HelmHook{}
 	}
@@ -2174,7 +2269,7 @@ func extractHooks(rel *release.Release) []HelmHook {
 	hooks := make([]HelmHook, 0, len(rel.Hooks))
 	for _, h := range rel.Hooks {
 		namespace := rel.Namespace
-		for _, ref := range parseManifestResources(h.Manifest, rel.Namespace) {
+		for _, ref := range parseManifestResources(conn, h.Manifest, rel.Namespace) {
 			if ref.Name == h.Name && strings.EqualFold(ref.Kind, h.Kind) {
 				namespace = ref.Namespace
 				break
@@ -2451,30 +2546,6 @@ func compareVersions(v1, v2 string) int {
 	return 0
 }
 
-// Rollback rolls back a release to a previous revision
-func (c *Client) Rollback(namespace, name string, revision int) error {
-	return c.RollbackWithProgress(namespace, name, revision, nil)
-}
-
-// RollbackWithProgress rolls back a release with progress reporting via a channel.
-// If progressCh is nil, progress messages are silently discarded.
-func (c *Client) RollbackWithProgress(namespace, name string, revision int, progressCh chan<- InstallProgress) error {
-	actionConfig, err := c.getActionConfig(namespace)
-	if err != nil {
-		return err
-	}
-	return c.rollbackWithProgressUsing(actionConfig, name, revision, progressCh)
-}
-
-// RollbackWithProgressAsUser is RollbackWithProgress with K8s impersonation.
-func (c *Client) RollbackWithProgressAsUser(namespace, name string, revision int, user *pkgauth.User, progressCh chan<- InstallProgress) error {
-	actionConfig, err := c.getActionConfigForUser(namespace, user)
-	if err != nil {
-		return err
-	}
-	return c.rollbackWithProgressUsing(actionConfig, name, revision, progressCh)
-}
-
 func (c *Client) rollbackWithProgressUsing(actionConfig *action.Configuration, name string, revision int, progressCh chan<- InstallProgress) error {
 	sendProgress := progressSender(progressCh)
 	sendProgress("preparing", fmt.Sprintf("Preparing rollback of %s to revision %d...", name, revision), "")
@@ -2484,11 +2555,6 @@ func (c *Client) rollbackWithProgressUsing(actionConfig *action.Configuration, n
 	}
 	sendProgress("complete", fmt.Sprintf("Successfully rolled back %s to revision %d", name, revision), "")
 	return nil
-}
-
-// RollbackAsUser performs a rollback with K8s impersonation.
-func (c *Client) RollbackAsUser(namespace, name string, revision int, user *pkgauth.User) error {
-	return c.RollbackWithProgressAsUser(namespace, name, revision, user, nil)
 }
 
 func useReleaseTargetNamespace(cfg *action.Configuration, name string) error {
@@ -2517,15 +2583,6 @@ func (c *Client) rollbackWith(actionConfig *action.Configuration, name string, r
 	}
 
 	return nil
-}
-
-// Uninstall removes a release
-func (c *Client) Uninstall(namespace, name string) error {
-	actionConfig, err := c.getActionConfig(namespace)
-	if err != nil {
-		return err
-	}
-	return c.uninstallWith(actionConfig, name)
 }
 
 // UninstallAsUser removes a release with K8s impersonation.
@@ -3161,6 +3218,7 @@ func (c *Client) BatchCheckUpgradesAsUser(ctx context.Context, namespace string,
 // forbidden namespaces are skipped and an all-forbidden result returns an empty
 // map rather than an error — the release list itself is what surfaces the 403.
 func (c *Client) BatchCheckUpgradesAcrossNamespaces(ctx context.Context, namespaces []string, user *pkgauth.User) (*BatchUpgradeInfo, error) {
+	c, ctx = c.capture(ctx)
 	if namespaces == nil {
 		return c.BatchCheckUpgradesAsUser(ctx, "", user)
 	}
@@ -3181,6 +3239,7 @@ func (c *Client) BatchCheckUpgradesAcrossNamespaces(ctx context.Context, namespa
 }
 
 func (c *Client) batchCheckUpgrades(ctx context.Context, namespace string, user *pkgauth.User) (*BatchUpgradeInfo, error) {
+	c, ctx = c.capture(ctx)
 	// Full *release.Release objects are needed (Chart.Metadata.Home/Sources
 	// drive source-affinity disambiguation). The storage snapshot carries
 	// them along with each release's storage namespace from one Secret list
@@ -3304,24 +3363,6 @@ func (c *Client) previewValuesChangeWith(actionConfig *action.Configuration, nam
 		NewValues:     newValues,
 		ManifestDiff:  diff,
 	}, nil
-}
-
-// ApplyValues upgrades a release with new values (same chart version)
-func (c *Client) ApplyValues(namespace, name string, newValues map[string]any) error {
-	actionConfig, err := c.getActionConfig(namespace)
-	if err != nil {
-		return err
-	}
-	return c.applyValuesWith(actionConfig, name, newValues)
-}
-
-// ApplyValuesAsUser applies values with K8s impersonation.
-func (c *Client) ApplyValuesAsUser(namespace, name string, newValues map[string]any, user *pkgauth.User) error {
-	actionConfig, err := c.getActionConfigForUser(namespace, user)
-	if err != nil {
-		return err
-	}
-	return c.applyValuesWith(actionConfig, name, newValues)
 }
 
 func (c *Client) applyValuesWith(actionConfig *action.Configuration, name string, newValues map[string]any) error {
@@ -3693,15 +3734,6 @@ func (c *Client) Install(req *InstallRequest) (*HelmRelease, error) {
 	return c.installWith(actionConfig, req)
 }
 
-// InstallAsUser installs a new Helm release with K8s impersonation.
-func (c *Client) InstallAsUser(req *InstallRequest, user *pkgauth.User) (*HelmRelease, error) {
-	actionConfig, err := c.getActionConfigForUser(req.Namespace, user)
-	if err != nil {
-		return nil, err
-	}
-	return c.installWith(actionConfig, req)
-}
-
 func (c *Client) installWith(actionConfig *action.Configuration, req *InstallRequest) (*HelmRelease, error) {
 	var chartURL string
 	var indexDigest string
@@ -3889,24 +3921,6 @@ func (c *Client) installWith(actionConfig *action.Configuration, req *InstallReq
 	}
 
 	return installedHelmRelease(rel), nil
-}
-
-// InstallWithProgress installs a new Helm release and streams progress updates
-func (c *Client) InstallWithProgress(req *InstallRequest, progressCh chan<- InstallProgress) (*HelmRelease, error) {
-	actionConfig, err := c.getActionConfig(req.Namespace)
-	if err != nil {
-		return nil, err
-	}
-	return c.installWithProgressUsing(actionConfig, req, progressCh)
-}
-
-// InstallWithProgressAsUser installs a new Helm release with K8s impersonation and streams progress.
-func (c *Client) InstallWithProgressAsUser(req *InstallRequest, progressCh chan<- InstallProgress, user *pkgauth.User) (*HelmRelease, error) {
-	actionConfig, err := c.getActionConfigForUser(req.Namespace, user)
-	if err != nil {
-		return nil, err
-	}
-	return c.installWithProgressUsing(actionConfig, req, progressCh)
 }
 
 func (c *Client) installWithProgressUsing(actionConfig *action.Configuration, req *InstallRequest, progressCh chan<- InstallProgress) (*HelmRelease, error) {

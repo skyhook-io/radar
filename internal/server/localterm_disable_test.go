@@ -224,11 +224,7 @@ func TestCapabilitiesAdvertiseLocalTerminalAvailability(t *testing.T) {
 		t.Fatalf("build Kubernetes client: %v", err)
 	}
 	previousClient := k8s.SetTestClient(client)
-	k8s.InvalidateCapabilitiesCache()
-	t.Cleanup(func() {
-		k8s.InvalidateCapabilitiesCache()
-		k8s.SetTestClient(previousClient)
-	})
+	t.Cleanup(func() { k8s.SetTestClient(previousClient) })
 
 	tests := []struct {
 		name   string
@@ -278,7 +274,7 @@ func TestCapabilitiesAdvertiseLocalTerminalAvailability(t *testing.T) {
 	}
 
 	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateDisconnected})
-	k8s.InvalidateCapabilitiesCache()
+	k8s.Current().ResetPermissions()
 	disconnected := []struct {
 		name   string
 		server Server
@@ -348,7 +344,7 @@ func TestDisableExecDeniesExecGrant(t *testing.T) {
 	t.Cleanup(func() { k8s.ForceDisableExec = previousForceDisableExec })
 	k8s.ForceDisableExec = true
 
-	s := &Server{permCache: auth.NewPermissionCache()}
+	s := &Server{permCache: auth.NewPermissionCache().WithConnectionKey(currentPermissionConnection)}
 	perms := &auth.UserPermissions{AllowedNamespaces: []string{"team"}}
 	perms.SetCanI("create", "", "pods/exec", "team", true)
 	s.permCache.Set("alice", nil, perms)

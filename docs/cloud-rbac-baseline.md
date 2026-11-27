@@ -38,12 +38,22 @@ grant access to the underlying Role or ClusterRole objects.
 
 ## Intentional exceptions
 
+Withholding a kind leaves it out of the user's own Kubernetes grants. It does not
+hide the kind inside Radar: a namespaced kind Radar collects is shown to anyone who
+can see its namespace, apart from the few kinds Radar checks exactly, as
+[authentication](authentication.md) describes.
+
 | Resources withheld by this add-on | Why / effect |
 |---|---|
+| Kubernetes PodTemplate | Pod templates can contain inline container credentials. Relationship collection adds no caller grants, and native visibility adds no default caller grant. |
+| Knative JobSink | Newly collected relationship dependency; no default caller grant pending review of inline Job configuration. |
 | OpenTelemetry Collector and Instrumentation | Collector configuration and instrumentation environment values can contain inline credentials. Native visibility adds no default caller grants. |
 | Flagger Canary and MetricTemplate | Canary webhook metadata and MetricTemplate provider headers may contain inline credentials. Collection is separately opt-in; native visibility adds no default caller grants. |
+| k3s HelmChart and HelmChartConfig | `spec.valuesContent` and `spec.set` may contain inline credentials. Collection is separately opt-in; native visibility adds no default caller grants. |
+| system-upgrade-controller Plan | `spec.upgrade.envs` and `spec.prepare.envs` may contain inline values, and `spec.secrets` names Secrets mounted into upgrade Jobs. Collection is separately opt-in; native visibility adds no default caller grants. |
 | Secrets Store CSI SecretProviderClass | `spec.parameters` is free-form provider configuration that the driver does not constrain. SecretProviderClassPodStatus (mount state and object versions only) remains readable, so the Pod drawer still shows whether a volume mounted. |
 | External Secrets SecretStore and ClusterSecretStore | Provider authentication can contain plaintext credentials, such as Scaleway `secretKey.value`. ExternalSecret/ClusterExternalSecret remain readable; store inspection requires a separate customer grant. |
+| MetalLB BGPPeer | `spec.password` can hold the BGP session's MD5 password inline. Radar checks BGPPeers exactly, so withholding them also hides them inside Radar. IPAddressPools, L2/BGP advertisements and ConfigurationStates remain readable. |
 | KEDA TriggerAuthentication and ClusterTriggerAuthentication | `spec.hashiCorpVault.credential.token` may hold a Vault token directly. ScaledObject/ScaledJob remain readable. |
 | Kyverno UpdateRequest | Admission context may embed the actual triggering object, including a Secret. Queued-policy-work remains denied without another grant. |
 | CAPI KubeadmConfig, KubeadmConfigTemplate, KubeadmControlPlane, KubeadmControlPlaneTemplate | Bootstrap configuration can contain inline files and credentials; the renderer-only control-plane template is also withheld pending credential-field review. |
@@ -89,7 +99,7 @@ Karpenter wildcard. The old Karpenter/Cilium/Prometheus rules do not follow `all
 the new baseline does, for its named tuples only. Namespaced PrometheusRules and
 CiliumNetworkPolicies are intentionally also in the new namespaced role, so they
 do not depend on enabling cluster infrastructure reads. Turning off the new
-add-on does not revoke those old grants. Member/owner write permissions are unchanged.
+add-on does not revoke those old grants. See [Managed Owner permissions](#managed-owner-permissions) for the write grants.
 
 Enterprise customers who want only their own group bindings can set
 `cloud.defaultRbac.create=false`. The Hub can still forward IdP groups as
@@ -98,9 +108,20 @@ namespace RoleBinding does not restrict an existing cluster-wide default binding
 so disable the defaults first. Product organization roles and saved-investigation
 sharing are separate concerns; this chart change does not redefine them.
 
+## Managed Owner permissions
+
+The chart binds each approved grant to a dedicated
+`radar:owner-access:<grant>` group. Hub forwards the active groups for an
+eligible Owner on direct cluster requests, including MCP. The agent accepts only
+groups its Helm release approves. Kubernetes enforces the resulting resource
+permissions alongside the caller’s other bindings.
+
+Use the [chart guide](../deploy/helm/radar/README.md#cloud-owner-permissions)
+for the defaults, scope, opt-outs and upgrade order.
+
 ## Rollout and verification
 
-The baseline is default-on for enabled default tiers. Upgrading an installed chart
+The read baseline is default-on for enabled default tiers. Upgrading an installed chart
 therefore expands deliberate read access, including inline configuration. Missing
 `integrationRead` maps/keys on `helm upgrade --reuse-values` follow the declared
 default; explicit `false` is preserved. Review/set opt-outs before the upgrade.

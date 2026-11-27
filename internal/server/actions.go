@@ -194,7 +194,8 @@ func localCanI(ctx context.Context, g Grant) (bool, bool) {
 	var contextName string
 	var client *kubernetes.Clientset
 	if !k8s.CaptureClusterReads(func() {
-		contextName, client = k8s.GetContextName(), k8s.GetClient()
+		conn := k8s.Current()
+		contextName, client = conn.ContextName(), conn.Client()
 	}) || client == nil {
 		return false, false
 	}

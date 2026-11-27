@@ -1,10 +1,12 @@
+import { formatRelativeAgeTime } from './format'
 import type { ReadGap, ReadKindRef } from '../types/read-coverage'
 import { canonicalReadCode, gapReasonText, READ_ACTIONS, readActionFor } from './read-actions'
 
 /**
  * Whether Radar holds every change since a workload existed, as Radar's
  * issuesapi.HistoryCoverage serializes it. Present only when incomplete;
- * complete_since is sent only to callers who can read every namespace.
+ * when events were evicted, complete_since is sent only to callers who can
+ * read every namespace.
  * An absent coverage value means complete history or an older Radar; it
  * does not establish completeness on its own.
  */
@@ -63,11 +65,6 @@ function gapClause(gap: ReadGap): string {
   }
 }
 
-function formatSince(iso: string): string {
-  const date = new Date(iso)
-  return Number.isNaN(date.getTime()) ? iso : date.toLocaleString()
-}
-
 /**
  * Sentences for a workload Timeline's note line: since when Radar's history
  * is complete, and which related kinds it can't include for this viewer.
@@ -77,10 +74,10 @@ export function workloadHistoryNotes(coverage?: WorkloadHistoryCoverage | null, 
   const notes: string[] = []
   if (coverage?.incomplete) {
     const why: string[] = []
-    if (coverage.reasons.includes('observation_started_late')) why.push('Radar began recording part of this history later')
-    if (coverage.reasons.includes('events_evicted')) why.push('older history was deleted to stay within its limits')
+    if (coverage.reasons.includes('observation_started_late')) why.push('recording started later')
+    if (coverage.reasons.includes('events_evicted')) why.push('older history was deleted')
     const head = coverage.complete_since
-      ? `Changes before ${formatSince(coverage.complete_since)} may be missing`
+      ? `Changes before ${formatRelativeAgeTime(coverage.complete_since)} may be missing`
       : 'Earlier changes may be missing'
     notes.push(why.length > 0 ? `${head}: ${joinWords(why)}.` : `${head}.`)
   }

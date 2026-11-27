@@ -66,6 +66,7 @@ radar/
 │   │   ├── portforward.go     # Port forwarding sessions
 │   │   ├── resource_counts.go # Resource counting
 │   │   ├── dashboard.go       # Dashboard summary endpoint
+│   │   ├── workload_actions.go # Built-in workload and CronJob actions: scale, pause/resume, revisions/rollback, CronJob trigger/suspend/resume
 │   │   ├── argo_handlers.go   # ArgoCD sync/refresh/terminate/suspend/resume/rollback/selective-sync
 │   │   ├── flux_handlers.go   # FluxCD reconcile/suspend/resume/sync-with-source
 │   │   ├── gitops_handlers.go # /api/gitops/tree + /api/gitops/insights handlers
@@ -85,6 +86,9 @@ radar/
 │   │   ├── insights/          # Per-app diagnosis pipeline: issues + drift diff + recent events + plan + history
 │   │   └── tree/              # GitOps resource tree builder for ArgoCD/FluxCD detail graphs
 │   ├── k8score/               # Shared K8s caching layer (informers, listers, transforms)
+│   ├── ownership/             # Caller-scoped owners, dependents and managers
+│   ├── relations/             # Declared, selector and composition families + field dispositions
+│   ├── resourcecontext/       # Agent context from supplied family/ownership answers
 │   ├── portforward/           # Port forwarding logic
 │   ├── timeline/              # Timeline event storage (memory/SQLite/PostgreSQL)
 │   └── topology/
@@ -92,7 +96,8 @@ radar/
 │       ├── certificates.go    # Certificate relationship detection
 │       ├── memo.go            # 5s-TTL Memoizer wrapping deterministic Topology builds
 │       ├── pod_grouping.go    # Pod grouping/collapsing logic
-│       ├── relationships.go   # Resource relationship detection
+│       ├── relations_answer.go # Family/ownership projection for Related Resources and context
+│       ├── relationships.go   # Graph relationship projection for retained graph consumers
 │       └── types.go           # Node, edge, topology definitions
 ├── packages/k8s-ui/           # Shared UI package (@skyhook-io/k8s-ui)
 │   └── src/
@@ -151,7 +156,7 @@ radar/
 
 ## Tech stack snapshot
 
-**Backend:** Go 1.26+, client-go, chi, gorilla/websocket, helm.sh/helm/v3, cilium/cilium (Hubble), google/go-containerregistry, modernc.org/sqlite, `github.com/jackc/pgx/v5` (PostgreSQL timeline storage), modelcontextprotocol/go-sdk, wailsapp/wails/v2 (desktop), `go:embed` for frontend.
+**Backend:** Go 1.27+, client-go, chi, gorilla/websocket, helm.sh/helm/v3, cilium/cilium (Hubble), google/go-containerregistry, modernc.org/sqlite, `github.com/jackc/pgx/v5` (PostgreSQL timeline storage), modelcontextprotocol/go-sdk, wailsapp/wails/v2 (desktop), `go:embed` for frontend.
 
 **Frontend:** React 19 + TypeScript, Vite, @xyflow/react + elkjs (graph), @xterm/* (terminal), @monaco-editor/react (YAML), shiki (syntax), @tanstack/react-query v5, react-router-dom, Tailwind CSS v4 + shadcn/ui (`@tailwindcss/vite` plugin), Lucide React (icons), `yaml`.
 

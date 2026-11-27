@@ -31,37 +31,47 @@ type clusterScope struct {
 // the operator's --prometheus-cluster-label when set, otherwise the labels
 // kube-state-metrics proves for this cluster's Pods. A variable so tests can
 // stand in for the Prometheus client.
-var resolveTrafficScope = func(ctx context.Context, metric, selector string) (string, promclient.SeriesIsolation, error) {
+var resolveTrafficScope = func(ctx context.Context, metric, selector string, window time.Duration) (string, promclient.SeriesIsolation, error) {
 	client, err := promclient.ClientForOperation()
 	if err != nil {
 		return "", promclient.SeriesIsolation{}, err
 	}
-	return client.ResolveTrafficScope(ctx, metric, selector, k8s.GetResourceCache())
+	return client.ResolveTrafficScope(ctx, metric, selector, window, k8s.GetResourceCache())
 }
+
+// metricsRelayActive reports whether metrics are served through a relay. A
+// variable so tests can stand in for the Prometheus client.
+var metricsRelayActive = promclient.RelayActive
+
+// operatorScopeDuringRelay is the scope an operator configured for the
+// Prometheus store, set aside while a relay is active. A variable for tests.
+var operatorScopeDuringRelay = promclient.OperatorScopeDuringRelay
 
 // trafficSpansClusters reports whether metric's series carry more than one
 // cluster identity. A variable so tests can stand in for the Prometheus client.
-var trafficSpansClusters = func(ctx context.Context, metric, selector string) (bool, error) {
+var trafficSpansClusters = func(ctx context.Context, metric, selector string, window time.Duration) (bool, error) {
 	client, err := promclient.ClientForOperation()
 	if err != nil {
 		return false, err
 	}
-	return client.TrafficSpansClusters(ctx, metric, selector)
+	return client.TrafficSpansClusters(ctx, metric, selector, window)
 }
 
 // scopeForMetric decides how to keep metric's traffic queries to this cluster.
 // selector is the source's own matcher fragment for the metric (may be empty).
 // filter is false when the source reads a store Radar found on its own, such
 // as Caretta's caretta-vm, which holds only this cluster and usually carries
-// no cluster label: filtering there would empty the map.
+// no cluster label: filtering there would empty the map. window is the span
+// the source's queries read (0 for an instant read): a cluster whose series
+// stopped within it is still in what they read.
 //
 // An error means Radar could not check which cluster the series belong to;
 // the caller shows nothing rather than risk drawing another cluster's traffic.
-func scopeForMetric(ctx context.Context, metric, selector string, filter bool) (clusterScope, error) {
+func scopeForMetric(ctx context.Context, metric, selector string, filter bool, window time.Duration) (clusterScope, error) {
 	if !filter {
 		return clusterScope{}, nil
 	}
-	matchers, iso, err := resolveTrafficScope(ctx, metric, selector)
+	matchers, iso, err := resolveTrafficScope(ctx, metric, selector, window)
 	switch {
 	case err == nil && matchers != "":
 		// The operator's labels, the labels proven for this cluster, or, when
@@ -95,7 +105,7 @@ func scopeForMetric(ctx context.Context, metric, selector string, filter bool) (
 		if errors.Is(err, promclient.ErrScopeAmbiguous) {
 			return clusterScope{mixed: true}, nil
 		}
-		spans, sErr := trafficSpansClusters(ctx, metric, selector)
+		spans, sErr := trafficSpansClusters(ctx, metric, selector, window)
 		if sErr != nil {
 			log.Printf("[traffic] Could not count the clusters in %s series: %v", metric, sErr)
 			return clusterScope{mixed: true}, nil

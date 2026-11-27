@@ -53,11 +53,6 @@ func TestWorkspaceTypedSourcesRequireInitialSync(t *testing.T) {
 			t.Fatalf("restore package fixture cache: %v", err)
 		}
 	})
-	k8s.ResetResourceCache()
-	if err := k8s.InitTestPromotedSyncingCache(client, 5*time.Second, time.Second, nil); err != nil {
-		t.Fatal(err)
-	}
-	cache := k8s.GetResourceCache()
 	srv := &Server{}
 	r := httptest.NewRequest(http.MethodGet, "/api/capacity?namespace=pg", nil)
 	deniedServer := newAuthServer(auth.Config{Mode: "proxy"})
@@ -69,6 +64,12 @@ func TestWorkspaceTypedSourcesRequireInitialSync(t *testing.T) {
 	permissions.SetCanI("list", "apps", "deployments", "pg", false)
 	deniedServer.permCache.Set("denied", nil, permissions)
 	deniedRequest := requestWithUser(http.MethodGet, "/api/capacity?namespace=pg", &auth.User{Username: "denied"})
+
+	k8s.ResetResourceCache()
+	if err := k8s.InitTestPromotedSyncingCache(client, 5*time.Second, 500*time.Millisecond, nil); err != nil {
+		t.Fatal(err)
+	}
+	cache := k8s.GetResourceCache()
 
 	for _, stage := range []struct {
 		name      string

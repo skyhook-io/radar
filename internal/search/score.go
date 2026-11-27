@@ -4,6 +4,7 @@ import (
 	"net/netip"
 	"strings"
 
+	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
@@ -95,7 +96,7 @@ func match(q Query, c candidate) (int, []MatchedField, []MatchSnippet, bool) {
 // matchesModifiers reports whether a candidate passes the query's hard
 // filters (kind:, ns:, label:, image:). It reads identity only, never Content.
 func matchesModifiers(q Query, c candidate) bool {
-	if len(q.KindFilter) > 0 && !kindMatches(c.Kind, c.Group, c.Resource, q.KindFilter) {
+	if len(q.KindFilter) > 0 && !q.kindMatches(c.Kind, c.Group, c.Resource, q.KindFilter) {
 		return false
 	}
 	if len(q.NSFilter) > 0 && !sliceContainsFold(q.NSFilter, c.Namespace) {
@@ -345,6 +346,33 @@ func kindMatches(kind, group, resource string, filters []string) bool {
 			return true
 		}
 		if b, ok := resourceid.BuiltinForName(fLow); ok && b.Kind == kind && b.Group == group {
+			return true
+		}
+	}
+	return false
+}
+
+// shortNameKey names a discovered kubectl short name for one kind in one group.
+type shortNameKey struct{ name, group, kind string }
+
+func indexShortNames(resources []k8score.APIResource) map[shortNameKey]bool {
+	index := map[shortNameKey]bool{}
+	for _, ar := range resources {
+		for _, name := range ar.ShortNames {
+			index[shortNameKey{strings.ToLower(name), ar.Group, ar.Kind}] = true
+		}
+	}
+	return index
+}
+
+// kindMatches is the package kindMatches that also accepts the short names
+// discovery reports. Like a built-in's alias, a short name names only its own group's kind.
+func (q Query) kindMatches(kind, group, resource string, filters []string) bool {
+	if kindMatches(kind, group, resource, filters) {
+		return true
+	}
+	for _, f := range filters {
+		if q.shortNames[shortNameKey{strings.ToLower(f), group, kind}] {
 			return true
 		}
 	}

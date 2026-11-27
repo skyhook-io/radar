@@ -13,12 +13,15 @@ of any consumer.
 ./scripts/beyla-demo.sh query         # the exact L4 and L7 PromQL the Beyla source runs
 ./scripts/beyla-demo.sh attrs         # config B: adds dst.port and transport to attributes.select
 ./scripts/beyla-demo.sh no-network    # config C: application only, network feature off
+./scripts/beyla-demo.sh nodes         # config D: config B plus k8s.src.node.name and k8s.dst.node.name
 ./scripts/beyla-demo.sh default       # back to config A
 ./scripts/beyla-demo.sh port-forward  # Prometheus on localhost:39090
 ./scripts/beyla-demo.sh down
 ```
 
-`make beyla-demo` is `up`.
+`make beyla-demo` is `up`. `BEYLA_DEMO_NODES=2 ./scripts/beyla-demo.sh up` builds a
+control plane and a worker instead, with `client` pinned to the control plane and
+`web`/`db` to the worker, so their flows cross nodes. Use it with config D.
 
 ## The three configurations, and why all three matter
 
@@ -27,6 +30,7 @@ of any consumer.
 | **A** (`default`) | network + application | none | An operator turned network metrics on and changed nothing else. **This is the realistic default.** |
 | **B** (`attrs`) | network + application | `dst.port`, `transport`, `direction` | What a per-port traffic map actually needs. |
 | **C** (`no-network`) | application only | none | Stock Beyla. The network flow metric does not exist. |
+| **D** (`nodes`) | network + application | B plus `k8s.src.node.name`, `k8s.dst.node.name` | What counting a cross-node flow once needs. Two-node cluster only. |
 
 Test against A before B. A is what users will have.
 
@@ -39,6 +43,12 @@ an inference from Beyla's code.
 `Default: false` in the attribute registry, so configuration A emits neither. A
 consumer grouping by them gets empty strings, which is how a port becomes `0` and
 how UDP becomes TCP. Configuration B is the only one where they appear.
+In configuration A Radar fills a port-0 edge whose direction is known: with the
+HTTP `server_port` when the destination serves HTTP on one port (observed, shown
+unmarked), otherwise from the destination's Services (a Service's own port, or
+the target port of the Services selecting a workload's pods), marked "from
+Service", or "multiple (from Service)" when they declare several. A marked port
+is declared, not observed.
 
 **`direction` is exported by default, and every conversation is reported twice.**
 Values are `request`, `response` and `unknown`. The response series has source and
@@ -96,6 +106,16 @@ no port detail but truthful byte counts, B has exact ports and a received-byte
 figure that is roughly a tenth of the truth. Anything that recommends B for the
 sake of per-port edges should say what it costs.
 
+**A flow between two nodes is reported by both nodes' agents.** With two nodes,
+`client -> web` arrives as two series with identical flow labels, one per agent,
+so a consumer summing them doubles the bytes. The copies differ only in the
+scrape's own target labels: `instance`, plus the `node` label this Prometheus
+adds by relabelling. Radar drops `instance`, `pod`, `node` and `host` before
+collapsing the copies; any other per-agent target label would keep them apart and
+the flow would still count twice. Without the node attributes (configs A-C), the copies cannot
+be told apart from two replicas of one owner running on different nodes. The
+Service-attributed series has no destination node and comes from one agent only.
+
 ## Metric names
 
 Grafana's Beyla emits `beyla_network_flow_bytes_total`; upstream OpenTelemetry
@@ -130,8 +150,8 @@ owner-type series.
 
 ## Limits
 
-Single node, so node-spanning flows and two agents reporting the same
-conversation are not exercised. No SCTP or ICMP, so non-TCP/UDP transport handling
+Single node by default, so node-spanning flows and two agents reporting the same
+conversation are exercised only with `BEYLA_DEMO_NODES=2`. No SCTP or ICMP, so non-TCP/UDP transport handling
 is untested. Upstream OBI is not installed, and neither is Alloy, so the
 Alloy-detection path is not exercised here.
 

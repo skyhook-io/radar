@@ -16,6 +16,7 @@ import (
 )
 
 type workloadMetricPanel struct {
+	Source string        `json:"source,omitempty"`
 	State  string        `json:"state"`
 	Reason string        `json:"reason,omitempty"`
 	Unit   string        `json:"unit"`
@@ -29,6 +30,7 @@ type workloadRequestSource struct {
 }
 
 type workloadMetricsResponse struct {
+	ResourceSource    string                         `json:"resourceSource,omitempty"`
 	ScopeNotice       string                         `json:"scopeNotice,omitempty"`
 	State             string                         `json:"state"`
 	Reason            string                         `json:"reason,omitempty"`
@@ -105,6 +107,33 @@ func handleWorkloadMetrics(w http.ResponseWriter, r *http.Request) {
 	duration := end.Sub(start)
 	end = end.Truncate(step)
 	start = end.Add(-duration)
+	stores := client.chartStores(ctx)
+	g := stores.native
+	writeMetrics := func(resp workloadMetricsResponse) {
+		if stores.supplement != nil && needsGKEResources(&resp) {
+			var err error
+			g, err = stores.supplement(ctx)
+			if errors.Is(err, context.DeadlineExceeded) && r.Context().Err() == nil {
+				// The optional reader exhausted our budget. Return the conventional answer.
+				g = nil
+			} else if err != nil {
+				writeChartError(w, err)
+				return
+			}
+		}
+		if g != nil && g.fallback {
+			mergeGKEResources(ctx, g, &resp, scope, start, end, step)
+		}
+		if (g != nil && g != client.gkeChartStore()) || client != GetClient() || generation != client.DiscoveryGeneration() || epoch != client.backendEpoch() {
+			writeError(w, http.StatusConflict, "metrics connection changed; retry the request")
+			return
+		}
+		writeJSON(w, http.StatusOK, resp)
+	}
+	if g != nil && !g.fallback {
+		writeMetrics(g.workload(ctx, scope, start, end, step))
+		return
+	}
 	historyConfig, historyErr := client.historicalClusterScope(ctx, scope, cache)
 	history := workloadHistoryPlan{err: historyErr, reason: "Historical cluster identity lookup failed. Retrying automatically."}
 	if historyErr == nil {
@@ -123,16 +152,21 @@ func handleWorkloadMetrics(w http.ResponseWriter, r *http.Request) {
 			if state == "unavailable" {
 				reason = "Current Pod identities are not available yet."
 			}
-			if client != GetClient() || generation != client.DiscoveryGeneration() || epoch != client.backendEpoch() {
-				writeError(w, http.StatusConflict, "metrics connection changed; retry the request")
-				return
-			}
-			writeJSON(w, http.StatusOK, workloadMetricsResponse{State: state, Reason: reason, ScopeNotice: client.workloadScopeNotice(), Sources: []workloadRequestSource{}, Panels: map[string]workloadMetricPanel{}, History: map[string]workloadMetricScope{}, Comparison: map[string]workloadMetricPanel{}})
+			writeMetrics(workloadMetricsResponse{State: state, Reason: reason, ScopeNotice: client.workloadScopeNotice(), Sources: []workloadRequestSource{}, Panels: map[string]workloadMetricPanel{}, History: map[string]workloadMetricScope{}, Comparison: map[string]workloadMetricPanel{}})
 			return
 		}
 		automatic = append(automatic, attributions)
 	}
 	resp := collectWorkloadMetricsWithHistory(ctx, workloadRangeClient{client}, scope, config, job, source, start, end, step, automatic, history)
+	if note := client.relayMissingThrottlingNote(); note != "" {
+		if p, ok := resp.Panels["throttling"]; ok && !panelHasSamples(p) {
+			p.Reason = note
+			resp.Panels["throttling"] = p
+		}
+	}
+	if oo := client.relaySourceScopeNote(); oo != "" && resp.Attribution["scope"] != "" {
+		resp.Attribution["scope"] = oo + "."
+	}
 	if attributionState == "detecting" || attributionState == "error" {
 		reason := "Matching metrics to current Pods…"
 		if attributionState == "error" {
@@ -147,11 +181,7 @@ func handleWorkloadMetrics(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	resp.ScopeNotice = client.workloadScopeNotice()
-	if client != GetClient() || generation != client.DiscoveryGeneration() || epoch != client.backendEpoch() {
-		writeError(w, http.StatusConflict, "metrics connection changed; retry the request")
-		return
-	}
-	writeJSON(w, http.StatusOK, resp)
+	writeMetrics(resp)
 }
 
 type workloadRangeClient struct{ *Client }
@@ -541,7 +571,10 @@ func queryWorkloadPanel(ctx context.Context, client RangeQuerier, query string, 
 		if errors.Is(err, prom.ErrQueryWarning) {
 			panel.Reason = "The metrics backend returned a query warning; samples are withheld because the result may be incomplete or unreliable."
 		}
-		log.Printf("[prometheus] Workload metric query failed: %s", panel.Reason)
+		// A request its caller abandoned (the page moved on) is not a failure.
+		if ctx.Err() == nil {
+			log.Printf("[prometheus] Workload metric query failed: %s", panel.Reason)
+		}
 		return panel
 	}
 	latest := int64(0)
@@ -610,4 +643,13 @@ func withMetricCoverage(panel, coverage workloadMetricPanel, reason string) work
 		panel.Reason += reason
 	}
 	return panel
+}
+
+func panelHasSamples(p workloadMetricPanel) bool {
+	for _, s := range p.Series {
+		if len(s.DataPoints) > 0 {
+			return true
+		}
+	}
+	return false
 }

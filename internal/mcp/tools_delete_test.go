@@ -652,12 +652,12 @@ func TestDeleteResourcePreservesPendingPropagation(t *testing.T) {
 					t.Fatalf("preview hides finalizer management: %+v", preview)
 				}
 				input.Confirm = preview["confirm"].(string)
-				target, err := verifyMutationConfirmation(context.Background(), "delete_resource", input.Confirm)
+				confirmation, err := verifyMutationConfirmation(context.Background(), "delete_resource", input.Confirm)
 				if err != nil {
 					t.Fatal(err)
 				}
 				var approved deleteConfirmation
-				if err := json.Unmarshal([]byte(target), &approved); err != nil || string(approved.Propagation) != effectivePolicy {
+				if err := json.Unmarshal([]byte(confirmation.Target), &approved); err != nil || string(approved.Propagation) != effectivePolicy {
 					t.Fatalf("token policy: %+v, %v", approved, err)
 				}
 				input.DryRun = ptr.To(false)
@@ -815,5 +815,22 @@ func TestDeleteCascadeWarnsForDependentStorage(t *testing.T) {
 	preview := deleteCascadePreview(context.Background(), obj, metav1.DeletePropagationBackground, k8s.OperationContext())
 	if preview["scopeWarning"] != deleteStorageWarning {
 		t.Fatalf("dependent storage warning missing: %+v", preview)
+	}
+}
+
+// A Velero Backup object is not the backup: the preview says how Velero deletes one.
+func TestDeleteResourcePreviewExplainsVeleroBackups(t *testing.T) {
+	setConnectedForTest(t)
+	gvr := schema.GroupVersionResource{Group: "velero.io", Version: "v1", Resource: "backups"}
+	obj := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "velero.io/v1", "kind": "Backup", "metadata": map[string]any{"name": "nightly-1", "namespace": "velero", "uid": "uid", "resourceVersion": "1"}}}
+	dyn := setupDeletionResource(t, gvr, "BackupList", k8s.APIResource{Group: "velero.io", Version: "v1", Kind: "Backup", Name: "backups", Namespaced: true, IsCRD: true}, obj).(*dynamicfake.FakeDynamicClient)
+	dyn.PrependReactor("delete", "backups", func(clienttesting.Action) (bool, runtime.Object, error) { return true, nil, nil })
+	res, _, err := handleDeleteResource(context.Background(), nil, deleteResourceInput{Kind: "Backup", Group: "velero.io", Namespace: "velero", Name: "nightly-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := decodeToolResult(t, res)
+	if guidance, _ := got["guidance"].(string); !strings.Contains(guidance, "DeleteBackupRequest") || !strings.Contains(guidance, "spec.backupName") || strings.Contains(guidance, "velero.io/backup-uid") {
+		t.Fatalf("guidance = %q", guidance)
 	}
 }

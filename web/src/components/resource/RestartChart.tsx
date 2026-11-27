@@ -1,13 +1,19 @@
+import { hasPrometheusCharts } from '../../api/prometheusCharts'
 import { useEffect, useMemo } from 'react'
 import { AlertCircle } from 'lucide-react'
 import { usePrometheusResourceMetrics, usePrometheusStatus, type PrometheusSeries, type PrometheusTimeRange } from '../../api/client'
+import { PARTIAL_DATA_NOTE } from '@skyhook-io/k8s-ui/components/charts'
+import { ClusterScopeNote } from '@skyhook-io/k8s-ui/components/ui/ClusterScopeNote'
+import { isClusterScopeWithheld } from '@skyhook-io/k8s-ui/types/cluster-scope'
 import { Tooltip } from '../ui/Tooltip'
 
 /**
  * RestartEventLane — vertical markers at each restart event, on a dedicated
  * row below the chart. Markers stay readable when they cluster because they
- * don't overlay the chart waveform. KSM-gated (uses kube_pod_container_status_restarts_total)
- * — silently hidden when Prom isn't connected or the series doesn't exist.
+ * don't overlay the chart waveform. Uses KSM or native GKE restart counters
+ * — silently hidden when Prom isn't connected or the series doesn't exist,
+ * but says why when the metrics store couldn't be kept to this cluster, and
+ * notes an answer the store gave only in part.
  */
 export function RestartEventLane({ kind, namespace, name, range = '1h' }: {
   kind: string
@@ -16,7 +22,7 @@ export function RestartEventLane({ kind, namespace, name, range = '1h' }: {
   range?: PrometheusTimeRange
 }) {
   const { data: status } = usePrometheusStatus()
-  const isConnected = status?.connected === true
+  const isConnected = hasPrometheusCharts(status)
   const { data: metrics, isLoading, error } = usePrometheusResourceMetrics(kind, namespace, name, 'restarts', range, isConnected)
 
   const restarts = useMemo(() => collectRestartEvents(metrics?.result?.series), [metrics])
@@ -32,7 +38,27 @@ export function RestartEventLane({ kind, namespace, name, range = '1h' }: {
   }, [error])
 
   if (!isConnected || isLoading) return null
-  if (restarts.length === 0) return null
+  // A withheld answer has no series; hiding the lane would read as "no restarts".
+  if (isClusterScopeWithheld(metrics?.clusterScope)) {
+    return <ClusterScopeNote scope={metrics?.clusterScope} title="Restart history withheld for this cluster" />
+  }
+  // A partial answer may be missing restarts: an empty one is not "no
+  // restarts", and its count is only a lower bound.
+  const partial = metrics?.partial === true
+  if (restarts.length === 0) {
+    if (!partial) return null
+    return (
+      <div className="rounded-md border border-theme-border bg-theme-surface/30 px-3 py-2">
+        <div className="flex items-center gap-2 mb-1">
+          <AlertCircle className="w-3.5 h-3.5 text-theme-text-tertiary" />
+          <span className="text-xs font-medium text-theme-text-secondary">
+            No restarts seen in a partial answer
+          </span>
+        </div>
+        <p className="text-xs text-theme-text-tertiary">{PARTIAL_DATA_NOTE}</p>
+      </div>
+    )
+  }
 
   // Position markers within the chart's full time window — not the
   // min/max of detected events — so a cluster of restarts at the start
@@ -49,7 +75,7 @@ export function RestartEventLane({ kind, namespace, name, range = '1h' }: {
           Restarts in last {range}
         </span>
         <span className="text-xs text-theme-text-quaternary tabular-nums">
-          {restarts.reduce((n, r) => n + r.value, 0)} total
+          {partial ? 'at least ' : ''}{restarts.reduce((n, r) => n + r.value, 0)} total
         </span>
       </div>
       <div className="relative h-5">
@@ -70,6 +96,9 @@ export function RestartEventLane({ kind, namespace, name, range = '1h' }: {
           )
         })}
       </div>
+      {partial && (
+        <p className="mt-1.5 text-xs text-theme-text-tertiary">{PARTIAL_DATA_NOTE}</p>
+      )}
     </div>
   )
 }
@@ -89,7 +118,7 @@ function collectRestartEvents(series: PrometheusSeries[] | undefined): RestartEv
   const events: RestartEvent[] = []
   for (const s of series) {
     const pod = s.labels.pod ?? 'pod'
-    // `changes(...[1h])` produces a rolling count, so a single restart shows
+    // The query produces a rolling hourly count, so a single restart shows
     // value=1 for ~60 consecutive samples (the whole 1h window). Emit a marker
     // only when the count increases — that's when a *new* restart entered the
     // window — and use the increase as the marker's restart count.

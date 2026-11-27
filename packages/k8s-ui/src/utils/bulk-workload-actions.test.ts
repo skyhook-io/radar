@@ -5,6 +5,9 @@ import {
   canPatchWorkloadKind,
   canPauseDeployment,
   canSetWorkloadImages,
+  canStopWorkflow,
+  canSuspendCronJob,
+  canTriggerCronJob,
   intersectWorkloadWrites,
   isPausedDeployment,
 } from './bulk-workload-actions'
@@ -114,6 +117,18 @@ describe('Deployment pause', () => {
     expect(canPauseDeployment({ name: 'rollouts', group: 'argoproj.io' }, canPatch, true)).toBe(false)
   })
 
+  it('allows Workflow Stop only with the endpoint and an explicit workflows patch grant', () => {
+    const canPatch = writes({ workflows: true })
+    expect(canStopWorkflow({ name: 'workflows', group: 'argoproj.io' }, canPatch, true)).toBe(true)
+    expect(canStopWorkflow({ name: 'workflows', group: 'argoproj.io' }, canPatch, false)).toBe(false)
+    expect(canStopWorkflow({ name: 'workflows', group: 'argoproj.io' }, writes({ workflows: false }), true)).toBe(false)
+    // A Radar that predates the field sends no workflows key.
+    expect(canStopWorkflow({ name: 'workflows', group: 'argoproj.io' }, writes(), true)).toBe(false)
+    expect(canStopWorkflow({ name: 'workflows', group: 'argoproj.io' }, undefined, true)).toBe(false)
+    expect(canStopWorkflow({ name: 'workflows', group: 'example.com' }, canPatch, true)).toBe(false)
+    expect(canStopWorkflow({ name: 'rollouts', group: 'argoproj.io' }, writes({ rollouts: true, workflows: true }), true)).toBe(false)
+  })
+
   it('reports paused only for a built-in Deployment with spec.paused true', () => {
     const paused = { apiVersion: 'apps/v1', kind: 'Deployment', spec: { paused: true } }
 
@@ -124,5 +139,25 @@ describe('Deployment pause', () => {
     expect(isPausedDeployment({ ...paused, apiVersion: 'vendor.io/v1' })).toBe(false)
     expect(isPausedDeployment({ ...paused, kind: 'Rollout', apiVersion: 'argoproj.io/v1alpha1' })).toBe(false)
     expect(isPausedDeployment(undefined)).toBe(false)
+  })
+})
+
+describe('CronJob actions', () => {
+  it.each([
+    [true, false],
+    [false, true],
+    [false, false],
+    [true, true],
+  ])('checks create Jobs (%s) and patch CronJobs (%s) independently', (createJobs, cronJobs) => {
+    const permissions = writes({ createJobs, cronJobs })
+    expect(canTriggerCronJob(permissions)).toBe(createJobs)
+    expect(canSuspendCronJob(permissions)).toBe(cronJobs)
+  })
+
+  it('keeps actions available when an older Radar omits their permissions', () => {
+    expect(canTriggerCronJob(writes())).toBe(true)
+    expect(canSuspendCronJob(writes())).toBe(true)
+    expect(canTriggerCronJob(undefined)).toBe(true)
+    expect(canSuspendCronJob(undefined)).toBe(true)
   })
 })

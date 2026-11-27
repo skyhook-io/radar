@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/skyhook-io/radar/internal/k8s"
+
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	"helm.sh/helm/v3/pkg/action"
@@ -111,7 +113,7 @@ func (c *Client) rollbackForMCPWith(cfg *action.Configuration, req MCPRollbackRe
 	// manifest and values.
 	next := *target
 	next.Version = current.Version + 1
-	compared, err := mcpUpgradeResult(current, &next, true)
+	compared, err := mcpUpgradeResult(c.conn, current, &next, true)
 	if err != nil {
 		return nil, err
 	}
@@ -121,7 +123,7 @@ func (c *Client) rollbackForMCPWith(cfg *action.Configuration, req MCPRollbackRe
 		}
 		read = kubeLiveAnnotationReader(cfg.KubeClient)
 	}
-	live := checkRollbackLive(current, target, read)
+	live := checkRollbackLive(c.conn, current, target, read)
 	return &MCPRollbackResult{MCPUpgradeResult: *compared, TargetRevision: req.Revision, Live: &live,
 		Hooks: hookPreviews(target, release.HookPreRollback, release.HookPostRollback)}, nil
 }
@@ -130,13 +132,13 @@ func (c *Client) rollbackForMCPWith(cfg *action.Configuration, req MCPRollbackRe
 // or remove (up to maxRollbackLiveChecks), mirroring Helm's Update: target
 // objects that exist are overwritten and claimed; removed objects are deleted
 // unless the live object carries helm.sh/resource-policy: keep.
-func checkRollbackLive(current, target *release.Release, read liveAnnotationReader) RollbackLiveCheck {
+func checkRollbackLive(conn *k8s.Connection, current, target *release.Release, read liveAnnotationReader) RollbackLiveCheck {
 	out := RollbackLiveCheck{Takeovers: []RollbackTakeover{}, Kept: []ResourceRef{}, Unknown: []ResourceRef{}}
 	identity := func(r renderedResource) string {
 		return resourceid.ResourceKey(r.Object.GroupVersionKind().Group, r.Ref.Kind, r.Ref.Namespace, r.Ref.Name)
 	}
-	targetObjects, _ := parseManifestResourceObjects(target.Manifest, target.Namespace)
-	currentObjects, _ := parseManifestResourceObjects(current.Manifest, current.Namespace)
+	targetObjects, _ := parseManifestResourceObjects(conn, target.Manifest, target.Namespace)
+	currentObjects, _ := parseManifestResourceObjects(conn, current.Manifest, current.Namespace)
 	inTarget := make(map[string]bool, len(targetObjects))
 	type check struct {
 		r       renderedResource
@@ -253,10 +255,10 @@ func (c *Client) UninstallPreviewAsUser(namespace, name string, user *pkgauth.Us
 	if err != nil {
 		return nil, err
 	}
-	return uninstallPreviewFor(rel)
+	return uninstallPreviewFor(c.conn, rel)
 }
 
-func uninstallPreviewFor(rel *release.Release) (*MCPUninstallPreview, error) {
+func uninstallPreviewFor(conn *k8s.Connection, rel *release.Release) (*MCPUninstallPreview, error) {
 	out := &MCPUninstallPreview{Revision: rel.Version, Delete: []ResourceRef{}, Kept: []ResourceRef{}, Hooks: []MCPHookPreview{}}
 	if rel.Info != nil && rel.Info.Status == release.StatusUninstalled {
 		out.HistoryOnly = true
@@ -271,7 +273,7 @@ func uninstallPreviewFor(rel *release.Release) (*MCPUninstallPreview, error) {
 	// both its keep and delete sets (action/resource_policy.go).
 	for _, file := range files {
 		refs := []ResourceRef{}
-		objects, parseErrors := parseManifestResourceObjects(file.Content, rel.Namespace)
+		objects, parseErrors := parseManifestResourceObjects(conn, file.Content, rel.Namespace)
 		out.ParseErrors += parseErrors
 		for _, o := range objects {
 			refs = append(refs, o.Ref)

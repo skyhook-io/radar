@@ -10,7 +10,7 @@ import {
   type OpenCostWorkloadTrendResponse,
 } from '../../api/client'
 import { Tooltip } from '../ui/Tooltip'
-import { CostTimeRangeSelector, StackedAreaChart } from './CostTrendChart'
+import { CostTimeRangeSelector, CostTrendWithheldNote, StackedAreaChart } from './CostTrendChart'
 import {
   DEFAULT_COST_CURRENCY,
   formatCostPerHour,
@@ -25,10 +25,14 @@ import {
   costIntegrationUnavailableMessage,
   costRateLabels,
   costSourceLabel,
+  costTrendWithholding,
+  costWithheldScope,
   isCostDiscoveryPending,
 } from './source'
 import { useNavCustomization } from '../../context/NavCustomization'
+import type { ClusterScope } from '@skyhook-io/k8s-ui/types/cluster-scope'
 import { CostConnectionAction } from './CostConnectionAction'
+import { ClusterScopeNote } from '@skyhook-io/k8s-ui/components/ui/ClusterScopeNote'
 
 type WorkloadCostState =
   | 'loading'
@@ -103,6 +107,8 @@ export function WorkloadCostTab({ kind, namespace, name }: WorkloadCostTabProps)
     state === 'deployment_configuration_error' ||
     state === 'metrics_settings_error' ||
     state === 'cost_settings_error' ||
+    state === 'cluster_scope' ||
+    state === 'partial_data' ||
     state === 'history_unsupported' ||
     state === 'load_error'
   ) {
@@ -119,7 +125,13 @@ export function WorkloadCostTab({ kind, namespace, name }: WorkloadCostTabProps)
         />
       )
     }
-    return <WorkloadCostUnavailable state={state} settingsAvailable={settingsAvailable} />
+    return (
+      <WorkloadCostUnavailable
+        state={state}
+        settingsAvailable={settingsAvailable}
+        withheld={costWithheldScope(currentQuery.data) ?? costWithheldScope(trendQuery.data)}
+      />
+    )
   }
 
   const current = currentQuery.data?.current
@@ -141,6 +153,9 @@ export function WorkloadCostTab({ kind, namespace, name }: WorkloadCostTabProps)
   )
   const source = currentQuery.data?.source ?? trend?.source
   const historyUnsupported = trend?.reason === 'history_unsupported'
+  // Current costs stand while the trend was withheld: say why, rather than
+  // that the range has no history.
+  const trendWithholding = state === 'partial_missing_history' ? costTrendWithholding(trend) : undefined
   const currentWindow = currentQuery.data?.window
   const rateLabels = costRateLabels(currentWindow)
 
@@ -185,7 +200,11 @@ export function WorkloadCostTab({ kind, namespace, name }: WorkloadCostTabProps)
                 label={`Spend over ${range}`}
                 value={windowSpendValue}
                 subvalue={
-                  state === 'partial_missing_history' ? 'Historical data unavailable' : undefined
+                  trendWithholding
+                    ? 'Historical data withheld'
+                    : state === 'partial_missing_history'
+                      ? 'Historical data unavailable'
+                      : undefined
                 }
               />
               <MetricBlock
@@ -210,8 +229,12 @@ export function WorkloadCostTab({ kind, namespace, name }: WorkloadCostTabProps)
                   currency={trendCurrency}
                 />
               ) : (
-                <div className="flex h-[240px] items-center justify-center rounded-md border border-dashed border-theme-border bg-theme-base/60 text-sm text-theme-text-tertiary">
-                  No historical workload owner cost points for this range.
+                <div className="flex h-[240px] items-center justify-center rounded-md border border-dashed border-theme-border bg-theme-base/60 px-4 text-sm text-theme-text-tertiary">
+                  {trendWithholding ? (
+                    <CostTrendWithheldNote withholding={trendWithholding} />
+                  ) : (
+                    'No historical workload owner cost points for this range.'
+                  )}
                 </div>
               )}
             </div>
@@ -219,7 +242,7 @@ export function WorkloadCostTab({ kind, namespace, name }: WorkloadCostTabProps)
         )}
       </section>
 
-      {state === 'partial_missing_history' && !historyUnsupported && (
+      {state === 'partial_missing_history' && !historyUnsupported && !trendWithholding && (
         <div className="flex items-start gap-2 rounded-lg border border-theme-border bg-theme-base px-3 py-2 text-sm text-theme-text-secondary">
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-theme-text-tertiary" />
           <span>Current cost is available, but historical workload owner metrics are not available for this range.</span>
@@ -259,6 +282,9 @@ export function WorkloadCostTab({ kind, namespace, name }: WorkloadCostTabProps)
         memoryUsageAvailable={current?.memoryUsageAvailable ?? false}
         window={source === 'kubecost' ? currentWindow : undefined}
       />
+      {currentQuery.data?.efficiencyUnavailable && (
+        <ClusterScopeNote scope={currentQuery.data.usageClusterScope} title="Usage withheld for this cluster" />
+      )}
 
       <div className="text-xs text-theme-text-tertiary">
         {costSourceLabel(source)} &middot; {costFreshnessLabel(source, source === 'kubecost' ? currentWindow : '1h', currentQuery.data?.dataThrough)}.{' '}
@@ -315,7 +341,9 @@ export function getWorkloadCostState(
     reason === 'configuration_mismatch' ||
     reason === 'deployment_configuration_error' ||
     reason === 'metrics_settings_error' ||
-    reason === 'cost_settings_error'
+    reason === 'cost_settings_error' ||
+    reason === 'cluster_scope' ||
+    reason === 'partial_data'
   )
     return reason
   if (queryError) return 'load_error'
@@ -359,9 +387,11 @@ function WorkloadCostDiscovering({
 function WorkloadCostUnavailable({
   state,
   settingsAvailable,
+  withheld,
 }: {
   state: CostUnavailableReason | 'load_error'
   settingsAvailable: boolean
+  withheld?: ClusterScope
 }) {
   const message =
     costIntegrationUnavailableMessage(state, settingsAvailable) ??
@@ -381,7 +411,11 @@ function WorkloadCostUnavailable({
     <div className="flex h-full min-h-[320px] items-center justify-center">
       <div className="flex max-w-md flex-col items-center gap-3 text-center text-theme-text-secondary">
         <Coins className="h-8 w-8 text-theme-text-tertiary/50" />
-        <div className="text-sm">{message}</div>
+        {state === 'cluster_scope' && withheld ? (
+          <ClusterScopeNote scope={withheld} title="Costs withheld for this cluster" className="text-left" />
+        ) : (
+          <div className="text-sm">{message}</div>
+        )}
         <CostConnectionAction reason={state} />
       </div>
     </div>

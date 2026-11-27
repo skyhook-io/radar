@@ -13,6 +13,7 @@ import (
 	"time"
 
 	capacitymodel "github.com/skyhook-io/radar/internal/capacity"
+	"github.com/skyhook-io/radar/internal/k8s"
 	internaltimeline "github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/pkg/capacityapi"
 	"github.com/skyhook-io/radar/pkg/karpenter"
@@ -68,7 +69,7 @@ func (s *Server) handleCapacityActivity(w http.ResponseWriter, r *http.Request) 
 	response := capacityapi.NewActivityResponse(now)
 	response.ResponseMeta = newCapacityResponseMeta(now, identity)
 	response.Observation.StartedAt = now
-	capability := s.karpenterCapability(r)
+	capability := s.karpenterCapability(r, k8s.BoundOrCurrent(r.Context()))
 	response.State = capability.State
 	if capability.State == capacityapi.IntegrationDenied {
 		s.writeError(w, http.StatusForbidden, capacityNodePoolDenialMessage(capability.ReasonCode))

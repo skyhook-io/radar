@@ -9,6 +9,7 @@ import { Tooltip } from '../ui/Tooltip'
 import { useConnection } from '../../context/ConnectionContext'
 import { ChecksViewTabs } from './ChecksViewTabs'
 import { UpgradeReadinessView } from './UpgradeReadinessView'
+import { VulnerabilitiesView } from './VulnerabilitiesView'
 
 interface AuditViewProps {
   namespaces: string[]
@@ -25,6 +26,9 @@ export function AuditView({ namespaces, onNavigateToResource }: AuditViewProps) 
   const { pathname } = useLocation()
   if (pathname.startsWith('/checks/upgrade')) {
     return <UpgradeReadinessView namespaces={namespaces} onNavigateToResource={onNavigateToResource} />
+  }
+  if (pathname.startsWith('/checks/vulnerabilities')) {
+    return <VulnerabilitiesView namespaces={namespaces} onNavigateToResource={onNavigateToResource} />
   }
   return <BestPracticesView namespaces={namespaces} onNavigateToResource={onNavigateToResource} />
 }
@@ -112,7 +116,7 @@ function BestPracticesView({ namespaces, onNavigateToResource }: AuditViewProps)
               <button onClick={() => setShowSettings(true)} className="text-xs text-theme-text-tertiary hover:text-theme-text-secondary transition-colors">{ignoredCount} {ignoredCount === 1 ? 'namespace' : 'namespaces'} hidden</button>
             )}
             {annotationIgnored > 0 && (
-              <Tooltip content={`Resources that opted out of a check with the ${data.ignoreChecksAnnotation} annotation`}>
+              <Tooltip content={`${data.namespaceIgnoreChecks ? 'Resources or namespaces' : 'Resources'} that opted out of a check with the ${data.ignoreChecksAnnotation} annotation`}>
                 <span className="text-xs text-theme-text-tertiary">{annotationIgnored} {annotationIgnored === 1 ? 'finding' : 'findings'} hidden by annotation</span>
               </Tooltip>
             )}
@@ -138,6 +142,7 @@ function BestPracticesView({ namespaces, onNavigateToResource }: AuditViewProps)
         onHideCheck={canEdit ? hideCheck : undefined}
         onHideCategory={canEdit ? hideCategory : undefined}
         ignoreChecksAnnotation={data.ignoreChecksAnnotation}
+        namespaceIgnoreChecks={data.namespaceIgnoreChecks}
       />
 
       {showSettings && <AuditSettingsDialog namespaces={namespaces} onClose={() => setShowSettings(false)} />}

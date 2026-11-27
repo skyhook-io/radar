@@ -72,6 +72,24 @@ func seedCNPGWorkspace(t *testing.T, kinds []k8s.APIResource, objs ...runtime.Ob
 	t.Cleanup(k8s.ResetTestDynamicState)
 }
 
+func seedSyncedCNPGWorkspace(t *testing.T, kinds []k8s.APIResource, objs ...runtime.Object) {
+	t.Helper()
+	seedCNPGWorkspace(t, kinds, objs...)
+	dc := k8s.GetDynamicResourceCache()
+	for _, k := range kinds {
+		gvr := schema.GroupVersionResource{Group: k.Group, Version: k.Version, Resource: k.Name}
+		if err := dc.EnsureWatching(gvr); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, k := range kinds {
+		gvr := schema.GroupVersionResource{Group: k.Group, Version: k.Version, Resource: k.Name}
+		if !dc.WaitForSync(gvr, 5*time.Second) {
+			t.Fatalf("%s did not sync", gvr)
+		}
+	}
+}
+
 func cnpgObj(apiVersion, kind, ns, name string, spec, status map[string]any) *unstructured.Unstructured {
 	meta := map[string]any{"name": name, "creationTimestamp": time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)}
 	if ns != "" {
@@ -229,7 +247,7 @@ func TestCNPGWorkspace_ManagedByFromObjectMetadata(t *testing.T) {
 	pooler.SetLabels(map[string]string{"kustomize.toolkit.fluxcd.io/name": "databases", "kustomize.toolkit.fluxcd.io/namespace": "flux-system"})
 	sched := cnpgObj("postgresql.cnpg.io/v1", "ScheduledBackup", "db", "nightly", map[string]any{"cluster": map[string]any{"name": "pg"}, "schedule": "0 0 2 * * *"}, nil)
 	sched.SetLabels(map[string]string{"app.kubernetes.io/name": "pg"})
-	seedCNPGWorkspace(t, cnpgWorkspaceTestKinds, cluster, database, pooler, sched)
+	seedSyncedCNPGWorkspace(t, cnpgWorkspaceTestKinds, cluster, database, pooler, sched)
 
 	got := getWorkspaceNoAuth(t, "")
 	want := map[string]topology.ResourceRef{
@@ -295,7 +313,7 @@ func TestCNPGWorkspace_AuthDisabledReturnsEverythingAndOnlyOwnedInstancePods(t *
 }
 
 func TestCNPGWorkspace_CollidingKindsNeverLeak(t *testing.T) {
-	seedCNPGWorkspace(t, cnpgWorkspaceTestKinds,
+	seedSyncedCNPGWorkspace(t, cnpgWorkspaceTestKinds,
 		cnpgObj("postgresql.cnpg.io/v1", "Cluster", "pgws", "pg-orders", nil, nil),
 		cnpgBackup("pgws", "pg-orders-b1", "pg-orders", "running", time.Time{}),
 		cnpgObj("velero.io/v1", "Backup", "pgws", "velero-nightly", nil, map[string]any{"phase": "Completed"}),
@@ -430,7 +448,7 @@ func TestCNPGWorkspace_ClusterImageCatalogNeedsClusterScopeGrant(t *testing.T) {
 }
 
 func TestCNPGWorkspace_BackupsOmittedIsReported(t *testing.T) {
-	seedCNPGWorkspace(t, cnpgWorkspaceTestKinds,
+	seedSyncedCNPGWorkspace(t, cnpgWorkspaceTestKinds,
 		cnpgBackup("pgws", "new", "orders", "completed", time.Now().Add(-time.Hour)),
 		cnpgBackup("pgws", "ancient", "orders", "completed", time.Now().Add(-30*24*time.Hour)),
 	)
@@ -503,7 +521,7 @@ func TestCNPGWorkspace_AuditFollowsAuditSettings(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("settings.Update: %v", err)
 	}
-	seedCNPGWorkspace(t, cnpgWorkspaceTestKinds,
+	seedSyncedCNPGWorkspace(t, cnpgWorkspaceTestKinds,
 		cnpgObj("postgresql.cnpg.io/v1", "Cluster", "pg", "bare", nil, nil),
 		cnpgObj("postgresql.cnpg.io/v1", "Cluster", "scratch", "tmp", nil, nil),
 	)

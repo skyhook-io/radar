@@ -7,7 +7,11 @@ import "k8s.io/apimachinery/pkg/labels"
 // pool for per-user SAR filtering — the SAR is the authorization gate, so the
 // (cluster-wide) pool only needs to be a superset of what the user can read.
 func AllNamespaceNames() []string {
-	cache := GetResourceCache()
+	return Current().AllNamespaceNames()
+}
+
+func (c *Connection) AllNamespaceNames() []string {
+	cache := c.ResourceCache()
 	if cache == nil {
 		return nil
 	}

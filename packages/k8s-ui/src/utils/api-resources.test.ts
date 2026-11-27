@@ -2,6 +2,18 @@ import { describe, expect, it } from 'vitest'
 import { builtinGroupForKind, canonicalResourceGroup, categorizeResources, findAPIResourceForRoute, formatGroupName, isCoreBatchJob, shortenGroupName } from './api-resources'
 
 describe('canonicalResourceGroup', () => {
+  it('shows native mutating admission kinds in Configuration only when served and listable', () => {
+    const resources = [
+      { kind: 'MutatingAdmissionPolicy', name: 'mutatingadmissionpolicies' },
+      { kind: 'MutatingAdmissionPolicyBinding', name: 'mutatingadmissionpolicybindings' },
+    ].map(kind => ({ ...kind, group: 'admissionregistration.k8s.io', version: 'v1beta1', namespaced: false, isCrd: false, featured: true, verbs: ['list'] }))
+    const config = (r: typeof resources) => categorizeResources(r).find(c => c.name === 'Configuration')?.resources.map(x => x.kind)
+    expect(config([])).not.toContain(resources[0].kind)
+    expect(categorizeResources(resources).filter(c => c.resources.some(r => r.kind === resources[0].kind)).map(c => c.name)).toEqual(['Configuration'])
+    expect(config(resources)).toEqual(expect.arrayContaining(resources.map(r => r.kind)))
+    expect(config(resources.map(r => ({ ...r, verbs: ['get'] })))).not.toContain(resources[1].kind)
+  })
+
   it('infers built-in groups from either Kind or resource name', () => {
     expect(builtinGroupForKind('Service')).toBe('')
     expect(builtinGroupForKind('jobs')).toBe('batch')
@@ -67,6 +79,10 @@ describe('formatGroupName', () => {
     expect(formatGroupName('crd.k8s.amazonaws.com')).toBe('AWS VPC CNI')
     expect(formatGroupName('acid.zalan.do')).toBe('Zalando Postgres')
     expect(formatGroupName('llm-d.ai')).toBe('llm-d')
+    expect(formatGroupName('ate.dev')).toBe('Agent Substrate')
+    expect(formatGroupName('agents.x-k8s.io')).toBe('Agent Sandbox')
+    expect(formatGroupName('extensions.agents.x-k8s.io')).toBe('Agent Sandbox')
+    expect(formatGroupName('api.kagent.dev')).toBe('kagent')
   })
 
   it('formats unmapped API groups without exposing raw domain strings', () => {

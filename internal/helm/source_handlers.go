@@ -1,6 +1,7 @@
 package helm
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -9,8 +10,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"helm.sh/helm/v3/pkg/action"
-
-	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 )
 
 func validSourceUpgradeRoute(w http.ResponseWriter, r *http.Request, req ApplyValuesRequest) bool {
@@ -48,8 +47,8 @@ func decodeUpgradeRequest(body io.Reader) (ApplyValuesRequest, error) {
 	return req, err
 }
 
-func (c *Client) upgradeRequestAsUser(namespace, name, version, repository string, req ApplyValuesRequest, user *pkgauth.User, progress func(string, string, string)) error {
-	cfg, err := c.getActionConfigForUser(namespace, user)
+func (c *Client) upgradeRequest(ctx context.Context, namespace, name, version, repository string, req ApplyValuesRequest, progress func(string, string, string)) error {
+	cfg, err := c.actionConfigForWrite(ctx, namespace)
 	if err != nil {
 		return err
 	}
@@ -64,7 +63,7 @@ func (c *Client) upgradeRequestAsUser(namespace, name, version, repository strin
 }
 
 func (h *Handlers) handleSourceVersions(w http.ResponseWriter, r *http.Request) {
-	c := GetClient()
+	c := GetClient(r.Context())
 	if c == nil {
 		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
 		return

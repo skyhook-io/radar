@@ -6,6 +6,7 @@ import { openExternal } from '../../utils/navigation'
 import { useDiagnostics } from '../../api/client'
 import type { DiagnosticsSnapshot, DiagEnvVar, DiagMetricsSourceHealth, DiagDropRecord, DiagErrorEntry, DiagCacheSyncStatus, DiagInformerSyncStatus, DiagSyncPhase, DiagSampleWindow } from '../../api/client'
 import { getK8sUIPerfSnapshot, type K8sUIPerfSnapshot } from '@skyhook-io/k8s-ui'
+import { SLACK_COLORS_ON_HOVER, SlackIcon } from '../community'
 
 export type DiagnosticsFocus = 'timeline'
 
@@ -14,10 +15,11 @@ interface DiagnosticsOverlayProps {
   isOpen?: boolean
   /** Section to scroll to on open, for callers linking to one specific problem. */
   focus?: DiagnosticsFocus
+  communityUrl?: string
 }
 
-export function DiagnosticsOverlay({ onClose, isOpen = true, focus }: DiagnosticsOverlayProps) {
-  const { data, isLoading, error } = useDiagnostics(true)
+export function DiagnosticsOverlay({ onClose, isOpen = true, focus, communityUrl }: DiagnosticsOverlayProps) {
+  const { data, isLoading, isFetching, error, refetch } = useDiagnostics(true)
   const [copied, setCopied] = useState<'json' | 'formatted' | null>(null)
   const [reportOpened, setReportOpened] = useState(false)
   const timelineRef = useRef<HTMLDivElement>(null)
@@ -122,7 +124,11 @@ export function DiagnosticsOverlay({ onClose, isOpen = true, focus }: Diagnostic
             <div className="text-sm text-theme-text-tertiary text-center py-8">Loading diagnostics…</div>
           )}
           {error && (
-            <div className="text-sm text-red-400 text-center py-8">Failed to load diagnostics: {(error as Error).message}</div>
+            <div role="alert" className="text-sm text-center py-8 space-y-3">
+              <p className="text-theme-text-primary">{error.message}</p>
+              {data && <p className="text-theme-text-secondary">Showing the snapshot from {new Date(data.timestamp).toLocaleTimeString()}.</p>}
+              <button type="button" className="btn-brand px-3 py-1.5 text-sm font-medium" disabled={isFetching} onClick={() => void refetch()}>{isFetching ? 'Retrying…' : 'Retry diagnostics'}</button>
+            </div>
           )}
           {data && (
             <>
@@ -154,9 +160,20 @@ export function DiagnosticsOverlay({ onClose, isOpen = true, focus }: Diagnostic
 
         {/* Footer */}
         <div className="flex items-center gap-2 px-5 py-3 border-t border-theme-border shrink-0">
-          <CopyButton label="Copy as Markdown" onClick={() => copyToClipboard('formatted')} copied={copied === 'formatted'} />
-          <CopyButton label="Copy Raw JSON" onClick={() => copyToClipboard('json')} copied={copied === 'json'} />
+          <CopyButton disabled={!data} label="Copy as Markdown" onClick={() => copyToClipboard('formatted')} copied={copied === 'formatted'} />
+          <CopyButton disabled={!data} label="Copy Raw JSON" onClick={() => copyToClipboard('json')} copied={copied === 'json'} />
           <div className="flex-1" />
+          {communityUrl && (
+            <a
+              href={communityUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="group flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated"
+            >
+              <SlackIcon className={clsx('w-3.5 h-3.5', SLACK_COLORS_ON_HOVER)} />
+              Ask in Slack
+            </a>
+          )}
           <button
             onClick={openBugReport}
             disabled={!data}
@@ -223,6 +240,7 @@ function ConnectionSection({ data }: { data: DiagnosticsSnapshot }) {
       <Row label="State" value={c.state} warn={warn} />
       <Row label="Context" value={c.context} />
       {c.clusterName && <Row label="Cluster" value={c.clusterName} />}
+      {c.progressMessage && <Row label="Progress" value={c.progressMessage} />}
       {c.error && <Row label="Error" value={c.error} warn />}
       {c.errorType && <Row label="Error Type" value={c.errorType} warn />}
     </Section>
@@ -253,10 +271,9 @@ function KubeconfigSection({ data }: { data: DiagnosticsSnapshot }) {
         value={k.kubeconfigEnvIgnored ? `Yes — ${k.kubeconfigEnvIgnoredReason}` : 'No'}
         warn={k.kubeconfigEnvIgnored}
       />
-      <Row
-        label="Current Context Uses Exec"
-        value={k.currentContextUsesExec ? 'Yes' : 'No'}
-      />
+      {k.currentContextUsesExec !== undefined && (
+        <Row label="Current Context Uses Exec" value={k.currentContextUsesExec ? 'Yes' : 'No'} />
+      )}
       {present.length > 0 && (
         <Row label="Exec Plugins on PATH" value={present.join(', ')} />
       )}
@@ -276,6 +293,7 @@ function ClusterSection({ data }: { data: DiagnosticsSnapshot }) {
   const c = data.cluster
   return (
     <Section title="Cluster">
+      {c.observedAt && <Row label="Last observed" value={new Date(c.observedAt).toLocaleString()} />}
       <Row label="Platform" value={c.platform} />
       <Row label="Kubernetes" value={c.kubernetesVersion} />
       <Row label="Nodes" value={c.nodeCount} />
@@ -372,7 +390,7 @@ function InformersSection({ data }: { data: DiagnosticsSnapshot }) {
   return (
     <Section title="Informers" warn={sectionWarn}>
       <Row label="Typed" value={inf.typedCount} />
-      <Row label="Dynamic (CRDs)" value={inf.dynamicCount} />
+      <Row label="Dynamic (CRDs)" value={inf.dynamicCount ?? 'Unavailable'} />
       {sync && (
         <>
           <Row
@@ -635,12 +653,13 @@ function ConfigSection({ data }: { data: DiagnosticsSnapshot }) {
 
 // --- Copy button ---
 
-function CopyButton({ label, onClick, copied }: { label: string; onClick: () => void; copied: boolean }) {
+function CopyButton({ label, onClick, copied, disabled }: { label: string; onClick: () => void; copied: boolean; disabled: boolean }) {
   return (
     <button
+      disabled={disabled}
       onClick={onClick}
       className={clsx(
-        'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors',
+        'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors disabled:opacity-50',
         copied
           ? 'bg-green-500/20 text-green-400'
           : 'bg-theme-elevated text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated/80'
@@ -666,6 +685,7 @@ export function formatForGitHub(data: DiagnosticsSnapshot, frontendPerf?: K8sUIP
     lines.push(`### Connection`)
     lines.push(`- State: \`${c.state}\``)
     lines.push(`- Context: \`${c.context}\``)
+    if (c.progressMessage) lines.push(`- Progress: ${c.progressMessage}`)
     if (c.clusterName) lines.push(`- Cluster: \`${c.clusterName}\``)
     if (c.error) lines.push(`- Error: ${c.error}`)
     if (c.errorType) lines.push(`- Error Type: \`${c.errorType}\``)
@@ -680,7 +700,9 @@ export function formatForGitHub(data: DiagnosticsSnapshot, frontendPerf?: K8sUIP
       : ''
     lines.push(`- Mode: \`${k.mode || '(not initialized)'}\` | Files: ${k.fileCount}${directoryFiles} | Contexts (after source resolution): ${k.contextCount}`)
     lines.push(`- KUBECONFIG Captured From Shell: ${k.enrichedFromShell ? 'Yes' : 'No'} | Ignored: ${k.kubeconfigEnvIgnored ? `Yes — ${k.kubeconfigEnvIgnoredReason}` : 'No'}`)
-    lines.push(`- Current Context Uses Exec: ${k.currentContextUsesExec ? 'Yes' : 'No'}`)
+    if (k.currentContextUsesExec !== undefined) {
+      lines.push(`- Current Context Uses Exec: ${k.currentContextUsesExec ? 'Yes' : 'No'}`)
+    }
     if (k.execPluginsPresent && k.execPluginsPresent.length > 0) {
       lines.push(`- Exec Plugins on PATH: \`${k.execPluginsPresent.join('`, `')}\``)
     }
@@ -693,6 +715,7 @@ export function formatForGitHub(data: DiagnosticsSnapshot, frontendPerf?: K8sUIP
   if (data.cluster) {
     const c = data.cluster
     lines.push(`### Cluster`)
+    if (c.observedAt) lines.push(`- Last observed: ${c.observedAt}`)
     lines.push(`- Platform: \`${c.platform}\` | K8s: \`${c.kubernetesVersion}\` | Nodes: ${c.nodeCount} | Namespaces: ${c.namespaceCount}${c.inCluster ? ' | In-Cluster' : ''}`)
     lines.push(``)
   }
@@ -741,7 +764,7 @@ export function formatForGitHub(data: DiagnosticsSnapshot, frontendPerf?: K8sUIP
   if (data.informers) {
     const inf = data.informers
     lines.push(`### Informers`)
-    lines.push(`- Typed: ${inf.typedCount} | Dynamic: ${inf.dynamicCount}`)
+    lines.push(`- Typed: ${inf.typedCount} | Dynamic: ${inf.dynamicCount ?? 'unavailable'}`)
     if (inf.syncStatus) {
       const sync = inf.syncStatus
       lines.push(`- Sync Phase: \`${sync.phase}\` (${formatElapsed(sync.elapsedSec)})`)

@@ -56,7 +56,15 @@ type Summary struct {
 	LastApplied      string `json:"lastApplied,omitempty"`
 	LastApplyAttempt string `json:"lastApplyAttempt,omitempty"`
 	LastDeployed     string `json:"lastDeployed,omitempty"`
-	PartialReason    string `json:"partialReason,omitempty"`
+	// Flux revision chain. Pending is nil when either side is unknown or the
+	// caller can't read the source; it never means "up to date".
+	SourceRevision  string `json:"sourceRevision,omitempty"`
+	SourceFetchedAt string `json:"sourceFetchedAt,omitempty"`
+	AppliedRevision string `json:"appliedRevision,omitempty"`
+	Pending         *bool  `json:"pending,omitempty"`
+	Interval        string `json:"interval,omitempty"`
+	Objects         int    `json:"objects,omitempty"`
+	PartialReason   string `json:"partialReason,omitempty"`
 	// AutoSyncMode is the human-readable syncPolicy chip label, e.g.
 	// "Manual", "Auto", "Auto · prune", "Auto · self-heal",
 	// "Auto · prune · self-heal", "Suspended" (Flux), or "".
@@ -293,7 +301,21 @@ type PlanItem struct {
 	Notes        []string `json:"notes,omitempty"`
 }
 
+// SyncGitSource identifies the Git input recorded by a single-source Argo CD sync.
+type SyncGitSource struct {
+	RepoURL string `json:"repoURL"`
+	Path    string `json:"path,omitempty"`
+	// PreviousRevision is from the immediately preceding retained history ID
+	// for this application, only when both syncs used the same repository and path.
+	PreviousRevision string `json:"previousRevision,omitempty"`
+	// HistoryID identifies a sync eligible for an Argo API render comparison.
+	HistoryID string `json:"historyID,omitempty"`
+}
+
 type HistoryItem struct {
+	Git *SyncGitSource `json:"-"`
+	// Condition identifies a controller observation rather than a recorded delivery.
+	Condition   bool   `json:"-"`
 	ID          string `json:"id,omitempty"`
 	Revision    string `json:"revision,omitempty"`
 	DeployedAt  string `json:"deployedAt,omitempty"`
@@ -308,6 +330,12 @@ type HistoryItem struct {
 	Rollbackable *bool `json:"rollbackable,omitempty"`
 	// RollbackMultiSourceWarning warns when either the current spec or this entry uses plural sources.
 	RollbackMultiSourceWarning bool `json:"rollbackMultiSourceWarning,omitempty"`
+	// Flux Activity fields. DeployedAt stays the last time; Kind is
+	// "revision", "event" or "condition".
+	FirstAt  string `json:"firstAt,omitempty"`
+	Runs     int64  `json:"runs,omitempty"`
+	Duration string `json:"duration,omitempty"`
+	Kind     string `json:"kind,omitempty"`
 }
 
 type Capabilities struct {
@@ -428,9 +456,14 @@ func Build(root *unstructured.Unstructured, resourceTree *gitopstree.ResourceTre
 		Issues:       buildIssues(root, resourceTree, tool, resolver),
 		Changes:      buildChanges(root, resourceTree, tool, resolver),
 		Plan:         buildPlan(root, resourceTree, tool),
-		History:      BuildHistory(root),
 		Capabilities: buildCapabilities(root, tool),
 		Partial:      true,
+	}
+	if tool == gitops.ToolFluxCD {
+		applyFluxChain(&out.Summary, root, resourceTree)
+		out.History = BuildFluxActivity(root, resolver)
+	} else {
+		out.History = buildHistory(root, tool)
 	}
 	out.Summary.PartialReason = "Radar shows the controller's drift assessment plus a per-resource field diff and recent events (when available). For the canonical line-by-line diff against Git, use the Argo CD UI or `argocd app diff`."
 	if resourceTree != nil {
@@ -1528,7 +1561,30 @@ func buildHistory(root *unstructured.Unstructured, tool string) []HistoryItem {
 			rollbackable := gitops.ArgoHistoryEntryRollbackable(m)
 			sources, _, _ := unstructured.NestedSlice(m, "sources")
 			revisions, _, _ := unstructured.NestedStringSlice(m, "revisions")
-			out = append(out, HistoryItem{ID: id, Revision: argoRevisionLabel(m), DeployedAt: gitops.StringValue(m["deployedAt"]), Source: argoSourceLabel(m), InitiatedBy: initiatedBy, Rollbackable: &rollbackable, RollbackMultiSourceWarning: len(currentSources) > 0 || len(sources) > 0 || len(revisions) > 0})
+			var gitSource *SyncGitSource
+			if source, ok := m["source"].(map[string]any); ok && len(sources) == 0 && len(revisions) == 0 && gitops.StringValue(source["chart"]) == "" {
+				if repo := gitops.StringValue(source["repoURL"]); repo != "" && gitops.StringValue(m["revision"]) != "" {
+					gitSource = &SyncGitSource{RepoURL: repo, Path: gitops.StringValue(source["path"])}
+				}
+			}
+			out = append(out, HistoryItem{Git: gitSource, ID: id, Revision: argoRevisionLabel(m), DeployedAt: gitops.StringValue(m["deployedAt"]), Source: argoSourceLabel(m), InitiatedBy: initiatedBy, Rollbackable: &rollbackable, RollbackMultiSourceWarning: len(currentSources) > 0 || len(sources) > 0 || len(revisions) > 0})
+		}
+		renderable := gitops.RenderableArgoSyncPairs(root)
+		byID := make(map[int64]HistoryItem, len(out))
+		for _, item := range out {
+			if id, err := strconv.ParseInt(item.ID, 10, 64); err == nil {
+				byID[id] = item
+			}
+		}
+		for _, item := range out {
+			id, err := strconv.ParseInt(item.ID, 10, 64)
+			prev := byID[id-1]
+			if err == nil && id > 0 && item.Git != nil && prev.Git != nil && item.Git.RepoURL == prev.Git.RepoURL && item.Git.Path == prev.Git.Path {
+				item.Git.PreviousRevision = prev.Revision
+				if _, ok := renderable[id]; ok {
+					item.Git.HistoryID = item.ID
+				}
+			}
 		}
 		if op, ok, _ := unstructured.NestedMap(root.Object, "status", "operationState"); ok {
 			initiatedBy := ""
@@ -1573,13 +1629,29 @@ func buildHistory(root *unstructured.Unstructured, tool string) []HistoryItem {
 	// Same message + same reason = one logical event surfaced redundantly.
 	seen := make(map[string]struct{})
 	revision := firstNonEmpty(nestedString(root.Object, "status", "lastAppliedRevision"), nestedString(root.Object, "status", "lastAttemptedRevision"))
+	recorded := fluxKustomizationHistory(root)
+	for _, snapshot := range gitops.FluxReleaseSnapshots(root) {
+		if snapshot.LastDeployed == "" {
+			continue
+		}
+		revision := strconv.FormatInt(snapshot.Version, 10)
+		recorded = append(recorded, HistoryItem{ID: revision, Revision: revision, Phase: snapshot.Status, Source: snapshot.ChartVersion, DeployedAt: snapshot.LastDeployed})
+	}
+	out = append(out, recorded...)
 	for _, c := range conditions(root) {
+		// A Kustomization's Ready condition moves on every reconcile, so it dates
+		// the last check, not the deploy. Its history dates each revision; only a
+		// failure says something the history doesn't.
+		if len(recorded) > 0 && c.status == "True" && (c.typ == "Ready" || c.typ == "Released") {
+			continue
+		}
 		key := c.message + "|" + c.reason
 		if _, ok := seen[key]; ok {
 			continue
 		}
 		seen[key] = struct{}{}
 		out = append(out, HistoryItem{
+			Condition:  true,
 			ID:         c.typ,
 			Phase:      fluxPhaseLabel(c.status, c.reason),
 			Message:    c.message,
@@ -1588,6 +1660,35 @@ func buildHistory(root *unstructured.Unstructured, tool string) []HistoryItem {
 		})
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].DeployedAt > out[j].DeployedAt })
+	return out
+}
+
+// fluxKustomizationHistory reads status.history, which Flux keeps for a
+// Kustomization with one entry per revision applied.
+func fluxKustomizationHistory(root *unstructured.Unstructured) []HistoryItem {
+	if root.GetKind() != "Kustomization" {
+		return nil
+	}
+	raw, _, _ := unstructured.NestedSlice(root.Object, "status", "history")
+	out := make([]HistoryItem, 0, len(raw))
+	for _, item := range raw {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		revision, _, _ := unstructured.NestedString(m, "metadata", "revision")
+		firstReconciled := gitops.StringValue(m["firstReconciled"])
+		if revision == "" || firstReconciled == "" {
+			continue
+		}
+		out = append(out, HistoryItem{
+			ID:         gitops.StringValue(m["digest"]),
+			Phase:      fluxPhaseLabel("", gitops.StringValue(m["lastReconciledStatus"])),
+			Message:    "Reconciled revision: " + revision,
+			DeployedAt: firstReconciled,
+			Revision:   revision,
+		})
+	}
 	return out
 }
 

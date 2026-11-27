@@ -16,7 +16,7 @@ import (
 
 func TestResolveRightsizingScanScopeUnrestrictedRequiresClusterListPerKind(t *testing.T) {
 	s := newTestServer(t)
-	s.permCache = pkgauth.NewPermissionCache()
+	s.permCache = pkgauth.NewPermissionCache().WithConnectionKey(currentPermissionConnection)
 	perms := &pkgauth.UserPermissions{AllowedNamespaces: nil}
 	perms.SetCanI("list", "apps", "deployments", "", true)
 	perms.SetCanI("list", "apps", "statefulsets", "", false)
@@ -53,7 +53,7 @@ func TestResolveRightsizingScanScopeSelectedNamespacesWithoutAuth(t *testing.T) 
 
 func TestResolveRightsizingScanScopeFiltersEachKindAcrossNamespaces(t *testing.T) {
 	s := newTestServer(t)
-	s.permCache = pkgauth.NewPermissionCache()
+	s.permCache = pkgauth.NewPermissionCache().WithConnectionKey(currentPermissionConnection)
 	perms := &pkgauth.UserPermissions{AllowedNamespaces: []string{"alpha", "beta"}}
 	perms.SetCanI("list", "apps", "deployments", "alpha", true)
 	perms.SetCanI("list", "apps", "deployments", "beta", false)
@@ -91,7 +91,7 @@ func TestResolveRightsizingScanScopeNoNamespaceAccessExcludesAllKinds(t *testing
 
 func TestHandleRightsizingScanExplicitDeniedNamespaceReturnsForbidden(t *testing.T) {
 	s := newTestServer(t)
-	s.permCache = pkgauth.NewPermissionCache()
+	s.permCache = pkgauth.NewPermissionCache().WithConnectionKey(currentPermissionConnection)
 	s.permCache.Set("alice", nil, &pkgauth.UserPermissions{AllowedNamespaces: []string{"alpha"}})
 	req := httptest.NewRequest(http.MethodPost, "/api/prometheus/rightsizing/scan?namespace=beta", nil)
 	req = req.WithContext(pkgauth.ContextWithUser(req.Context(), &pkgauth.User{Username: "alice"}))
@@ -125,7 +125,7 @@ func TestScanIDUsesOriginalScopeAndRechecksPermissions(t *testing.T) {
 	manager := prometheuspkg.RightsizingScans()
 	manager.Invalidate()
 	t.Cleanup(manager.Invalidate)
-	s.permCache = pkgauth.NewPermissionCache()
+	s.permCache = pkgauth.NewPermissionCache().WithConnectionKey(currentPermissionConnection)
 	perms := &pkgauth.UserPermissions{AllowedNamespaces: []string{"alpha"}}
 	for _, resource := range []string{"deployments", "statefulsets", "daemonsets"} {
 		perms.SetCanI("list", "apps", resource, "alpha", true)

@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/skyhook-io/radar/internal/errorlog"
@@ -14,6 +15,33 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 )
+
+func TestRollbackProgressAfterStreamDisconnect(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/", nil)
+		rec := httptest.NewRecorder()
+		resume := make(chan struct{})
+
+		streamRollback(rec, req, rec, func(progress chan<- InstallProgress) error {
+			cancel()
+			<-resume
+			defer func() {
+				if p := recover(); p != nil {
+					t.Errorf("rollback progress after disconnect panicked: %v", p)
+				}
+			}()
+			progressSender(progress)("complete", "Rollback complete", "")
+			return nil
+		})
+		if ctx.Err() == nil {
+			t.Error("rollback stream returned before disconnect")
+		}
+		close(resume)
+		synctest.Wait()
+	})
+}
 
 // A caller that leaves while Helm storage is still being read is not a Helm
 // error. Recording it as one fills the diagnostics error log with failures
@@ -46,12 +74,12 @@ func TestHelmListAndUpgradeCheckRecordOnlyRealFailures(t *testing.T) {
 	// cluster disconnected; keep that out of later tests.
 	previousStatus := k8s.GetConnectionStatus()
 	t.Cleanup(func() { k8s.SetConnectionStatus(previousStatus) })
-	ResetClient()
-	if err := InitializeWithRESTConfig(config); err != nil {
-		t.Fatal(err)
-	}
+	ResetTestClient()
+	previousConfig := k8s.SetTestConfig(config)
+	t.Cleanup(func() { k8s.SetTestConfig(previousConfig) })
+	Initialize()
 	t.Cleanup(func() {
-		ResetClient()
+		ResetTestClient()
 		k8s.SetTestClient(previousClient)
 	})
 

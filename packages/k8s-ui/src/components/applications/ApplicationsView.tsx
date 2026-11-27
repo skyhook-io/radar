@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect, useRef, useCallback } from 'react'
+import { Fragment, useMemo, useState, useEffect, useRef, useCallback } from 'react'
 import type { ReactNode } from 'react'
 import { ChevronRight, Layers, Boxes, HeartPulse, Shapes, Globe, Tag } from 'lucide-react'
 import { CollapseChevron } from '../ui/Collapse'
@@ -13,6 +13,7 @@ import { PageHeader } from '../ui/PageHeader'
 import { SummaryTile, type SummaryTone } from '../ui/SummaryTile'
 import { Facet, type FacetTone } from '../ui/Facet'
 import { SortableTh, TH_CLASS } from '../ui/SortableTh'
+import { TABLE_DENSITY } from '../ui/table-density'
 import { DistributionBar } from '../ui/DistributionBar'
 import { useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
 import { pluralize } from '../../utils/pluralize'
@@ -34,6 +35,7 @@ import {
   CHIP_TONE,
   SOURCE_ORDER,
   SOURCE_META,
+  isHostManagedSource,
   envRank,
   isSystemNamespace,
   searchTextForEntry,
@@ -123,6 +125,29 @@ function compareEntries(a: AppEntry, b: AppEntry, key: SortKey): number {
   }
 }
 
+// Whatever a host puts here acts by itself. A click would otherwise open the row,
+// and Enter would reach the table's shortcut and open the highlighted one instead.
+// A key the control used is kept from the table too. Anything else still reaches
+// it, so j and k work after clicking something in a row. A row-moving key also
+// takes focus off the control, so the next Enter opens the highlighted row rather
+// than pressing the control on the row it came from.
+const ROW_MOVE_KEYS = new Set(['j', 'k', 'ArrowDown', 'ArrowUp', 'g', 'G'])
+function RowLeading({ children }: { children: ReactNode }) {
+  if (children == null || children === false) return null
+  return (
+    <span
+      className="inline-flex shrink-0 items-center"
+      onClick={(event) => event.stopPropagation()}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.defaultPrevented) event.stopPropagation()
+        else if (ROW_MOVE_KEYS.has(event.key) && event.target instanceof HTMLElement) event.target.blur()
+      }}
+    >
+      {children}
+    </span>
+  )
+}
+
 function runtimeSortValue(entry: AppEntry): number {
   return entry.workloadClass === 'job' ? (HEALTH_RANK[entry.health] ?? 0) : entry.readyRatio
 }
@@ -148,6 +173,13 @@ export interface ApplicationsViewProps {
   /** First fetch in flight — render the shape-stable skeleton (pulsing tiles,
    *  rail stubs, table rows) instead of collapsing the chassis. */
   loading?: boolean
+  /** Rendered before the app name. On a folded group `entry` is its first member
+   *  and `group` holds them all. Clicks, Enter and any key the control prevents
+   *  stay in the slot. Other keys still reach the table's shortcuts. */
+  renderRowLeading?: (entry: AppEntry, group?: AppEntry[]) => ReactNode
+  /** Lift matching applications above the remaining results, preserving the active sort.
+   *  A family moves with all its children when any visible member matches. */
+  pinnedSection?: { title: string; predicate: (entry: AppEntry) => boolean }
 }
 
 const APPS_FILTER_SCHEMA = defineFilterSchema({
@@ -160,7 +192,7 @@ const APPS_FILTER_SCHEMA = defineFilterSchema({
   system: { param: 'system', type: 'boolean' },
 })
 
-export function ApplicationsView({ entries: allEntries, variant, onSelect, title = 'Applications', description, emptySlot, headerActions, loading }: ApplicationsViewProps) {
+export function ApplicationsView({ entries: allEntries, variant, onSelect, title = 'Applications', description, emptySlot, headerActions, loading, renderRowLeading, pinnedSection }: ApplicationsViewProps) {
   // Facets + search + show-system live in the URL (shareable, bookmarkable) via
   // the shared filter-state contract. Sort stays local: it's a compound
   // {key, dir} view-preference, not a result-narrowing filter, so it isn't
@@ -172,7 +204,7 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
   const fSource = filters.values.source as Set<AppSource>
   const fClass = filters.values.class as Set<AppWorkloadClass>
   const fType = filters.values.type as Set<AppCategory>
-  const showSystem = filters.values.system
+  const showSystem = variant === 'single' && filters.values.system
   const [sort, setSort] = useState<{ key: SortKey; dir: SortDir } | null>(null)
 
   // The Show-system toggle keys off per-entry workload namespaces, which only
@@ -228,7 +260,7 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
   // Fleet rows must scope non-portable identities to the cluster set that
   // produced them — only a portable (declared / cross-cluster-unified) key may
   // fold across clusters. Single-cluster has no such concern, so no localScope.
-  const visibleRows = useMemo<FoldedRow<AppEntry>[]>(
+  const foldedRows = useMemo<FoldedRow<AppEntry>[]>(
     () => foldAppGroups(entries, expandedGroups, FAMILY_AUTO_EXPAND_ON_SEARCH && textFilter.trim() !== '',
       variant === 'fleet'
         ? {
@@ -252,6 +284,21 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
     ),
     [entries, expandedGroups, textFilter, variant],
   )
+
+  // Partition after sorting, filtering and folding. The same array drives the
+  // keyboard and the DOM, including a folded family's expanded children.
+  const { visibleRows, pinnedCount } = useMemo(() => {
+    if (!pinnedSection) return { visibleRows: foldedRows, pinnedCount: 0 }
+    const pinned: FoldedRow<AppEntry>[] = []
+    const rest: FoldedRow<AppEntry>[] = []
+    let section = rest
+    for (const row of foldedRows) {
+      if (row.kind === 'group') section = row.members.some(pinnedSection.predicate) ? pinned : rest
+      else if (!row.child) section = pinnedSection.predicate(row.entry) ? pinned : rest
+      section.push(row)
+    }
+    return { visibleRows: [...pinned, ...rest], pinnedCount: pinned.length }
+  }, [foldedRows, pinnedSection])
 
   // Row keyboard navigation — same contract as the Resources table: j/k or
   // arrows move a highlight, g g / G jump, Enter opens, Escape clears the
@@ -318,9 +365,9 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
   }
 
   const total = all.length
-  const envOptions = Object.entries(counts.env)
-    .sort((a, b) => (envRank(b[0] === 'none' ? undefined : b[0]) ?? -1) - (envRank(a[0] === 'none' ? undefined : a[0]) ?? -1))
-    .map(([env, count]) => ({ value: env, label: env === 'none' ? 'unlabeled' : env, count }))
+  const envOptions = [...new Set([...Object.keys(counts.env), ...fEnv])]
+    .sort((a, b) => (envRank(b === 'none' ? undefined : b) ?? -1) - (envRank(a === 'none' ? undefined : a) ?? -1))
+    .map((env) => ({ value: env, label: env === 'none' ? 'unlabeled' : env, count: counts.env[env] ?? 0 }))
 
   // First fetch, nothing to show yet: drive the shape-stable skeleton. The
   // loaded state hides zero-count health tiles, so without this the header
@@ -328,17 +375,21 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
   const initialLoading = Boolean(loading) && allEntries.length === 0
 
   // Clickable status tile wired to the health facet — tap to filter to that tier.
-  const healthTile = (h: AppHealth, tone: SummaryTone) =>
-    initialLoading && (h === 'healthy' || h === 'degraded' || h === 'unhealthy') ? (
-      <SummaryTile key={h} label={HEALTH_META[h].label} value={0} tone={tone} loading />
-    ) : counts.health[h] ? (
-      <SummaryTile key={h} label={HEALTH_META[h].label} value={counts.health[h]} tone={tone} active={fHealth.has(h)} onClick={() => filters.toggle('health', h)} />
-    ) : null
+  const healthTile = (h: AppHealth, tone: SummaryTone) => {
+    const active = fHealth.has(h)
+    if (initialLoading && !active) {
+      return h === 'healthy' || h === 'degraded' || h === 'unhealthy'
+        ? <SummaryTile key={h} label={HEALTH_META[h].label} value={0} tone={tone} loading />
+        : null
+    }
+    if (!counts.health[h] && !active) return null
+    return <SummaryTile key={h} label={HEALTH_META[h].label} value={counts.health[h] ?? 0} tone={tone} loading={initialLoading} active={active} onClick={() => filters.toggle('health', h)} />
+  }
 
   // showSystem lives in the Filters rail, so Clear resets it too (and its
   // non-default ON state counts as an active filter that surfaces the button).
   const anyFilterActive = filters.isActive
-  const activeFilterCount = fHealth.size + fClass.size + fType.size + fEnv.size + fSource.size + (systemCount > 0 && showSystem ? 1 : 0)
+  const activeFilterCount = fHealth.size + fClass.size + fType.size + fEnv.size + fSource.size + (showSystem ? 1 : 0)
   const clearAllFilters = () => {
     filters.clearAll()
   }
@@ -389,7 +440,19 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
               <button type="button" onClick={clearAllFilters} className="text-[10px] font-medium text-blue-500 hover:text-blue-400">Clear</button>
             )}
           >
-            {initialLoading ? (
+            <Facet icon={HeartPulse} title="Status" options={HEALTH_ORDER.map((h) => ({ value: h, label: HEALTH_META[h].label, count: counts.health[h] ?? 0, tone: HEALTH_TONE[h] }))} selected={fHealth} onToggle={(v) => filters.toggle('health', v)} />
+            <Facet icon={Layers} title="Class" options={CLASS_ORDER.map((c) => ({ value: c, label: CLASS_META[c].label, count: counts.workloadClass[c] ?? 0 }))} selected={fClass} onToggle={(v) => filters.toggle('class', v)} />
+            <Facet icon={Shapes} title="Type" options={CATEGORY_ORDER.map((c) => ({ value: c, label: CATEGORY_META[c].label, count: counts.category[c] ?? 0, tooltip: CATEGORY_META[c].tooltip }))} selected={fType} onToggle={(v) => filters.toggle('type', v)} />
+            <Facet icon={Globe} title="Environment" info={<EnvHint />} options={envOptions} selected={fEnv} onToggle={(v) => filters.toggle('env', v)} />
+            <Facet icon={Tag} title="Source" options={SOURCE_ORDER.map((s) => ({ value: s, label: SOURCE_META[s].label, count: counts.source[s] ?? 0 }))} selected={fSource} onToggle={(v) => filters.toggle('source', v)} />
+            {(systemCount > 0 || showSystem) && (
+              <label className="flex cursor-pointer items-center gap-2 border-b border-theme-border px-3 py-2 text-[11px] text-theme-text-secondary hover:bg-theme-hover">
+                <input type="checkbox" checked={showSystem} onChange={(e) => filters.setBoolean('system', e.target.checked)} className="accent-skyhook-500" />
+                <span>Show system namespaces</span>
+                {!initialLoading && <span className="ml-auto tabular-nums text-theme-text-tertiary">{systemCount}</span>}
+              </label>
+            )}
+            {initialLoading && (
               <BoardRailSkeleton
                 sections={[
                   ['Status', 5],
@@ -399,28 +462,13 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                   ['Source', 3],
                 ]}
               />
-            ) : (
-              <>
-            <Facet icon={HeartPulse} title="Status" options={HEALTH_ORDER.map((h) => ({ value: h, label: HEALTH_META[h].label, count: counts.health[h] ?? 0, tone: HEALTH_TONE[h] }))} selected={fHealth} onToggle={(v) => filters.toggle('health', v)} />
-            <Facet icon={Layers} title="Class" options={CLASS_ORDER.map((c) => ({ value: c, label: CLASS_META[c].label, count: counts.workloadClass[c] ?? 0 }))} selected={fClass} onToggle={(v) => filters.toggle('class', v)} />
-            <Facet icon={Shapes} title="Type" options={CATEGORY_ORDER.map((c) => ({ value: c, label: CATEGORY_META[c].label, count: counts.category[c] ?? 0, tooltip: CATEGORY_META[c].tooltip }))} selected={fType} onToggle={(v) => filters.toggle('type', v)} />
-            <Facet icon={Globe} title="Environment" info={<EnvHint />} options={envOptions} selected={fEnv} onToggle={(v) => filters.toggle('env', v)} />
-            <Facet icon={Tag} title="Source" options={SOURCE_ORDER.map((s) => ({ value: s, label: SOURCE_META[s].label, count: counts.source[s] ?? 0 }))} selected={fSource} onToggle={(v) => filters.toggle('source', v)} />
-            {systemCount > 0 && (
-              <label className="flex cursor-pointer items-center gap-2 border-b border-theme-border px-3 py-2 text-[11px] text-theme-text-secondary hover:bg-theme-hover">
-                <input type="checkbox" checked={showSystem} onChange={(e) => filters.setBoolean('system', e.target.checked)} className="accent-skyhook-500" />
-                <span>Show system namespaces</span>
-                <span className="ml-auto tabular-nums text-theme-text-tertiary">{systemCount}</span>
-              </label>
-            )}
-              </>
             )}
           </FilterRailPanel>
         </aside>
 
         {/* Content: toolbar (search + sort) over the scrollable table. */}
         <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-          <div className="flex shrink-0 items-center gap-3 border-b border-theme-border px-4 py-3">
+          <div className={clsx('flex shrink-0 items-center gap-3 border-b border-theme-border', TABLE_DENSITY.toolbarClass)}>
             <SearchBox
               value={textFilter}
               onChange={(v) => filters.setString('q', v)}
@@ -481,9 +529,17 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                   </tr>
                 </thead>
                 <tbody>
-                  {visibleRows.map((r, idx) => r.kind === 'group' ? (
+                  {visibleRows.map((r, idx) => (
+                    <Fragment key={r.kind === 'group' ? `group:${r.key}` : `app:${r.entry.row.key}`}>
+                    {pinnedCount > 0 && (idx === 0 || idx === pinnedCount) && (
+                      <tr>
+                        <td colSpan={8} className="border-b-subtle bg-theme-surface/60 px-3 py-1.5 text-xs font-medium text-theme-text-secondary">
+                          {idx === 0 ? pinnedSection?.title : 'Other applications'}
+                        </td>
+                      </tr>
+                    )}
+                    {r.kind === 'group' ? (
                     <tr
-                      key={`group:${r.key}`}
                       ref={idx === highlightedIndex ? (el) => el?.scrollIntoView({ block: 'nearest' }) : undefined}
                       aria-expanded={r.expanded}
                       className={clsx(
@@ -500,7 +556,11 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                             <span className={clsx('h-8 w-1 shrink-0 rounded-full', HEALTH_META[r.health].bar)} />
                           </Tooltip>
                           <CollapseChevron open={r.expanded} className="h-3.5 w-3.5" />
+                          {renderRowLeading && <RowLeading>{renderRowLeading(r.members[0], r.members)}</RowLeading>}
                           <span className="truncate font-semibold text-theme-text-primary">{r.label}</span>
+                          {isHostManagedSource(r.members[0].source) && r.members.every((member) => member.source === r.members[0].source) && (
+                            <ProvenanceBadge appKey={r.members[0].row.key} source={r.members[0].source} />
+                          )}
                           {r.workloadClass !== 'job' && <BatchSignalChip signal={firstBatchSignal(r.members.map((m) => m.row))} />}
                           <Tooltip
                             content={<AppIdentityTooltip identityKey={r.label} source={r.members[0]?.row.identity?.source} portable={r.members[0]?.row.identity?.portable} fleet={variant === 'fleet'} members={r.members.map((m) => ({ name: m.row.name, env: m.row.identity!.env, confidence: m.row.identity!.confidence, evidence: m.row.identity!.evidence }))} />}
@@ -566,7 +626,6 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                     </tr>
                   ) : ((e) => (
                     <tr
-                      key={e.row.key}
                       ref={idx === highlightedIndex ? (el) => el?.scrollIntoView({ block: 'nearest' }) : undefined}
                       className={clsx(
                         'group/row cursor-pointer border-b-subtle',
@@ -579,9 +638,10 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                           <Tooltip content={applicationRuntimeLabel([e.row], e.workloadClass, e.health)} delay={150}>
                             <span className={clsx('h-8 w-1 shrink-0 rounded-full', HEALTH_META[e.health].bar)} />
                           </Tooltip>
+                          {renderRowLeading && <RowLeading>{renderRowLeading(e)}</RowLeading>}
                           <span className="truncate font-medium text-theme-text-primary">{e.row.name}</span>
                           {e.workloadClass !== 'job' && <BatchSignalChip signal={batchSignalForApp(e.row)} />}
-                          <ProvenanceBadge tier={e.row.tier} appKey={e.row.key} confidence={e.row.confidence} />
+                          <ProvenanceBadge tier={e.row.tier} appKey={e.row.key} confidence={e.row.confidence} source={isHostManagedSource(e.source) ? e.source : undefined} />
                           <CategoryChip category={e.category} addonReason={e.row.addonReason} />
                         </span>
                       </td>
@@ -676,7 +736,9 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                       </td>
                       <td className="pr-2 text-right"><ChevronRight className="inline h-4 w-4 text-theme-text-tertiary" /></td>
                     </tr>
-                  ))(r.entry))}
+                  ))(r.entry)}
+                    </Fragment>
+                  ))}
                 </tbody>
               </table>
           )}

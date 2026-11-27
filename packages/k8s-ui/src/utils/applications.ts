@@ -117,6 +117,18 @@ export interface AppRelationships {
   networkPolicyRefs?: ResourceRef[]
 }
 
+/** Exact ref list and its corresponding count or display-name list in the application inventory. */
+export const appRelationshipFields = [
+  ['serviceRefs', 'services'],
+  ['ingressRefs', 'ingresses'],
+  ['routeRefs', 'routes'],
+  ['configRefs', 'configs'],
+  ['scalerRefs', 'scalers'],
+  ['storageRefs', 'storage'],
+  ['pdbRefs', 'pdbs'],
+  ['networkPolicyRefs', 'networkPolicies'],
+] as const;
+
 export interface AppEvent {
   type: string;
   reason: string;
@@ -149,6 +161,7 @@ export interface AppHistorySummary {
 }
 
 export interface AppHistoryAnchor {
+  git?: { repoURL: string; path?: string; previousRevision?: string; historyID?: string };
   type: "gitops" | "helm" | string;
   title: string;
   status?: string;
@@ -512,27 +525,46 @@ export function compareVersions(
 
 /** Coarse provenance bucket for the Source facet. Stable ids — display labels
  *  live in SOURCE_META (the house meta-map pattern), so they can be re-worded
- *  without breaking facet state or future URL serialization. */
-export type AppSource = "argocd" | "flux" | "helm" | "label" | "ungrouped";
+ *  without breaking facet state or URL serialization. */
+export type AppSource = "argocd" | "flux" | "helm" | "label" | "ungrouped" | "skyhook";
 
 export const SOURCE_ORDER: AppSource[] = [
   "argocd",
   "flux",
   "helm",
+  "skyhook",
   "label",
   "ungrouped",
 ];
 
-export const SOURCE_META: Record<AppSource, { label: string }> = {
+interface SourceMeta {
+  label: string;
+  /** Set only for sources assigned by a host. Their label overrides grouping evidence
+   *  in the badge, including on folded rows whose members all share that source. */
+  hostManaged?: boolean;
+}
+
+const sourceMeta = {
   argocd: { label: "Argo CD" },
   flux: { label: "Flux" },
   helm: { label: "Helm" },
   label: { label: "Label" },
   ungrouped: { label: "Ungrouped" },
-};
+  skyhook: { label: "Skyhook", hostManaged: true },
+} satisfies Record<AppSource, SourceMeta>;
+
+export const SOURCE_META: Record<AppSource, SourceMeta> = sourceMeta;
+
+export type HostManagedSource = {
+  [S in AppSource]: (typeof sourceMeta)[S] extends { hostManaged: true } ? S : never;
+}[AppSource];
+
+export function isHostManagedSource(source: AppSource): source is HostManagedSource {
+  return SOURCE_META[source].hostManaged === true;
+}
 
 interface TierMeta {
-  source: AppSource;
+  source: Exclude<AppSource, HostManagedSource>;
   /** Tooltip phrase pieces: "Grouped by {lead} `{code(name)}` {trail}". */
   lead: string;
   code: (name: string) => string;
@@ -566,7 +598,8 @@ const TIER_META: Record<number, TierMeta> = {
   9: { source: "label", lead: "the", code: () => "app", trail: "label" },
 };
 
-export function sourceOf(tier: number | undefined): AppSource {
+/** Maps grouping tiers only. Hosts set entry.source explicitly for host-managed sources. */
+export function sourceOf(tier: number | undefined): TierMeta["source"] {
   if (!tier) return "ungrouped";
   return TIER_META[tier]?.source ?? "label";
 }
@@ -703,23 +736,9 @@ export function buildAppMembershipIndex(rows: AppRow[]): AppMembershipIndex {
         }
       }
     }
-    if (row.relationships) {
-      const explicitRefs = [
-        row.relationships.serviceRefs,
-        row.relationships.ingressRefs,
-        row.relationships.routeRefs,
-        row.relationships.configRefs,
-        row.relationships.scalerRefs,
-        row.relationships.storageRefs,
-        row.relationships.pdbRefs,
-        row.relationships.networkPolicyRefs,
-      ];
-      for (const refs of explicitRefs) {
-        for (const ref of refs ?? []) {
-          if (ref.kind && ref.name)
-            setFirst(byResource, laneId(ref.kind, ref.group, ref.namespace, ref.name), membership);
-        }
-      }
+    for (const ref of appRelationshipFields.flatMap(([refs]) => row.relationships?.[refs] ?? [])) {
+      if (ref.kind && ref.name)
+        setFirst(byResource, laneId(ref.kind, ref.group, ref.namespace, ref.name), membership);
     }
     if (row.sourceRef?.kind && row.sourceRef.name) {
       setFirst(
@@ -1035,17 +1054,7 @@ export function foldAppGroups<T extends AppGroupFoldEntry>(
     const classComposition = CLASS_ORDER.filter((c) => compMap.has(c)).map(
       (c) => ({ cls: c, count: compMap.get(c)! }),
     );
-    const known = classComposition
-      .map((c) => c.cls)
-      .filter((c) => c !== "unknown");
-    const workloadClass: AppWorkloadClass =
-      known.length === 0
-        ? "unknown"
-        : known.includes("service") && !known.includes("job")
-          ? "service"
-          : known.length === 1
-            ? known[0]
-            : "mixed";
+    const workloadClass = appClassOf(classComposition.map((c) => c.cls));
     const expanded = autoExpand || expandedKeys.has(k);
     out.push({
       kind: "group",
@@ -1235,14 +1244,32 @@ export function classCompositionOf(
   }));
 }
 
-/** The distinct KNOWN classes an app contains — the facet-matching set. Falls
- *  back to the app-level class when there are no classifiable workloads. */
+/** The distinct classes an app's workloads have — the facet-matching set. A
+ *  workload whose exposure went undecided counts under Unknown, not Service or
+ *  Worker, since it may be either. Falls back to the app-level class when the
+ *  app has no workloads. */
 export function classSetOf(app: AppRow): AppWorkloadClass[] {
-  const known = classCompositionOf(app)
-    .map((c) => c.cls)
-    .filter((c) => c === "service" || c === "worker" || c === "job");
-  if (known.length > 0) return known;
+  const classes = classCompositionOf(app).map((c) => c.cls);
+  if (classes.length > 0) return classes;
   return [workloadClassOf(app.workload_class)];
+}
+
+/** An app's class from its workloads' classes, the server's rule: an `unknown`
+ *  workload is long-running with undecided exposure, so the app takes the
+ *  class both readings of it (service, worker) agree on. */
+export function appClassOf(classes: readonly AppWorkloadClass[]): AppWorkloadClass {
+  const service = classes.includes("service");
+  const worker = classes.includes("worker");
+  const job = classes.includes("job");
+  if (!classes.includes("unknown")) return foldKnownClasses(service, worker, job);
+  const asService = foldKnownClasses(true, worker, job);
+  return asService === foldKnownClasses(service, true, job) ? asService : "unknown";
+}
+
+function foldKnownClasses(service: boolean, worker: boolean, job: boolean): AppWorkloadClass {
+  if (job) return service || worker ? "mixed" : "job";
+  if (service) return "service";
+  return worker ? "worker" : "unknown";
 }
 
 export interface BatchSignal {
@@ -1702,6 +1729,13 @@ export interface AppEntryBase {
   /** ready/desired as a fraction for sorting; -1 when nothing is desired. */
   readyRatio: number;
   source: AppSource;
+}
+
+/** A status the host knows better than the workloads say, e.g. how a job's last run went. */
+export interface AppHostStatus {
+  health: AppHealth;
+  /** Defaults to the standard label for this health. */
+  label?: string;
 }
 
 export interface SingleAppEntry extends AppEntryBase {

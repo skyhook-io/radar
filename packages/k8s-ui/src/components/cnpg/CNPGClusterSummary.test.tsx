@@ -76,6 +76,7 @@ describe('CNPGClusterSummary', () => {
       const glance = headings[0].parentElement!.parentElement!
       const about = headings[1].parentElement!.parentElement!
       if (framed) {
+        for (const heading of headings) expect(heading.closest('section')!.className.split(' ').sort()).toEqual('mb-4 last:mb-0 rounded-xl border border-theme-border bg-theme-surface px-4 py-3 shadow-theme-sm'.split(' ').sort())
         expect(glance.textContent).toContain('Base backup progress')
         expect(about.textContent).not.toContain('Base backup progress')
         expect(about.textContent).toContain('Existing host facts')
@@ -167,6 +168,12 @@ describe('CNPGClusterSummary', () => {
     const root = render(<CNPGClusterSummary row={row()} dimensions={dims} onSelectDimension={onSelect} />)
     expect(document.body.textContent).toContain('WAL held by an inactive slot')
     const open = [...document.querySelectorAll('button')].find((b) => b.textContent === 'Storage →')!
+    expect(open.className).toBe('text-xs text-accent-text hover:underline')
+    expect(open.parentElement!.className).toBe('inline-flex flex-wrap items-center gap-x-2')
+    const value = open.parentElement!.parentElement!
+    expect(value.tagName).toBe('DIV')
+    expect(value.lastElementChild!.textContent).toBe('slot')
+    expect(value.lastElementChild!.className).toBe('text-[11.5px] text-theme-text-tertiary')
     act(() => open.click())
     expect(onSelect).toHaveBeenCalledWith('storage')
     act(() => root.unmount())

@@ -94,6 +94,12 @@ type connectionLease struct {
 	release func()
 }
 
+func (l *connectionLease) stop() {
+	if l != nil && l.release != nil {
+		l.release()
+	}
+}
+
 type prometheusCostState int
 
 const (
@@ -192,12 +198,13 @@ func (m *Manager) configure(config ManagerConfig, envManaged bool, envError stri
 	m.service = ServiceReference{}
 	m.retryAt = time.Time{}
 	m.selectionErr = nil
+	previous := m.lease
 	m.lease = nil
 	m.generation++
 	m.envManaged = envManaged
 	m.envError = envError
 	m.mu.Unlock()
-	portforward.Stop(portforward.OwnerCost)
+	previous.stop()
 	return nil
 }
 
@@ -297,10 +304,11 @@ func (m *Manager) Reset() {
 	m.service = ServiceReference{}
 	m.retryAt = time.Time{}
 	m.selectionErr = nil
+	previous := m.lease
 	m.lease = nil
 	m.generation++
 	m.mu.Unlock()
-	portforward.Stop(portforward.OwnerCost)
+	previous.stop()
 }
 
 func Selected(ctx context.Context) (Connection, error) { return defaultManager.Selected(ctx) }
@@ -367,6 +375,9 @@ func (m *Manager) Selected(ctx context.Context) (Connection, error) {
 
 	connection, err := m.connectKubecost(ctx, config)
 	if err != nil {
+		if errors.Is(err, portforward.ErrClosed) {
+			return Connection{}, err
+		}
 		if contextErr := ctx.Err(); contextErr != nil {
 			return Connection{}, contextErr
 		}
@@ -438,9 +449,7 @@ func (m *Manager) commitSelectionWithRetry(generation uint64, connection Connect
 	m.mu.Lock()
 	if m.generation != generation {
 		m.mu.Unlock()
-		if connection.lease != nil && connection.lease.release != nil {
-			connection.lease.release()
-		}
+		connection.lease.stop()
 		return Connection{}, fmt.Errorf("cost source selection was superseded")
 	}
 	previousLease := m.lease
@@ -454,8 +463,8 @@ func (m *Manager) commitSelectionWithRetry(generation uint64, connection Connect
 	m.selectionErr = nil
 	m.lease = connection.lease
 	m.mu.Unlock()
-	if connection.Source != SourceKubecost && previousLease != nil && previousLease.release != nil {
-		previousLease.release()
+	if connection.lease != previousLease {
+		previousLease.stop()
 	}
 	return connection, nil
 }
@@ -478,9 +487,7 @@ func (m *Manager) commitAutoFallback(generation uint64) (Connection, error) {
 	m.selectionErr = nil
 	m.lease = nil
 	m.mu.Unlock()
-	if previousLease != nil && previousLease.release != nil {
-		previousLease.release()
-	}
+	previousLease.stop()
 	return connection, nil
 }
 
@@ -505,9 +512,7 @@ func (m *Manager) commitSelectionFailure(generation uint64, selectionErr error) 
 	m.selectionErr = selectionErr
 	m.lease = nil
 	m.mu.Unlock()
-	if previousLease != nil && previousLease.release != nil {
-		previousLease.release()
-	}
+	previousLease.stop()
 	return Connection{}, selectionErr
 }
 
@@ -553,6 +558,13 @@ func detectPrometheusCostState(ctx context.Context) prometheusCostState {
 		}
 		return prometheusCostUnknown
 	}
+	// The probe asks whether the store holds OpenCost metrics at all, so it
+	// runs unscoped and lenient. A store holding several clusters' costs that
+	// the endpoints then withhold for this cluster is still a Prometheus cost
+	// source: it stays selected and the endpoints show why, rather than
+	// switching to Kubecost. Scoping the probe would tie the source choice to
+	// a cluster-scope check that is rechecked every minute and to partial
+	// answers, and the selection would flip with them.
 	resp := pkgopencost.ComputeCostSummaryFromProm(ctx, client.Prom(), pkgopencost.SummaryOptions{Currency: pkgopencost.DefaultCurrency, SkipNodeCost: true})
 	if resp.Available {
 		return prometheusCostAvailable
@@ -647,22 +659,22 @@ func connectDiscoveredKubecostEndpoint(ctx context.Context, apiKey, clusterID st
 		}
 		return discoveredKubecostConnection(client, address, clusterID, service, endpoint.servicePort), nil
 	}
-	forward, err := portforward.StartWithClients(owner, ctx, service.Namespace, service.Name, endpoint.targetPort, target.contextName, target.client, target.config)
+	forward, err := target.forwards.Start(ctx, owner, service.Namespace, service.Name, endpoint.targetPort)
 	if err != nil {
 		return Connection{}, fmt.Errorf("%w: port-forward failed: %w", ErrKubecostUnavailable, err)
 	}
-	client, address, err := probeDiscoveredKubecostURL(ctx, forward.Address, apiKey, clusterID)
+	client, address, err := probeDiscoveredKubecostURL(ctx, forward.Address(), apiKey, clusterID)
+	if target.forwards.Closed() {
+		return Connection{}, portforward.ErrClosed
+	}
 	if err != nil {
-		portforward.Stop(owner)
+		forward.Stop()
 		return Connection{}, err
 	}
 	connection := discoveredKubecostConnection(client, address, clusterID, service, endpoint.servicePort)
 	connection.lease = &connectionLease{
-		alive: func() bool {
-			info := portforward.GetConnectionInfo(owner)
-			return info.Connected && info.Address == forward.Address
-		},
-		release: func() { portforward.StopIfAddress(owner, forward.Address) },
+		alive:   forward.Alive,
+		release: func() { forward.Stop() },
 	}
 	return connection, nil
 }

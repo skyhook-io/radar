@@ -23,6 +23,7 @@ type APIResource struct {
 	Namespaced bool     `json:"namespaced"`
 	IsCRD      bool     `json:"isCrd"`
 	Verbs      []string `json:"verbs"`
+	ShortNames []string `json:"shortNames,omitempty"`
 }
 
 // DiscoveryStats holds read-only stats about API discovery state.
@@ -35,13 +36,14 @@ type DiscoveryStats struct {
 // ResourceDiscovery manages discovery and caching of API resources.
 // It is safe for concurrent use.
 type ResourceDiscovery struct {
-	client      discovery.DiscoveryInterface
-	resources   []APIResource
-	resourceMap map[string]APIResource // keyed by lowercase kind
-	gvrMap      map[string]schema.GroupVersionResource
-	lastRefresh time.Time
-	partial     bool
-	failedGroup map[string]bool
+	client           discovery.DiscoveryInterface
+	resources        []APIResource
+	resourceMap      map[string]APIResource // keyed by lowercase kind
+	gvrMap           map[string]schema.GroupVersionResource
+	groupResourceMap map[groupResourceKey]APIResource
+	lastRefresh      time.Time
+	partial          bool
+	failedGroup      map[string]bool
 	// refreshFailed: the last refresh failed without usable resource data, so
 	// the ones held, if any, are from an earlier refresh.
 	refreshFailed bool
@@ -51,7 +53,15 @@ type ResourceDiscovery struct {
 
 	// complete records that the discovery request that set resources returned
 	// no error; see DiscoveryCatalog.
-	complete bool
+	complete   bool
+	generation uint64
+
+	refreshListenersMu sync.Mutex
+	refreshListeners   map[chan struct{}]struct{}
+}
+
+type groupResourceKey struct {
+	group, kindOrName string
 }
 
 // DiscoveryOption is a functional option for NewResourceDiscovery.
@@ -198,6 +208,7 @@ func (d *ResourceDiscovery) Refresh() error {
 }
 
 func (d *ResourceDiscovery) refresh() error {
+	defer d.notifyRefresh()
 	if d == nil || d.client == nil {
 		return fmt.Errorf("discovery not initialized")
 	}
@@ -261,17 +272,20 @@ func (d *ResourceDiscovery) refresh() error {
 				Namespaced: apiRes.Namespaced,
 				IsCRD:      isCRD,
 				Verbs:      apiRes.Verbs,
+				ShortNames: apiRes.ShortNames,
 			}
 
-			d.addResourceLocked(resource)
+			d.upsertResourceLocked(resource)
 		}
 	}
+	d.rebuildGroupResourceMapLocked()
 
 	d.lastRefresh = time.Now()
 	d.partial = partial
 	d.failedGroup = failedGroups
 	d.refreshFailed = false
 	d.complete = err == nil
+	d.generation++
 	log.Printf("Discovered %d API resources (%d unique kinds)", len(d.resources), len(d.resourceMap)/2)
 
 	return nil
@@ -339,6 +353,7 @@ func (d *ResourceDiscovery) GroupHadPartialDiscovery(group string) bool {
 // AddAPIResource registers a resource that was proven accessible without
 // server discovery returning it, such as under restricted discovery RBAC.
 func (d *ResourceDiscovery) AddAPIResource(resource APIResource) {
+	defer d.notifyRefresh()
 	if d == nil {
 		return
 	}
@@ -348,6 +363,12 @@ func (d *ResourceDiscovery) AddAPIResource(resource APIResource) {
 }
 
 func (d *ResourceDiscovery) addResourceLocked(resource APIResource) {
+	d.upsertResourceLocked(resource)
+	d.rebuildGroupResourceMapLocked()
+	d.generation++
+}
+
+func (d *ResourceDiscovery) upsertResourceLocked(resource APIResource) {
 	for i, existing := range d.resources {
 		if existing.Group == resource.Group && existing.Version == resource.Version && existing.Name == resource.Name {
 			d.resources[i] = resource
@@ -357,6 +378,20 @@ func (d *ResourceDiscovery) addResourceLocked(resource APIResource) {
 	}
 	d.resources = append(d.resources, resource)
 	d.indexResourceLocked(resource)
+}
+
+func (d *ResourceDiscovery) rebuildGroupResourceMapLocked() {
+	d.groupResourceMap = make(map[groupResourceKey]APIResource, 2*len(d.resources))
+	for _, resource := range d.resources {
+		for _, alias := range []string{resource.Kind, resource.Name} {
+			key := groupResourceKey{group: resource.Group, kindOrName: strings.ToLower(alias)}
+			// Kind and plural aliases compete by version alone; equal-ranked
+			// candidates keep their order in the final resource slice.
+			if existing, ok := d.groupResourceMap[key]; !ok || IsMoreStableVersion(resource.Version, existing.Version) {
+				d.groupResourceMap[key] = resource
+			}
+		}
+	}
 }
 
 func (d *ResourceDiscovery) indexResourceLocked(resource APIResource) {
@@ -552,20 +587,8 @@ func (d *ResourceDiscovery) GetGVRWithGroup(kindOrName string, group string) (sc
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 
-	kindLower := strings.ToLower(kindOrName)
-	var best *APIResource
-	for i := range d.resources {
-		res := &d.resources[i]
-		if (strings.ToLower(res.Kind) == kindLower || strings.ToLower(res.Name) == kindLower) && res.Group == group {
-			// Multiple served versions can coexist (e.g. Gateway v1beta1 + v1).
-			// Informers are registered against the most stable version, so a
-			// first-match return would hand back a version no informer watches.
-			if best == nil || IsMoreStableVersion(res.Version, best.Version) {
-				best = res
-			}
-		}
-	}
-	if best == nil {
+	best, ok := d.groupResourceMap[groupResourceKey{group: group, kindOrName: strings.ToLower(kindOrName)}]
+	if !ok {
 		return schema.GroupVersionResource{}, false
 	}
 	return schema.GroupVersionResource{
@@ -609,24 +632,8 @@ func (d *ResourceDiscovery) GetResourceWithGroup(kindOrName, group string) (APIR
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 
-	// Server discovery lists a group's versions in an order that varies from
-	// process to process, so returning the first match would hand callers a
-	// deprecated version at random, and the GVR they build from it would name
-	// a version no informer is registered against.
-	kindLower := strings.ToLower(kindOrName)
-	var best *APIResource
-	for i := range d.resources {
-		res := &d.resources[i]
-		if (strings.ToLower(res.Kind) == kindLower || strings.ToLower(res.Name) == kindLower) && res.Group == group {
-			if best == nil || IsMoreStableVersion(res.Version, best.Version) {
-				best = res
-			}
-		}
-	}
-	if best == nil {
-		return APIResource{}, false
-	}
-	return *best, true
+	resource, ok := d.groupResourceMap[groupResourceKey{group: group, kindOrName: strings.ToLower(kindOrName)}]
+	return resource, ok
 }
 
 // IsKnownResource checks if a kind or plural name is a known resource.

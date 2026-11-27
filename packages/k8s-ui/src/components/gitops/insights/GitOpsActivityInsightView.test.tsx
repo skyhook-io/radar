@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'vitest'
+// @vitest-environment jsdom
+import { act } from 'react'
+import { createRoot } from 'react-dom/client'
+import { describe, expect, it, vi } from 'vitest'
 import { renderToString } from 'react-dom/server'
 import type { GitOpsInsight } from '../../../types'
 import type { RadarUpgradeRequirement } from '../../../types/fetch-error'
@@ -10,7 +13,7 @@ function render(insight: GitOpsInsight, rollbackUpgrade?: RadarUpgradeRequiremen
 
 function rollbackButtons(insight: GitOpsInsight, rollbackUpgrade?: RadarUpgradeRequirement | null): { disabled: boolean }[] {
   const html = render(insight, rollbackUpgrade)
-  return [...html.matchAll(/<button([^>]*)>Rollback<\/button>/g)].map((m) => ({ disabled: /\sdisabled=""/.test(m[1]) }))
+  return [...html.matchAll(/<button([^>]*)>Rollback<\/button>/g)].map((m) => ({ disabled: /\saria-disabled="true"/.test(m[1]) }))
 }
 
 function insight(autoSyncMode: string): GitOpsInsight {
@@ -52,4 +55,64 @@ describe('GitOpsActivityInsightView rollback', () => {
       expect(render(insight('Manual'), null)).not.toContain('Argo CD rollbacks need')
     })
   })
+})
+
+describe('Flux Activity rows', () => {
+  it('shows runs, duration and events', () => {
+    const html = render({
+      summary: { tool: 'fluxcd', kind: 'Kustomization', namespace: 'team', name: 'app' },
+      history: [
+        { kind: 'revision', id: 'sha256:y', revision: 'main@sha1:ccc', phase: 'Applied', runs: 2, duration: '984.729484ms', deployedAt: '2026-11-08T10:00:00Z' },
+        { kind: 'event', id: 'HealthCheckFailed', phase: 'Warning', message: 'timeout waiting for app', deployedAt: '2026-11-10T11:00:00Z' },
+        { kind: 'revision', id: 'sha256:x', revision: 'main@sha1:bbb', phase: 'Applied', runs: 12, duration: '1.102930992s', firstAt: '2026-11-09T10:00:00Z', deployedAt: '2026-11-10T10:00:00Z' },
+      ],
+    })
+    expect(html).toContain('>Applied<')
+    expect(html).toContain('12 runs')
+    expect(html).toContain('took 1.1s')
+    expect(html).toContain('first ')
+    expect(html).toContain('took 985ms')
+    expect(html).not.toContain('984.729484ms')
+    expect(html).toContain('HealthCheckFailed')
+    expect(html).toContain('timeout waiting for app')
+  })
+})
+
+describe('GitOpsActivityInsightView condition rows', () => {
+  it('titles a failing condition by its type, not by the phase its chip repeats', () => {
+    const html = render({
+      summary: { tool: 'fluxcd', kind: 'Kustomization', namespace: 'flux-system', name: 'apps' },
+      history: [{ kind: 'condition', id: 'Ready', phase: 'Failed', message: 'kustomize build failed' }],
+    } as GitOpsInsight)
+    expect(html).toContain('Ready condition')
+    expect(html).not.toMatch(/>Failed<\/span>\s*<[^>]*>[^<]*Failed/)
+  })
+})
+
+// Without patch access the user can't disable auto-sync either, so the role
+// reason comes before the auto-sync advice.
+it('names a role denial ahead of the auto-sync advice on Rollback', async () => {
+  vi.useFakeTimers()
+  const element = document.createElement('div')
+  document.body.appendChild(element)
+  const root = createRoot(element)
+  const role = "Kubernetes denied permission to patch Argo CD Applications in argocd."
+  const onRollback = vi.fn()
+  await act(async () => { root.render(<GitOpsActivityInsightView insight={insight('Auto · prune')} onRollback={onRollback} rollbackDisabledReason={role} />) })
+  const button = [...element.querySelectorAll('button')].find((b) => b.textContent === 'Rollback')!
+  expect(button.disabled).toBe(false)
+  expect(button.getAttribute('aria-disabled')).toBe('true')
+  expect(document.getElementById(button.getAttribute('aria-describedby')!)?.textContent).toBe(role)
+  expect(element.textContent).not.toContain('Each revision can be rolled back to.')
+  await act(async () => {
+    button.focus()
+    button.click()
+    vi.advanceTimersByTime(1000)
+  })
+  expect(document.activeElement).toBe(button)
+  expect(document.body.querySelector('[role="tooltip"]')?.textContent).toBe(role)
+  expect(onRollback).not.toHaveBeenCalled()
+  await act(async () => root.unmount())
+  element.remove()
+  vi.useRealTimers()
 })

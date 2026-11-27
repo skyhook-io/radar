@@ -25,9 +25,10 @@ import (
 	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/internal/traffic"
-	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
+	bp "github.com/skyhook-io/radar/pkg/audit"
 	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/netpol"
 	"github.com/skyhook-io/radar/pkg/resourceapi"
 	"github.com/skyhook-io/radar/pkg/timeutil"
 	topology "github.com/skyhook-io/radar/pkg/topology"
@@ -55,7 +56,7 @@ type DashboardResponse struct {
 	// rendering an empty state.
 	GitOpsControllers *DashboardGitOpsControllers `json:"gitopsControllers,omitempty"`
 	DeferredLoading   bool                        `json:"deferredLoading,omitempty"`  // True while deferred informers (secrets, events, etc.) are still syncing
-	PartialData       []string                    `json:"partialData,omitempty"`      // Resource kinds that timed out during critical sync (e.g. ["Pod", "Deployment"])
+	PartialData       []string                    `json:"partialData,omitempty"`      // Resources still loading after the initial wait
 	AccessRestricted  bool                        `json:"accessRestricted,omitempty"` // True when user has no namespace access (RBAC)
 }
 
@@ -104,6 +105,7 @@ type DashboardProblem struct {
 	// degraded is what a caller who can't make them sees instead.
 	requiredReads []issues.EvidenceRead
 	degraded      *issues.DegradedFinding
+	expected      bool
 }
 
 // mergeResourceCounts adds src's per-namespace counts into dst. Cluster-scoped
@@ -393,12 +395,14 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 			if !canReadSubject(issues.Ref{Group: p.Group, Kind: p.Kind, Namespace: p.Namespace, Name: p.Name}) {
 				continue
 			}
-			switch issues.ViewEvidence(p.requiredReads, p.degraded, canReadEvidence, false) {
-			case issues.EvidenceWithheld:
+			switch issues.ViewEvidence(p.requiredReads, p.degraded, p.expected, canReadEvidence, false) {
+			case issues.EvidenceWithheld, issues.EvidenceExpected:
 				continue
 			case issues.EvidenceDegraded:
 				p.Message = p.degraded.Message
-				p.Duration, p.DurationSeconds, p.OnsetUnknown = "", 0, true
+				if !p.degraded.KeepSubjectOnset {
+					p.Duration, p.DurationSeconds, p.OnsetUnknown = "", 0, true
+				}
 			}
 			resp.Problems = append(resp.Problems, p)
 		}
@@ -423,7 +427,11 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 
 	// Cert health is derived from TLS Secrets — gate by per-user secrets RBAC.
 	resp.CertificateHealth = s.getDashboardCertificateHealth(s.secretReadableNamespaces(r, namespaces))
-	resp.NetworkPolicyCoverage = s.getDashboardNetworkPolicyCoverage(r, cache, namespaces)
+	if cache.CustomResourcesPending() {
+		resp.PartialData = append(resp.PartialData, "custom resources")
+	} else {
+		resp.NetworkPolicyCoverage = s.getDashboardNetworkPolicyCoverage(r, cache, namespaces)
+	}
 	resp.Audit = s.getDashboardAudit(r, cache, namespaces)
 	resp.GitOpsControllers = s.getDashboardGitOpsControllers(cache, namespaces)
 
@@ -490,6 +498,7 @@ func (s *Server) handleDashboardHelm(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
 	}
+	r = r.WithContext(k8s.CaptureConnection(r.Context()))
 	namespaces, ok, checked, unread := s.resolveHelmStorageScope(r)
 	if !ok {
 		s.writeJSON(w, DashboardHelmSummary{})
@@ -511,7 +520,7 @@ func (s *Server) handleDashboardHelm(w http.ResponseWriter, r *http.Request) {
 // (auth disabled or user has cluster-wide namespaced access). Empty =
 // no access.
 func (s *Server) handleDashboardCRDs(w http.ResponseWriter, r *http.Request) {
-	if !s.requireConnected(w) {
+	if !s.requireConnected(w) || s.writeIfDiscoveryPending(w) {
 		return
 	}
 	namespaces := s.parseNamespacesForUser(r)
@@ -734,6 +743,7 @@ func detectionToDashboardProblem(p k8s.Detection) DashboardProblem {
 		OnsetUnknown:    p.OnsetUnknown,
 		requiredReads:   p.RequiredReads,
 		degraded:        p.Degraded,
+		expected:        p.ExpectedWhenVerified,
 	}
 }
 
@@ -1248,7 +1258,8 @@ func (s *Server) getDashboardTrafficSummary() *DashboardTrafficSummary {
 // can't list Secrets there; checked is false when a permission check behind
 // that went unanswered.
 func (s *Server) getDashboardHelmSummary(r *http.Request, namespaces []string, checked bool, unread ...string) DashboardHelmSummary {
-	helmClient := helm.GetClient()
+	r = r.WithContext(k8s.CaptureConnection(r.Context()))
+	helmClient := helm.GetClient(r.Context())
 	if helmClient == nil {
 		return DashboardHelmSummary{
 			Releases:  []DashboardHelmRelease{},
@@ -1501,7 +1512,7 @@ func (s *Server) collectNamespacedCRDCounts(r *http.Request, allowed []string) [
 			continue
 		}
 		scope := allowed
-		if res.Group == aicontext.TrivyGroup {
+		if k8s.RequiresExactNamespaceAccess(gvr) {
 			readable, all, complete := trivyAccess.scope(gvr, allowed)
 			if !complete || (!all && len(readable) == 0) {
 				continue
@@ -1560,6 +1571,9 @@ type DashboardNetworkPolicyCoverage struct {
 	CoveredWorkloads         int `json:"coveredWorkloads"`
 	CoveredWorkloadsIfStaged int `json:"coveredWorkloadsIfStaged"`
 	TotalWorkloads           int `json:"totalWorkloads"`
+	// Workloads left out of TotalWorkloads, so the card can say what it skipped.
+	IgnoredNamespaceWorkloads int `json:"ignoredNamespaceWorkloads,omitempty"`
+	HostNetworkWorkloads      int `json:"hostNetworkWorkloads,omitempty"`
 }
 
 type npSelector struct {
@@ -1574,7 +1588,7 @@ type npSelector struct {
 
 type dashboardCalicoPolicy struct {
 	policy     *unstructured.Unstructured
-	matcher    *topology.CalicoPolicyMatcher
+	matcher    *netpol.CalicoPolicyMatcher
 	definition topology.CalicoPolicyKind
 	// previewsProtection is false for the staged actions that describe removing
 	// or ignoring a policy rather than adding one.
@@ -1702,6 +1716,11 @@ func (s *Server) getDashboardNetworkPolicyCoverage(r *http.Request, cache *k8s.R
 				} else if len(readableNamespaces) > 0 {
 					cnps, err = dynamicCache.ListNamespaces(cnpGVR, readableNamespaces)
 				}
+				// An informer that hasn't synced lists nothing; that is unknown
+				// coverage, not "no policies".
+				if (clusterWide || len(readableNamespaces) > 0) && err == nil && !dynamicCache.IsSynced(cnpGVR) {
+					return nil
+				}
 				if err == nil {
 					for _, cnp := range cnps {
 						ns := cnp.GetNamespace()
@@ -1735,20 +1754,27 @@ func (s *Server) getDashboardNetworkPolicyCoverage(r *http.Request, cache *k8s.R
 					}
 					var policies []*unstructured.Unstructured
 					var err error
+					read := false
 					if definition.Namespaced {
 						clusterWide, readableNamespaces := s.dashboardPolicyReadScope(r, namespaces, group, gvr.Resource)
 						if clusterWide {
+							read = true
 							policies, err = dynamicCache.List(gvr, "")
 						} else if len(readableNamespaces) > 0 {
+							read = true
 							policies, err = dynamicCache.ListNamespaces(gvr, readableNamespaces)
 						}
 					} else {
 						if s.canRead(r, group, gvr.Resource, "", "list") {
+							read = true
 							policies, err = dynamicCache.List(gvr, "")
 						}
 					}
 					if err != nil {
 						continue
+					}
+					if read && !dynamicCache.IsSynced(gvr) {
+						return nil
 					}
 					for _, policy := range policies {
 						identity := definition.Kind + "\x00" + policy.GetNamespace() + "\x00" + policy.GetName()
@@ -1758,10 +1784,10 @@ func (s *Server) getDashboardNetworkPolicyCoverage(r *http.Request, cache *k8s.R
 						seenCalicoPolicies[identity] = struct{}{}
 						calicoPolicies = append(calicoPolicies, dashboardCalicoPolicy{
 							policy:             policy,
-							matcher:            topology.CompileCalicoPolicyMatcher(policy),
+							matcher:            netpol.CompileCalicoPolicyMatcher(policy),
 							definition:         definition,
-							previewsProtection: !definition.Staged || topology.CalicoStagedActionPreviewsProtection(policy),
-							stagesRemoval:      definition.Staged && topology.CalicoStagedActionStagesRemoval(policy),
+							previewsProtection: !definition.Staged || netpol.CalicoStagedActionPreviewsProtection(policy),
+							stagesRemoval:      definition.Staged && netpol.CalicoStagedActionStagesRemoval(policy),
 						})
 					}
 				}
@@ -1769,8 +1795,24 @@ func (s *Server) getDashboardNetworkPolicyCoverage(r *http.Request, cache *k8s.R
 		}
 	}
 
+	// Workloads in the audit's ignored namespaces are left out of the total,
+	// the same as the audit findings leave them out. So are hostNetwork
+	// workloads: their pods use the node's network, and whether a network
+	// policy applies there depends on the network plugin.
+	ignoredNamespace := bp.IgnoredNamespaceMatcher(getAuditConfig().IgnoredNamespaces)
 	workloads := make([]dashboardPolicyWorkload, 0)
-	addWorkload := func(kind, ns, name string, templateLabels map[string]string, serviceAccount string) {
+	ignoredNamespaceWorkloads, hostNetworkWorkloads := 0, 0
+	addWorkload := func(kind, ns, name string, template *corev1.PodTemplateSpec) {
+		if ignoredNamespace(ns) {
+			ignoredNamespaceWorkloads++
+			return
+		}
+		if template.Spec.HostNetwork {
+			hostNetworkWorkloads++
+			return
+		}
+		templateLabels := template.Labels
+		serviceAccount := template.Spec.ServiceAccountName
 		if serviceAccount == "" {
 			serviceAccount = "default"
 		}
@@ -1786,13 +1828,13 @@ func (s *Server) getDashboardNetworkPolicyCoverage(r *http.Request, cache *k8s.R
 		if allNamespaces {
 			deps, _ := depLister.List(labels.Everything())
 			for _, d := range deps {
-				addWorkload("Deployment", d.Namespace, d.Name, d.Spec.Template.Labels, d.Spec.Template.Spec.ServiceAccountName)
+				addWorkload("Deployment", d.Namespace, d.Name, &d.Spec.Template)
 			}
 		} else {
 			for _, ns := range namespaces {
 				deps, _ := depLister.Deployments(ns).List(labels.Everything())
 				for _, d := range deps {
-					addWorkload("Deployment", d.Namespace, d.Name, d.Spec.Template.Labels, d.Spec.Template.Spec.ServiceAccountName)
+					addWorkload("Deployment", d.Namespace, d.Name, &d.Spec.Template)
 				}
 			}
 		}
@@ -1802,13 +1844,13 @@ func (s *Server) getDashboardNetworkPolicyCoverage(r *http.Request, cache *k8s.R
 		if allNamespaces {
 			stss, _ := stsLister.List(labels.Everything())
 			for _, s := range stss {
-				addWorkload("StatefulSet", s.Namespace, s.Name, s.Spec.Template.Labels, s.Spec.Template.Spec.ServiceAccountName)
+				addWorkload("StatefulSet", s.Namespace, s.Name, &s.Spec.Template)
 			}
 		} else {
 			for _, ns := range namespaces {
 				stss, _ := stsLister.StatefulSets(ns).List(labels.Everything())
 				for _, s := range stss {
-					addWorkload("StatefulSet", s.Namespace, s.Name, s.Spec.Template.Labels, s.Spec.Template.Spec.ServiceAccountName)
+					addWorkload("StatefulSet", s.Namespace, s.Name, &s.Spec.Template)
 				}
 			}
 		}
@@ -1818,13 +1860,13 @@ func (s *Server) getDashboardNetworkPolicyCoverage(r *http.Request, cache *k8s.R
 		if allNamespaces {
 			dss, _ := dsLister.List(labels.Everything())
 			for _, d := range dss {
-				addWorkload("DaemonSet", d.Namespace, d.Name, d.Spec.Template.Labels, d.Spec.Template.Spec.ServiceAccountName)
+				addWorkload("DaemonSet", d.Namespace, d.Name, &d.Spec.Template)
 			}
 		} else {
 			for _, ns := range namespaces {
 				dss, _ := dsLister.DaemonSets(ns).List(labels.Everything())
 				for _, d := range dss {
-					addWorkload("DaemonSet", d.Namespace, d.Name, d.Spec.Template.Labels, d.Spec.Template.Spec.ServiceAccountName)
+					addWorkload("DaemonSet", d.Namespace, d.Name, &d.Spec.Template)
 				}
 			}
 		}
@@ -1872,7 +1914,7 @@ func (s *Server) getDashboardNetworkPolicyCoverage(r *http.Request, cache *k8s.R
 				coveredIfStaged[workload.key] = true
 			}
 		}
-		calicoEndpointLabels := topology.CalicoEndpointLabels(workload.namespace, workload.labels, workload.serviceAccount)
+		calicoEndpointLabels := netpol.CalicoEndpointLabels(workload.namespace, workload.labels, workload.serviceAccount)
 		for _, policy := range calicoPolicies {
 			if policy.definition.Namespaced && policy.policy.GetNamespace() != workload.namespace {
 				continue
@@ -1911,11 +1953,13 @@ func (s *Server) getDashboardNetworkPolicyCoverage(r *http.Request, cache *k8s.R
 	}
 
 	return &DashboardNetworkPolicyCoverage{
-		TotalPolicies:            len(allNPs) + len(calicoPolicies),
-		StagedPolicies:           stagedPolicies,
-		CoveredWorkloads:         len(covered),
-		CoveredWorkloadsIfStaged: len(coveredIfStaged),
-		TotalWorkloads:           len(workloads),
+		TotalPolicies:             len(allNPs) + len(calicoPolicies),
+		StagedPolicies:            stagedPolicies,
+		CoveredWorkloads:          len(covered),
+		CoveredWorkloadsIfStaged:  len(coveredIfStaged),
+		TotalWorkloads:            len(workloads),
+		IgnoredNamespaceWorkloads: ignoredNamespaceWorkloads,
+		HostNetworkWorkloads:      hostNetworkWorkloads,
 	}
 }
 

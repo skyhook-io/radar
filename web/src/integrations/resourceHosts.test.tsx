@@ -6,7 +6,7 @@ import { ResourceRendererDispatch } from '@skyhook-io/k8s-ui'
 import { encodeDrawerTrail } from '../utils/drawer-trail'
 import { kindToPluralWithGroup } from '../utils/navigation'
 import {
-  decorateResourceDiagnose, renderResourceKindList, resourceKindListMode, resourceKindListTitle, ResourceDrawerNavigation,
+  decorateResourceDiagnose, renderResourceKindList, resourceKindListMode, resourceKindListNamespaceFilterTooltip, resourceKindListTitle, ResourceDrawerNavigation,
   resourceDetailRedirect, resourceDetailSlots, resourceExpandedPath,
   resourceLogs, resourceRendererOverrides, resourceHosts,
 } from './resourceHosts'
@@ -49,13 +49,13 @@ describe('application resource hosts', () => {
   it('retains every existing renderer override at a stable module reference', () => {
     expect(Object.keys(resourceRendererOverrides).sort()).toEqual([
       'CustomResourceDefinitionRenderer', 'RayJobRenderer', 'JobRenderer', 'JobSetRenderer', 'RayServiceRenderer', 'RayClusterRenderer',
-      'KueueWorkloadRenderer', 'LocalQueueRenderer', 'ClusterQueueRenderer', 'CAPIClusterRenderer', 'PodRenderer', 'KarpenterNodePoolRenderer',
+      'KueueWorkloadRenderer', 'LocalQueueRenderer', 'ClusterQueueRenderer', 'CAPIClusterRenderer', 'PodRenderer', 'KarpenterNodePoolRenderer', 'LonghornVolumeRenderer',
       'NodeRenderer', 'ServiceRenderer', 'WorkloadRenderer', 'CompositeRenderer', 'ServiceAccountRenderer',
       'RoleRenderer', 'RoleBindingRenderer', 'NamespaceRenderer', 'HPARenderer', 'PVCRenderer', 'HTTPRouteRenderer',
       'RolloutRenderer', 'KyvernoPolicyCoverage', 'KyvernoPolicyQueued', 'CNPGObjectStoreRenderer',
       'VeleroBSLRenderer', 'VeleroBackupRenderer', 'VeleroRestoreRenderer', 'CNPGClusterRenderer',
       'CNPGDatabaseRenderer', 'CNPGPublicationRenderer', 'CNPGSubscriptionRenderer', 'CNPGImageCatalogRenderer',
-      'FluxHelmReleaseRenderer', 'OpenTelemetryCollectorRenderer', 'ValidatingAdmissionPolicyRenderer', 'ValidatingAdmissionPolicyBindingRenderer', 'SecretProviderClassRenderer',
+      'FluxHelmReleaseRenderer', 'OpenTelemetryCollectorRenderer', 'ValidatingAdmissionPolicyRenderer', 'ValidatingAdmissionPolicyBindingRenderer', 'MutatingAdmissionPolicyRenderer', 'MutatingAdmissionPolicyBindingRenderer', 'SecretProviderClassRenderer', 'UpgradePlanRenderer', 'SealedSecretRenderer', 'K3sHelmChartRenderer', 'TraefikIngressRouteRenderer', 'TraefikMiddlewareRenderer',
     ].sort())
     const inherited = [{ id: 'local', label: 'Local', render: () => null }]
     expect(resourceDetailSlots({ kind: 'Pod', group: '', namespace: 'db', name: 'pg-1' }, inherited).extraTabs).toEqual(inherited)
@@ -74,7 +74,7 @@ describe('application resource hosts', () => {
     const path = resourceDetailRedirect({ ...cluster, kind: 'clusters' }, search)!
     const url = new URL(path, 'http://radar.test')
     expect(url.pathname).toBe('/cnpg/clusters/db/pg')
-    expect(Object.fromEntries(url.searchParams)).toEqual({ ctx: 'kind-demo', tab: 'activity', drawer: 'pods:pg-1', 'ai-run': 'run' })
+    expect(Object.fromEntries(url.searchParams)).toEqual({ ctx: 'kind-demo', tab: 'events', drawer: 'pods:pg-1', 'ai-run': 'run' })
     expect(search.get('tab')).toBe('events')
     expect(search.get('apiGroup')).toBe('postgresql.cnpg.io')
   })
@@ -133,6 +133,18 @@ describe('application resource hosts', () => {
       expect(resourceKindListTitle({ ...cnpgKind, group })).toBeNull()
     }
     expect(resourceKindListTitle(cnpgKind)).toBe('CloudNativePG Clusters')
+  })
+
+  it('disables the namespace filter only while a list that ignores it is on screen', () => {
+    for (const name of ['backups', 'restores', 'schedules', 'backupstoragelocations']) {
+      const kind = { name, group: 'velero.io' }
+      expect(resourceKindListNamespaceFilterTooltip(kind, { veleroWorkspace: 'supported' }, false)).toContain('namespace filter doesn’t apply')
+      // The generic table that an older Radar shows does honour the filter.
+      expect(resourceKindListNamespaceFilterTooltip(kind, { veleroWorkspace: 'unsupported' }, false)).toBeUndefined()
+      expect(resourceKindListNamespaceFilterTooltip(kind, { veleroWorkspace: 'unknown' }, false)).toBeUndefined()
+    }
+    expect(resourceKindListNamespaceFilterTooltip({ name: 'deletebackuprequests', group: 'velero.io' }, { veleroWorkspace: 'supported' }, false)).toBeUndefined()
+    expect(resourceKindListNamespaceFilterTooltip(cnpgKind, supported, false)).toBeUndefined()
   })
 
   it('decorates Diagnose only for the integration-owned resource context', () => {

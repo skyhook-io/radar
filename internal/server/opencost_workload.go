@@ -86,7 +86,7 @@ func (s *Server) handleOpenCostWorkload(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	workloads := pkgopencost.ComputeWorkloadsFromProm(r.Context(), client.Prom(), namespace, internalopencost.BuildPodOwnerLookup(namespace))
+	workloads := internalopencost.NewPromCost(client).Workloads(r.Context(), namespace, internalopencost.BuildPodOwnerLookup(namespace))
 	result := focusOpenCostWorkload(workloads, kind, namespace, name, desiredReplicas)
 	result.Currency = s.resolvedOpenCostCurrency()
 	result.Source = "prometheus"
@@ -146,7 +146,7 @@ func (s *Server) handleOpenCostWorkloadTrend(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	result := pkgopencost.ComputeWorkloadCostTrendFromProm(r.Context(), client.Prom(), pkgopencost.WorkloadTrendOptions{
+	result := internalopencost.NewPromCost(client).WorkloadTrend(r.Context(), pkgopencost.WorkloadTrendOptions{
 		Range:     r.URL.Query().Get("range"),
 		Namespace: namespace,
 		Kind:      kind,
@@ -288,8 +288,11 @@ func focusOpenCostWorkload(resp *pkgopencost.WorkloadCostResponse, kind, namespa
 		return out
 	}
 	out.Source = resp.Source
+	out.ClusterScope = resp.ClusterScope
 	if resp.Available {
 		out.Window = resp.Window
+		out.EfficiencyUnavailable = resp.EfficiencyUnavailable
+		out.UsageClusterScope = resp.UsageClusterScope
 	}
 	out.DataThrough = resp.DataThrough
 	if resp.Available {

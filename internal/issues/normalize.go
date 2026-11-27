@@ -162,6 +162,7 @@ func fromProblem(p k8s.Detection, now time.Time, source Source) Issue {
 	iss := Issue{
 		RequiredReads:        p.RequiredReads,
 		Degraded:             p.Degraded,
+		ExpectedWhenVerified: p.ExpectedWhenVerified,
 		Severity:             sev,
 		Source:               source,
 		Kind:                 p.Kind,

@@ -5,6 +5,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"reflect"
 	"testing"
 )
 
@@ -58,4 +59,78 @@ func TestIstioHostsJoinOnlyKubernetesServiceNames(t *testing.T) {
 			})
 		}
 	}
+}
+
+// A Service an HTTP and a TCP route both reach gets one edge; edges follow the
+// route order, HTTP before TCP before TLS.
+func TestIstioRoutesDrawOneEdgePerServiceInProtocolOrder(t *testing.T) {
+	vsGVR := schema.GroupVersionResource{Group: "networking.istio.io", Version: "v1", Resource: "virtualservices"}
+	route := func(host string) []any {
+		return []any{map[string]any{"route": []any{map[string]any{"destination": map[string]any{"host": host}}}}}
+	}
+	vs := genericIdentityObject(vsGVR, "VirtualService", "rules", "route")
+	vs.Object["spec"] = map[string]any{"http": route("web"), "tcp": append(route("db"), route("web")...), "tls": route("vault")}
+	d := &genericIdentityDynamic{watched: []schema.GroupVersionResource{vsGVR}, kinds: map[schema.GroupVersionResource]string{vsGVR: "VirtualService"}, resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{vsGVR: {vs}}, listCalls: map[schema.GroupVersionResource]int{}}
+	var services []*corev1.Service
+	for _, name := range []string{"web", "db", "vault"} {
+		services = append(services, &corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: "rules", Name: name}})
+	}
+	topo, err := NewBuilder(&mockProvider{services: services}).WithDynamic(d).Build(DefaultBuildOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, e := range topo.Edges {
+		if e.Source == "virtualservice/rules/route" {
+			got = append(got, e.ID)
+		}
+	}
+	want := []string{"virtualservice/rules/route-to-service/rules/web", "virtualservice/rules/route-to-service/rules/db", "virtualservice/rules/route-to-service/rules/vault"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("edges = %v, want %v", got, want)
+	}
+}
+
+func TestIstioGatewayBindings(t *testing.T) {
+	vsGVR := schema.GroupVersionResource{Group: "networking.istio.io", Version: "v1", Resource: "virtualservices"}
+	gwGVR := schema.GroupVersionResource{Group: "networking.istio.io", Version: "v1", Resource: "gateways"}
+	vs := genericIdentityObject(vsGVR, "VirtualService", "rules", "route")
+	vs.Object["spec"] = map[string]any{"gateways": []any{"mesh", "edge", "rules/edge", "infra/shared"}, "http": []any{map[string]any{"route": []any{map[string]any{"destination": map[string]any{"host": "web"}}}}}}
+	gateways := []*unstructured.Unstructured{genericIdentityObject(gwGVR, "Gateway", "rules", "edge"), genericIdentityObject(gwGVR, "Gateway", "infra", "shared"), genericIdentityObject(gwGVR, "Gateway", "rules", "mesh")}
+	check := func(t *testing.T, vs *unstructured.Unstructured, mode ViewMode, namespaces, want []string) {
+		t.Helper()
+		d := &genericIdentityDynamic{watched: []schema.GroupVersionResource{vsGVR, gwGVR}, kinds: map[schema.GroupVersionResource]string{vsGVR: "VirtualService", gwGVR: "Gateway"}, resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{vsGVR: {vs}, gwGVR: gateways}, listCalls: map[schema.GroupVersionResource]int{}}
+		opts := DefaultBuildOptions()
+		opts.ViewMode = mode
+		opts.Namespaces = namespaces
+		topo, err := NewBuilder(&mockProvider{services: []*corev1.Service{{ObjectMeta: metav1.ObjectMeta{Namespace: "rules", Name: "web"}}}}).WithDynamic(d).Build(opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, e := range topo.Edges {
+			if e.Target == "virtualservice/rules/route" {
+				if e.Type != EdgeExposes {
+					t.Errorf("unexpected Gateway binding: %+v", e)
+				}
+				got = append(got, e.Source)
+			}
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("gateways bound = %v, want %v", got, want)
+		}
+	}
+	for _, mode := range []ViewMode{ViewModeResources, ViewModeTraffic} {
+		t.Run(string(mode)+"/all namespaces", func(t *testing.T) {
+			check(t, vs, mode, nil, []string{"istiogateway/rules/edge", "istiogateway/infra/shared"})
+		})
+		t.Run(string(mode)+"/rules only", func(t *testing.T) {
+			check(t, vs, mode, []string{"rules"}, []string{"istiogateway/rules/edge"})
+		})
+	}
+	t.Run("resources/duplicate alias", func(t *testing.T) {
+		aliases := vs.DeepCopy()
+		aliases.Object["spec"] = map[string]any{"gateways": []any{"edge", "rules/edge"}}
+		check(t, aliases, ViewModeResources, nil, []string{"istiogateway/rules/edge"})
+	})
 }

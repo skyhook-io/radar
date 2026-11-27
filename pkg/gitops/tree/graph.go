@@ -133,11 +133,19 @@ func enrichNodeFromObject(node Node, obj *unstructured.Unstructured) Node {
 	if rev, ok, _ := unstructured.NestedString(obj.Object, "status", "operationState", "syncResult", "revision"); ok && rev != "" {
 		node.Data["lastSyncRevision"] = truncateRevision(rev)
 	}
+	// A Flux HelmRelease's revisions are chart versions, not Git revisions.
+	// Cut to 12 characters, a version with build metadata (1.4.2+0f3c9a1b7e)
+	// no longer equals the whole version status.history records, and the tree
+	// flags a healthy release as a failed attempt.
+	displayRevision := truncateRevision
+	if obj.GetKind() == "HelmRelease" && gitops.ToolOf(obj) == gitops.ToolFluxCD {
+		displayRevision = func(rev string) string { return rev }
+	}
 	if rev, ok, _ := unstructured.NestedString(obj.Object, "status", "lastAppliedRevision"); ok && rev != "" {
-		node.Data["revision"] = truncateRevision(rev)
+		node.Data["revision"] = displayRevision(rev)
 	}
 	if rev, ok, _ := unstructured.NestedString(obj.Object, "status", "lastAttemptedRevision"); ok && rev != "" {
-		node.Data["attemptedRevision"] = truncateRevision(rev)
+		node.Data["attemptedRevision"] = displayRevision(rev)
 	}
 	if rev, ok, _ := unstructured.NestedInt64(obj.Object, "status", "lastReleaseRevision"); ok && rev > 0 {
 		node.Data["revision"] = fmt.Sprintf("rev:%d", rev)
@@ -153,7 +161,7 @@ func enrichNodeFromObject(node Node, obj *unstructured.Unstructured) Node {
 			node.Data["lastReconciledAt"] = parsed.UTC().Format(time.RFC3339Nano)
 		}
 	}
-	if strings.HasSuffix(apiGroup(obj), ".toolkit.fluxcd.io") {
+	if group := apiGroup(obj); strings.HasSuffix(group, ".toolkit.fluxcd.io") || group == "source.extensions.fluxcd.io" {
 		recordFluxReady(node, obj)
 	}
 	return enrichFluxSource(node, obj)
@@ -403,6 +411,31 @@ func classifyGitOpsKind(obj *unstructured.Unstructured) (tool, kind string) {
 }
 
 func enrichFluxSource(node Node, obj *unstructured.Unstructured) Node {
+	if node.Tool == ToolFluxCD && apiGroup(obj) == "source.extensions.fluxcd.io" && obj.GetKind() == "ArtifactGenerator" {
+		// A generator composes artifacts but holds none itself.
+		node.Sync = ""
+		state := gitops.FluxStatus(obj)
+		node.Health = state.Health
+		if gitops.ArtifactGeneratorPaused(obj) {
+			node.Health = "Suspended"
+			node.Data["paused"] = true
+		}
+		node.HealthSource = HealthSourceController
+		node.TopologyStatus = healthToTopology(node.Health)
+		node.Info = nil
+		// source-watcher 2.3 also lists the Namespaces it manages; entries from
+		// earlier versions carry no kind. No inventory leaves the count unknown.
+		if inventory, ok, _ := unstructured.NestedSlice(obj.Object, "status", "inventory"); ok {
+			count := 0
+			for _, raw := range inventory {
+				if e, ok := raw.(map[string]any); ok && (e["kind"] == nil || e["kind"] == "" || e["kind"] == "ExternalArtifact") {
+					count++
+				}
+			}
+			node.Data["generatedCount"] = count
+		}
+		return node
+	}
 	if node.Tool != ToolFluxCD || apiGroup(obj) != "source.toolkit.fluxcd.io" {
 		return node
 	}
@@ -469,6 +502,9 @@ func enrichFluxSource(node Node, obj *unstructured.Unstructured) Node {
 		// nothing a user would look for; the chart carries the version.
 		if obj.GetKind() != "HelmRepository" {
 			node.Data["revision"] = sourceRevisionDisplay(obj.GetKind(), revision)
+			if updated := gitops.StringValue(artifact["lastUpdateTime"]); updated != "" {
+				node.Data["artifactUpdatedAt"] = updated
+			}
 		}
 	}
 	conditions, _, _ := unstructured.NestedSlice(obj.Object, "status", "conditions")

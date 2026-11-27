@@ -8,7 +8,7 @@ import { SEVERITY_BADGE, SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-co
 import { pluralize, StatusDot } from '@skyhook-io/k8s-ui'
 import type { StatusTone } from '@skyhook-io/k8s-ui'
 import { useFlowSearch } from './TrafficFlowListContext'
-import { isPolicyDropReason, protocolLabel } from './trafficFilters'
+import { isPolicyDropReason, portLabel, protocolLabel } from './trafficFilters'
 import { useQuery } from '@tanstack/react-query'
 import { fetchJSON } from '../../api/client'
 import { Tooltip } from '../ui/Tooltip'
@@ -208,7 +208,7 @@ export function TrafficFlowList({ flows, responsesCallerOriented }: TrafficFlowL
                       </>
                     )}
                     {!isHTTP && !isDNS && (
-                      <span className="text-theme-text-tertiary uppercase">{flow.protocol}:{flow.port}</span>
+                      <span className="text-theme-text-tertiary"><span className="uppercase">{flow.protocol}</span>{portLabel(flow.port, flow.portSource) && `:${portLabel(flow.port, flow.portSource)}`}</span>
                     )}
                   </div>
 
@@ -224,10 +224,14 @@ export function TrafficFlowList({ flows, responsesCallerOriented }: TrafficFlowL
                     {flow.latencyNs && flow.latencyNs > 0 ? formatLatency(flow.latencyNs) : '—'}
                   </span>
 
-                  {/* Verdict */}
-                  <span className={clsx('text-right badge badge-sm text-[10px] capitalize', VERDICT_BADGE[flow.verdict] ?? SEVERITY_BADGE.neutral)}>
-                    {flow.verdict}
-                  </span>
+                  {/* Verdict: sources that only observe traffic (Beyla) report none */}
+                  {flow.verdict ? (
+                    <span className={clsx('text-right badge badge-sm text-[10px] capitalize', VERDICT_BADGE[flow.verdict] ?? SEVERITY_BADGE.neutral)}>
+                      {flow.verdict}
+                    </span>
+                  ) : (
+                    <span className="text-right text-theme-text-tertiary">—</span>
+                  )}
                 </button>
 
                 {/* Expanded detail */}
@@ -251,10 +255,12 @@ export function TrafficFlowList({ flows, responsesCallerOriented }: TrafficFlowL
                         <span className="text-theme-text-primary">{protocolLabel(flow.l7Protocol, flow.protocol)}</span>
                         {flow.httpProtocol && <span className="text-theme-text-tertiary"> ({flow.httpProtocol})</span>}
                       </div>
-                      <div>
-                        <span className="text-theme-text-tertiary">Port: </span>
-                        <span className="text-theme-text-primary">{flow.port}</span>
-                      </div>
+                      {portLabel(flow.port, flow.portSource) && (
+                        <div>
+                          <span className="text-theme-text-tertiary">Port: </span>
+                          <span className="text-theme-text-primary">{portLabel(flow.port, flow.portSource)}</span>
+                        </div>
+                      )}
                       {flow.trafficDirection && (
                         <div>
                           <span className="text-theme-text-tertiary">Direction: </span>
@@ -434,7 +440,7 @@ function PolicyCorrelation({ flow }: { flow: TrafficFlow }) {
       if (src?.name) params.set('sourcePodName', src.name)
       if (src?.kind) params.set('sourceKind', src.kind)
       if (src?.ip) params.set('sourceIP', src.ip)
-      if (flow.port) params.set('port', String(flow.port))
+      if (flow.port && !flow.portSource) params.set('port', String(flow.port))
       if (flow.protocol) params.set('protocol', flow.protocol)
       return fetchJSON(`/network-policies/evaluate?${params}`)
     },

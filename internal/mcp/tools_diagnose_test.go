@@ -2,6 +2,8 @@ package mcp
 
 import (
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -12,9 +14,11 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/resourcecontext"
 )
 
 // setupFakeCacheForDiagnoseTests stages a single Deployment with a matching
@@ -299,6 +303,49 @@ func TestHandleDiagnose_PodHappyPath(t *testing.T) {
 	// Pods count: 1 (the pod itself).
 	if !strings.Contains(body, `"pods":1`) {
 		t.Errorf("expected pods:1 in response: %s", body)
+	}
+}
+
+func TestDiagnoseWorkloadWarnsAboutClippedRelationships(t *testing.T) {
+	selector := map[string]string{"app": "cart"}
+	deployment := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "cart", Namespace: "shop", UID: "cart"},
+		Spec: appsv1.DeploymentSpec{
+			Selector: &metav1.LabelSelector{MatchLabels: selector},
+			Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: selector}},
+		},
+	}
+	objects := []runtime.Object{deployment}
+	for i := range 21 {
+		objects = append(objects, &corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("entry-%02d", i), Namespace: deployment.Namespace},
+			Spec:       corev1.ServiceSpec{Selector: selector},
+		})
+	}
+	if err := k8s.InitTestResourceCache(fake.NewClientset(objects...)); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestState)
+	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "fake-test"})
+	resources := []k8s.APIResource{
+		{Group: "apps", Version: "v1", Name: "deployments", Kind: "Deployment", Namespaced: true, Verbs: []string{"get", "list", "watch", "delete"}},
+		{Version: "v1", Name: "services", Kind: "Service", Namespaced: true, Verbs: []string{"get", "list", "watch", "delete"}},
+	}
+	if err := k8s.InitTestDynamicResourceCache(dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), resources); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+
+	resp, err := diagnoseWorkload(t.Context(), testDiagnoseInput("deployment", deployment.Namespace, deployment.Name), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rc := resp.ResourceContext
+	if rc == nil || len(rc.ExposedBy) != 20 || !slices.Contains(rc.Omitted, resourcecontext.OmittedField{Field: "exposedBy", Reason: resourcecontext.OmittedBudgetExceeded}) {
+		t.Fatalf("expected a clipped exposedBy preview: %+v", rc)
+	}
+	if !slices.Contains(resp.Warnings, "Partial preview of exposedBy. Radar reached its display or access-check limit. The total is unknown. To list up to 200 of one, call get_resource for this resource with relationship=\"exposedBy\".") {
+		t.Fatalf("warnings = %q", resp.Warnings)
 	}
 }
 

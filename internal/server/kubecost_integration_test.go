@@ -67,12 +67,12 @@ func TestApplyAutomaticSourceRejectsNoSourceAndRestoresPreviousConfig(t *testing
 		}
 		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
 	}))
-	prometheuspkg.Initialize(nil, nil, "test")
+	prometheuspkg.Initialize(nil, nil, "test", nil)
 	prometheuspkg.SetManualURL(promServer.URL)
 	t.Cleanup(func() {
 		promServer.Close()
 		prometheuspkg.Reset()
-		prometheuspkg.Initialize(nil, nil, "")
+		prometheuspkg.Initialize(nil, nil, "", nil)
 	})
 
 	rec := httptest.NewRecorder()

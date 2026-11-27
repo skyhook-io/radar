@@ -62,17 +62,18 @@ func TestIssuesToolSaysWhichNamespacesHelmWasNotCheckedIn(t *testing.T) {
 		_, _ = io.WriteString(w, `{"kind":"Status","apiVersion":"v1","status":"Failure","reason":"Forbidden","code":403}`)
 	}))
 	t.Cleanup(storage.Close)
-	helm.ResetClient()
-	if err := helm.InitializeWithRESTConfig(&rest.Config{Host: storage.URL}); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(helm.ResetClient)
+	helm.ResetTestClient()
+	previousConfig := k8s.SetTestConfig(&rest.Config{Host: storage.URL})
+	t.Cleanup(func() { k8s.SetTestConfig(previousConfig) })
+	helm.Initialize()
+	t.Cleanup(helm.ResetTestClient)
 
 	perms := &pkgauth.UserPermissions{AllowedNamespaces: nil}
 	perms.SetCanI("list", "", "secrets", "", false)
 	perms.SetCanI("list", "", "secrets", "team-a", true)
 	perms.SetCanI("list", "", "secrets", "team-b", false)
 	getPermCache().Set("mixed", nil, perms)
+	k8s.PermissionCacheFor(k8s.CaptureConnection(t.Context()), getPermCache()).Set("mixed", nil, perms)
 	t.Cleanup(getPermCache().Invalidate)
 
 	ctx := pkgauth.ContextWithUser(context.Background(), &pkgauth.User{Username: "mixed"})

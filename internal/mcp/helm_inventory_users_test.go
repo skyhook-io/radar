@@ -75,11 +75,11 @@ func TestListHelmReleasesObservedRowsFollowEachCallersAccess(t *testing.T) {
 		_, _ = io.WriteString(w, `{"kind":"Status","apiVersion":"v1","status":"Failure","reason":"Forbidden","code":403}`)
 	}))
 	t.Cleanup(storage.Close)
-	helm.ResetClient()
-	if err := helm.InitializeWithRESTConfig(&rest.Config{Host: storage.URL}); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(helm.ResetClient)
+	helm.ResetTestClient()
+	previousConfig := k8s.SetTestConfig(&rest.Config{Host: storage.URL})
+	t.Cleanup(func() { k8s.SetTestConfig(previousConfig) })
+	helm.Initialize()
+	t.Cleanup(helm.ResetTestClient)
 
 	alice := &pkgauth.UserPermissions{AllowedNamespaces: []string{"team-a", "team-b"}}
 	bob := &pkgauth.UserPermissions{AllowedNamespaces: []string{"team-b"}}
@@ -89,8 +89,8 @@ func TestListHelmReleasesObservedRowsFollowEachCallersAccess(t *testing.T) {
 	}
 	alice.SetCanI("list", "rbac.authorization.k8s.io", "roles", "team-b", true)
 	bob.SetCanI("list", "rbac.authorization.k8s.io", "roles", "team-b", false)
-	getPermCache().Set("alice", nil, alice)
-	getPermCache().Set("bob", nil, bob)
+	k8s.PermissionCacheFor(k8s.CaptureConnection(t.Context()), getPermCache()).Set("alice", nil, alice)
+	k8s.PermissionCacheFor(k8s.CaptureConnection(t.Context()), getPermCache()).Set("bob", nil, bob)
 	t.Cleanup(getPermCache().Invalidate)
 
 	read := func(user string) map[string]int {

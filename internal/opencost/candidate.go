@@ -2,26 +2,24 @@ package opencost
 
 import (
 	"context"
-	"sync"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/portforward"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
 )
 
-var candidateMu sync.Mutex
-
 type kubecostTarget struct {
-	client      kubernetes.Interface
-	config      *rest.Config
+	forwards    *portforward.Manager
 	contextName string
 	inCluster   bool
 }
 
 func captureKubecostTarget() kubecostTarget {
-	client, config, contextName, inCluster := k8s.GetClusterClientSnapshot()
-	return kubecostTarget{client, config, contextName, inCluster}
+	conn := k8s.Current()
+	return kubecostTarget{
+		forwards:    conn.PortForwards(),
+		contextName: conn.ContextName(),
+		inCluster:   k8s.IsInCluster(),
+	}
 }
 
 // PrepareCandidate captures discovery and transport before releasing the cluster
@@ -50,11 +48,9 @@ func PrepareCandidate(config ManagerConfig) (func(context.Context) error, error)
 		return nil, err
 	}
 	return func(ctx context.Context) error {
-		candidateMu.Lock()
-		defer candidateMu.Unlock()
 		const owner = "cost-candidate"
-		defer portforward.Stop(owner)
-		_, err := connectDiscoveredKubecost(ctx, config, clusterID, aggregator, owner, target)
+		connection, err := connectDiscoveredKubecost(ctx, config, clusterID, aggregator, owner, target)
+		connection.lease.stop()
 		return err
 	}, nil
 }

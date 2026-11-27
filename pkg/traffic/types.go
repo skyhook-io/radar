@@ -3,12 +3,22 @@ package traffic
 
 import "time"
 
+// Flow.PortSource values. Empty means the port was observed.
+const (
+	PortSourceService         = "service"
+	PortSourceServiceMultiple = "serviceMultiple"
+)
+
 // Flow represents a single network flow between two endpoints.
 type Flow struct {
-	Source           Endpoint `json:"source"`
-	Destination      Endpoint `json:"destination"`
-	Protocol         string   `json:"protocol"` // tcp, udp, http, grpc
-	Port             int      `json:"port"`
+	Source      Endpoint `json:"source"`
+	Destination Endpoint `json:"destination"`
+	Protocol    string   `json:"protocol"` // tcp, udp, http, grpc
+	Port        int      `json:"port"`
+	// PortSource is set when Port was not observed but taken from the
+	// destination's Services: PortSourceService for their one port,
+	// PortSourceServiceMultiple (Port 0) when they declare several.
+	PortSource       string   `json:"portSource,omitempty"`
 	L7Protocol       string   `json:"l7Protocol,omitempty"` // HTTP, gRPC, DNS (if L7 visibility)
 	HTTPMethod       string   `json:"httpMethod,omitempty"`
 	HTTPPath         string   `json:"httpPath,omitempty"`
@@ -35,7 +45,7 @@ type Flow struct {
 	// The graph draws these without an arrowhead: the traffic is real, only its
 	// direction is not known.
 	DirectionUnknown bool   `json:"directionUnknown,omitempty"`
-	Verdict          string `json:"verdict"` // forwarded, dropped, error
+	Verdict          string `json:"verdict"` // forwarded, dropped, error; empty when the source reports none
 	// PolicyVerdict is the network plugin's own account of which policies
 	// decided this flow, when it reports one (Hubble does). It is the ground
 	// truth a static evaluation can only approximate, and it names policy
@@ -285,13 +295,22 @@ const (
 	WarningCluster = "cluster"
 )
 
+type ProtocolBytes struct {
+	BytesSent int64 `json:"bytesSent"`
+	BytesRecv int64 `json:"bytesRecv"`
+}
+
 // AggregatedFlow represents flows aggregated by service pair.
 type AggregatedFlow struct {
-	Source      Endpoint  `json:"source"`
-	Destination Endpoint  `json:"destination"`
-	Protocol    string    `json:"protocol"`
-	Port        int       `json:"port"`
-	FlowCount   int64     `json:"flowCount"`
+	Source          Endpoint                 `json:"source"`
+	Destination     Endpoint                 `json:"destination"`
+	Protocol        string                   `json:"protocol"`
+	Port            int                      `json:"port"`
+	PortSource      string                   `json:"portSource,omitempty"`
+	FlowCount       int64                    `json:"flowCount"`
+	BytesByProtocol map[string]ProtocolBytes `json:"bytesByProtocol,omitempty"`
+	// BytesSent and BytesRecv are the cross-protocol sums kept for compatibility.
+	// Display BytesByProtocol instead when more than one protocol is present.
 	BytesSent   int64     `json:"bytesSent"`
 	BytesRecv   int64     `json:"bytesRecv"`
 	Connections int64     `json:"connections"`

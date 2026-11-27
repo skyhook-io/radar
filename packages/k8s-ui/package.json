@@ -39,6 +39,11 @@
       "./src/components/gitops/*.tsx",
       "./src/components/gitops/*.ts"
     ],
+    "./components/rightsizing/results-model": "./src/components/rightsizing/results-model.ts",
+    "./components/rightsizing/RightsizingEvidence": "./src/components/rightsizing/RightsizingEvidence.tsx",
+    "./components/rightsizing/DatadogRightsizingEvidence": "./src/components/rightsizing/DatadogRightsizingEvidence.tsx",
+    "./components/rightsizing/RightsizingResultsTable": "./src/components/rightsizing/RightsizingResultsTable.tsx",
+    "./components/rightsizing/RightsizingFilters": "./src/components/rightsizing/RightsizingFilters.tsx",
     "./components/issues": "./src/components/issues/index.ts",
     "./components/issues/*": [
       "./src/components/issues/*.tsx",
@@ -107,8 +112,8 @@
     "@xyflow/react": "^12.12.0",
     "clsx": "^2.1.1",
     "diff": "^9.0.0",
-    "elkjs": "^0.11.1",
-    "jsdom": "^31.0.0",
+    "elkjs": "^0.12.1",
+    "jsdom": "^31.0.1",
     "lucide-react": "^1.48.0",
     "monaco-editor": "0.57.0",
     "react": "^19.3.0",

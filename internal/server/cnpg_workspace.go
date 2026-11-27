@@ -12,7 +12,7 @@ import (
 // does not gate namespaced CRDs per kind, so it cannot tell "no access" from
 // "none"; this endpoint states which one it is for every kind.
 func (s *Server) handleCNPGWorkspace(w http.ResponseWriter, r *http.Request) {
-	if !s.requireConnected(w) {
+	if !s.requireConnected(w) || s.writeIfDiscoveryPending(w) {
 		return
 	}
 	reader := s.cnpgReader(r)

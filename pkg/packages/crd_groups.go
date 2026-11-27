@@ -29,6 +29,8 @@ var crdGroupToChart = map[string]string{
 
 	// Flux v2 (toolkit)
 	"source.toolkit.fluxcd.io":       "flux",
+	"source.extensions.fluxcd.io":    "flux",
+	"fluxcd.controlplane.io":         "flux-operator",
 	"helm.toolkit.fluxcd.io":         "flux",
 	"kustomize.toolkit.fluxcd.io":    "flux",
 	"notification.toolkit.fluxcd.io": "flux",
@@ -65,6 +67,9 @@ var crdGroupToChart = map[string]string{
 	// Traefik
 	"traefik.io":          "traefik",
 	"traefik.containo.us": "traefik",
+
+	// Rancher system-upgrade-controller (k3s/RKE2 node upgrades)
+	"upgrade.cattle.io": "system-upgrade-controller",
 
 	// CloudNativePG, and its Barman Cloud backup plugin, a separate chart
 	"postgresql.cnpg.io":  "cloudnative-pg",
@@ -186,6 +191,12 @@ var crdGroupToChart = map[string]string{
 	"trainer.kubeflow.org":     "kubeflow-trainer",
 	"kaito.sh":                 "kaito",
 	"llm-d.ai":                 "llm-d",
+
+	// AI agent runtimes. Agent Sandbox ships the agent-sandbox chart; Agent
+	// Substrate installs from manifests, with no chart.
+	"agents.x-k8s.io":            "agent-sandbox",
+	"extensions.agents.x-k8s.io": "agent-sandbox",
+	"ate.dev":                    "agent-substrate",
 }
 
 // chartlessIntegrations name APIs that no Helm chart installs. Usage stats
@@ -193,7 +204,8 @@ var crdGroupToChart = map[string]string{
 // their CRDs keep the group as their identity instead of colliding with a
 // user's release that shares the name.
 var chartlessIntegrations = map[string]bool{
-	"gateway-api": true,
+	"gateway-api":     true,
+	"agent-substrate": true,
 }
 
 // IntegrationForCRDGroup names the integration a served API group belongs to,

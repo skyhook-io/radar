@@ -3,6 +3,7 @@ package prometheus
 import (
 	"fmt"
 	"maps"
+	"time"
 
 	"github.com/skyhook-io/radar/pkg/prom"
 )
@@ -21,6 +22,16 @@ func SetWorkloadMetricsScope(scope prom.WorkloadMetricsScope, beylaJobSelector s
 	globalClient.mu.Lock()
 	defer globalClient.mu.Unlock()
 	scope.ClusterLabels = maps.Clone(scope.ClusterLabels)
+	globalClient.gkeRevision++
+	globalClient.gke = nil
+	globalClient.gkeChecked = time.Time{}
+	if relay := globalClient.relay; relay != nil {
+		// The relay's scope stays bound; this one applies when it ends.
+		relay.setAside(func(s *prometheusSettings) {
+			s.scope, s.scopeEverSet, s.beylaJobSelector = &scope, true, beylaJobSelector
+		})
+		return nil
+	}
 	globalClient.workloadScope = &scope
 	globalClient.workloadScopeEverSet = true
 	globalClient.beylaJobSelector = beylaJobSelector

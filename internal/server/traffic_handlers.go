@@ -246,9 +246,16 @@ func trafficFlowOptions(r *http.Request, namespaces []string) (traffic.FlowOptio
 // source; and a source that cannot apply the exclusions has them applied here.
 func (s *Server) visibleFlows(r *http.Request, flows []traffic.Flow, namespaces []string, opts traffic.FlowOptions) []traffic.Flow {
 	allowed := namespaceLookup(namespaces)
+	readable := s.readableNamespaces(r)
 	kept := make([]traffic.Flow, 0, len(flows))
 	for _, f := range flows {
-		if flowVisibleForNamespaces(f, allowed) && !opts.Excludes(f) && opts.Match.Matches(f) {
+		if !flowVisibleForNamespaces(f, allowed) || opts.Excludes(f) {
+			continue
+		}
+		// Withheld before matching: a selection names the port the caller was
+		// shown, and matching the original would also reveal it.
+		withholdServicePort(&f, readable)
+		if opts.Match.Matches(f) {
 			kept = append(kept, f)
 		}
 	}
@@ -256,6 +263,21 @@ func (s *Server) visibleFlows(r *http.Request, flows []traffic.Flow, namespaces 
 		kept[i].PolicyVerdict = s.redactPolicyRefs(r, kept[i].PolicyVerdict)
 	}
 	return kept
+}
+
+// readableNamespaces is the caller's namespace access (nil = all), not the
+// namespaces the request is viewing.
+func (s *Server) readableNamespaces(r *http.Request) map[string]bool {
+	return namespaceLookup(s.getUserNamespaces(r, nil))
+}
+
+// withholdServicePort clears a port taken from the destination's Services when
+// the caller cannot read that namespace: a flow is visible through either end,
+// but the port is a read of the destination's Services.
+func withholdServicePort(f *traffic.Flow, readable map[string]bool) {
+	if readable != nil && f.PortSource != "" && !readable[f.Destination.Namespace] {
+		f.Port, f.PortSource = 0, ""
+	}
 }
 
 // newestFlows returns up to limit flows, newest first.
@@ -393,6 +415,10 @@ func (s *Server) handleGetTrafficRecords(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	flows := s.visibleFlows(r, resolveFlowWorkloads(k8s.GetResourceCache(), response.Flows), namespaces, opts)
+	s.writeJSON(w, trafficRecordsPayload(response, flows))
+}
+
+func trafficRecordsPayload(response *traffic.FlowsResponse, flows []traffic.Flow) map[string]any {
 	result := map[string]any{
 		"source":                    response.Source,
 		"timestamp":                 response.Timestamp,
@@ -402,7 +428,7 @@ func (s *Server) handleGetTrafficRecords(w http.ResponseWriter, r *http.Request)
 	}
 	addFlowsCoverage(result, response)
 	addFlowsWarning(result, response, flows)
-	s.writeJSON(w, result)
+	return result
 }
 
 // handleTrafficFlowsStream provides SSE stream of traffic flows
@@ -424,6 +450,7 @@ func (s *Server) handleTrafficFlowsStream(w http.ResponseWriter, r *http.Request
 		return
 	}
 	allowed := namespaceLookup(namespaces)
+	readable := s.readableNamespaces(r)
 
 	opts := traffic.FlowOptions{
 		Follow: true,
@@ -477,6 +504,7 @@ func (s *Server) handleTrafficFlowsStream(w http.ResponseWriter, r *http.Request
 				continue
 			}
 			flow.PolicyVerdict = s.redactPolicyRefs(r, flow.PolicyVerdict)
+			withholdServicePort(&flow, readable)
 
 			data, err := json.Marshal(flow)
 			if err != nil {

@@ -15,10 +15,10 @@ import (
 
 // RelationshipsIndex is a precomputed map from node ID to the edges touching
 // that node, derived from a single pass over Topology.Edges. Repeated
-// per-resource lookups via GetRelationshipsWithIndex skip the O(E) edge scan
+// per-resource lookups via GetRelationshipsWithObject skip the O(E) edge scan
 // in exchange for one O(E) build per topology refresh.
 //
-// Build once via IndexByResource(topo). Pass to GetRelationshipsWithIndex on
+// Build once via IndexByResource(topo). Pass to GetRelationshipsWithObject on
 // each call. Lookups are read-only and goroutine-safe; mutation is not.
 type RelationshipsIndex struct {
 	byNodeID           map[string]*nodeEdgeSlots
@@ -308,47 +308,18 @@ func isServiceEntrypointRoute(ref *ResourceRef) bool {
 	return false
 }
 
-// GetRelationships computes relationships for a specific resource by finding
-// all edges in the topology that involve this resource. The topology should be
-// pre-built and cached for performance. Builds a per-call inline index for
-// edge lookups; callers with many GetRelationships calls against the same
-// topology should use GetRelationshipsWithIndex with a shared
-// RelationshipsIndex instead.
+// GetRelationshipsWithObject classifies graph relationships for cmd/relparity and tests.
+// With a nil object it classifies without looking up the queried object's metadata.
 //
-// Prefer GetRelationshipsWithObject when the resource has already been fetched
-// by the caller — the kind/name lookup used inside this entry point is
-// group-blind and can return the wrong typed object for CRDs whose plural
-// collides with a core resource (e.g. Knative Service vs core Service).
-func GetRelationships(kind, namespace, name string, topo *Topology, provider ResourceProvider, dp DynamicProvider) *Relationships {
-	return GetRelationshipsWithObject(kind, namespace, name, nil, topo, provider, dp, nil)
-}
-
-// GetRelationshipsWithIndex is the indexed variant of GetRelationships. When
-// idx is non-nil, edge lookups go through the precomputed inverted index
-// instead of scanning topo.Edges; when nil, behavior matches GetRelationships
-// exactly. Callers that issue many per-resource queries against the same
-// topology (T6 BuildResourceContext, T12 get_neighborhood) should build idx
-// once and reuse it.
-//
-// Prefer GetRelationshipsWithObject when the resource has already been fetched —
-// see the doc on GetRelationships for the kind/group collision rationale.
-func GetRelationshipsWithIndex(kind, namespace, name string, topo *Topology, provider ResourceProvider, dp DynamicProvider, idx *RelationshipsIndex) *Relationships {
-	return GetRelationshipsWithObject(kind, namespace, name, nil, topo, provider, dp, idx)
-}
-
-// GetRelationshipsWithObject is the canonical entry point. When obj is non-nil
-// it is used directly for Pod spec extraction (ServiceAccountName, NodeName)
-// and ManagedBy synthesis, eliminating the group-blind kind/name lookup
-// inside lookupObjectMetadata. Callers that have already fetched the resource
-// — REST GET, MCP get_resource — MUST pass obj here, otherwise CRDs whose
-// plural collides with a core resource (e.g. Knative serving.knative.dev/Service
-// vs core/v1 Service) silently surface the wrong managed-by ref.
-//
-// obj may be any typed K8s object or *unstructured.Unstructured (both satisfy
-// metav1.Object and the *corev1.Pod type assertion remains nil-safe). When
-// obj is nil, behavior matches the pre-refactor path: lookupObjectMetadata
-// is called, with the group-collision risk noted above.
+// Deprecated: Use RelationsAnswerWithExtras for resource details or
+// RelationsContextAnswer for resource context.
 func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Topology, provider ResourceProvider, dp DynamicProvider, idx *RelationshipsIndex) *Relationships {
+	return getRelationshipsWithObject(kind, namespace, name, obj, topo, provider, dp, idx, nil)
+}
+
+func getRelationshipsWithObject(kind, namespace, name string, obj any, topo *Topology, provider ResourceProvider, dp DynamicProvider, idx *RelationshipsIndex, allow func(ResourceRef) bool) *Relationships {
+	readable := func(ref ResourceRef) bool { return allow == nil || allow(ref) }
+
 	if topo == nil {
 		return nil
 	}
@@ -629,14 +600,14 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 				}
 			}
 			if pvc != nil {
-				if pvc.Spec.VolumeName != "" {
+				if pvc.Spec.VolumeName != "" && readable(ResourceRef{Kind: "PersistentVolume", Name: pvc.Spec.VolumeName}) {
 					pvRef := ResourceRef{Kind: "PersistentVolume", Name: pvc.Spec.VolumeName}
 					enrichRef(&pvRef, dp)
 					rel.StorageRefs = append(rel.StorageRefs, pvRef)
 				}
 				// A claim names its class before it binds, so a Pending claim
 				// still leads to the class that should provision it.
-				if pvc.Spec.StorageClassName != nil && *pvc.Spec.StorageClassName != "" {
+				if pvc.Spec.StorageClassName != nil && *pvc.Spec.StorageClassName != "" && readable(ResourceRef{Kind: "StorageClass", Group: "storage.k8s.io", Name: *pvc.Spec.StorageClassName}) {
 					scRef := ResourceRef{Kind: "StorageClass", Group: "storage.k8s.io", Name: *pvc.Spec.StorageClassName}
 					enrichRef(&scRef, dp)
 					rel.ConfigRefs = append(rel.ConfigRefs, scRef)
@@ -655,12 +626,12 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 				}
 			}
 			if pv != nil {
-				if pv.Spec.ClaimRef != nil {
+				if pv.Spec.ClaimRef != nil && readable(ResourceRef{Kind: "PersistentVolumeClaim", Namespace: pv.Spec.ClaimRef.Namespace, Name: pv.Spec.ClaimRef.Name}) {
 					claimRef := ResourceRef{Kind: "PersistentVolumeClaim", Namespace: pv.Spec.ClaimRef.Namespace, Name: pv.Spec.ClaimRef.Name}
 					enrichRef(&claimRef, dp)
 					rel.Consumers = append(rel.Consumers, claimRef)
 				}
-				if pv.Spec.StorageClassName != "" {
+				if pv.Spec.StorageClassName != "" && readable(ResourceRef{Kind: "StorageClass", Group: "storage.k8s.io", Name: pv.Spec.StorageClassName}) {
 					scRef := ResourceRef{Kind: "StorageClass", Group: "storage.k8s.io", Name: pv.Spec.StorageClassName}
 					enrichRef(&scRef, dp)
 					rel.ConfigRefs = append(rel.ConfigRefs, scRef)
@@ -669,7 +640,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 		case "storageclass", "storageclasses", "sc":
 			pvs, _ := provider.PersistentVolumes()
 			for _, pv := range pvs {
-				if pv.Spec.StorageClassName == name {
+				if pv.Spec.StorageClassName == name && readable(ResourceRef{Kind: "PersistentVolume", Name: pv.Name}) {
 					pvRef := ResourceRef{Kind: "PersistentVolume", Name: pv.Name}
 					enrichRef(&pvRef, dp)
 					rel.Consumers = append(rel.Consumers, pvRef)
@@ -679,7 +650,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 			// no volume yet, so only the claim shows which class it waits on.
 			pvcs, _ := provider.PersistentVolumeClaims()
 			for _, pvc := range pvcs {
-				if pvc != nil && pvc.Spec.StorageClassName != nil && *pvc.Spec.StorageClassName == name {
+				if pvc != nil && pvc.Spec.StorageClassName != nil && *pvc.Spec.StorageClassName == name && readable(ResourceRef{Kind: "PersistentVolumeClaim", Namespace: pvc.Namespace, Name: pvc.Name}) {
 					claimRef := ResourceRef{Kind: "PersistentVolumeClaim", Namespace: pvc.Namespace, Name: pvc.Name}
 					enrichRef(&claimRef, dp)
 					rel.Consumers = append(rel.Consumers, claimRef)
@@ -698,6 +669,9 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 			for _, pod := range allPods {
 				if pod != nil && pod.Spec.NodeName == name && pod.Status.Phase != corev1.PodSucceeded && pod.Status.Phase != corev1.PodFailed {
 					podRef := ResourceRef{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name}
+					if !readable(podRef) {
+						continue
+					}
 					enrichRef(&podRef, dp)
 					rel.Pods = append(rel.Pods, podRef)
 				}
@@ -705,19 +679,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 		}
 	}
 
-	// Hygiene fields (T2): ServiceAccount + Node from Pod.Spec, ManagedBy from
-	// labels/annotations on the queried object (or topology owner chain fallback).
-	//
-	// Use the caller-provided obj when available — it is the authoritative
-	// resource (already disambiguated by group at fetch time) and avoids the
-	// group-blind kind/name lookup. Fall back to lookupObjectMetadata only
-	// when obj is nil (back-compat path).
-	queriedObj := obj
-	if queriedObj == nil {
-		queriedObj = lookupObjectMetadata(kindLower, namespace, name, provider, dp)
-	}
-	if pod, ok := queriedObj.(*corev1.Pod); ok {
-
+	if pod, ok := obj.(*corev1.Pod); ok {
 		for _, declaration := range configrefs.PodSpecReferences(pod.Namespace, pod.Spec) {
 			if declaration.Kind == "ServiceAccount" {
 				continue
@@ -733,12 +695,12 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 				rel.ConfigRefs = append(rel.ConfigRefs, ref)
 			}
 		}
-		if sa := pod.Spec.ServiceAccountName; sa != "" {
+		if sa := pod.Spec.ServiceAccountName; sa != "" && readable(ResourceRef{Kind: "ServiceAccount", Namespace: namespace, Name: sa}) {
 			saRef := ResourceRef{Kind: "ServiceAccount", Namespace: namespace, Name: sa}
 			enrichRef(&saRef, dp)
 			rel.ServiceAccount = &saRef
 		}
-		if nodeName := pod.Spec.NodeName; nodeName != "" {
+		if nodeName := pod.Spec.NodeName; nodeName != "" && readable(ResourceRef{Kind: "Node", Name: nodeName}) {
 			nodeRef := ResourceRef{Kind: "Node", Name: nodeName}
 			enrichRef(&nodeRef, dp)
 			rel.Node = &nodeRef
@@ -756,7 +718,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 					}
 				}
 			}
-			if claimName != "" {
+			if claimName != "" && readable(ResourceRef{Kind: "ResourceClaim", Namespace: namespace, Name: claimName, Group: "resource.k8s.io"}) {
 				rel.ResourceClaims = append(rel.ResourceClaims, ResourceRef{
 					Kind: "ResourceClaim", Namespace: namespace, Name: claimName, Group: "resource.k8s.io",
 				})
@@ -767,10 +729,10 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 	if resourceGroup == "" && (resourceKind == "ConfigMap" || resourceKind == "Secret" || resourceKind == "PersistentVolumeClaim" || resourceKind == "ServiceAccount") {
 		rel.Consumers = append(rel.Consumers, lookupIndex.podConsumersFor(resourceid.ResourceKey("", resourceKind, namespace, name))...)
 	}
-	if endpoint, ok := queriedObj.(*unstructured.Unstructured); ok &&
+	if endpoint, ok := obj.(*unstructured.Unstructured); ok &&
 		(kindLower == "hostendpoint" || kindLower == "hostendpoints") &&
 		(endpoint.GroupVersionKind().Group == "crd.projectcalico.org" || endpoint.GroupVersionKind().Group == "projectcalico.org") {
-		if nodeName, _, _ := unstructured.NestedString(endpoint.Object, "spec", "node"); nodeName != "" {
+		if nodeName, _, _ := unstructured.NestedString(endpoint.Object, "spec", "node"); nodeName != "" && readable(ResourceRef{Kind: "Node", Name: nodeName}) {
 			nodeRef := ResourceRef{Kind: "Node", Name: nodeName}
 			enrichRef(&nodeRef, dp)
 			rel.Node = &nodeRef
@@ -778,7 +740,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 	}
 	// ResourceClaim → DeviceClass (what it requests) + reservedFor Pods (who holds it).
 	if kindLower == "resourceclaim" || kindLower == "resourceclaims" {
-		if u, ok := queriedObj.(*unstructured.Unstructured); ok && u.GroupVersionKind().Group == "resource.k8s.io" {
+		if u, ok := obj.(*unstructured.Unstructured); ok && u.GroupVersionKind().Group == "resource.k8s.io" {
 			seenClasses := map[string]bool{}
 			requests, _, _ := unstructured.NestedSlice(u.Object, "spec", "devices", "requests")
 			for _, r := range requests {
@@ -804,7 +766,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 					}
 				}
 				for _, dc := range classNames {
-					if !seenClasses[dc] {
+					if !seenClasses[dc] && readable(ResourceRef{Kind: "DeviceClass", Name: dc, Group: "resource.k8s.io"}) {
 						seenClasses[dc] = true
 						rel.ConfigRefs = append(rel.ConfigRefs, ResourceRef{Kind: "DeviceClass", Name: dc, Group: "resource.k8s.io"})
 					}
@@ -820,18 +782,20 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 				holderName, _, _ := unstructured.NestedString(ref, "name")
 				if resource == "pods" && holderName != "" {
 					podRef := ResourceRef{Kind: "Pod", Namespace: namespace, Name: holderName}
+					if !readable(podRef) {
+						continue
+					}
 					enrichRef(&podRef, dp)
 					rel.Consumers = append(rel.Consumers, podRef)
 				}
 			}
 		}
 	}
-	var managedByMeta metav1.Object
-	if m, ok := queriedObj.(metav1.Object); ok {
-		managedByMeta = m
-	}
-	if mb := synthesizeManagedByFromNode(managedByMeta, nodeID, topo, dp, idx); len(mb) > 0 {
-		rel.ManagedBy = mb
+	if allow == nil {
+		managedByMeta, _ := obj.(metav1.Object)
+		if mb := synthesizeManagedByFromNode(managedByMeta, nodeID, topo, dp, idx); len(mb) > 0 {
+			rel.ManagedBy = mb
+		}
 	}
 
 	// Return nil if no relationships found
@@ -984,6 +948,8 @@ func isConfigurationDependency(ref *ResourceRef) bool {
 		return ref.Group == "keda.sh"
 	case "GitRepository", "OCIRepository", "Bucket", "HelmRepository", "HelmChart", "ExternalArtifact":
 		return ref.Group == "source.toolkit.fluxcd.io"
+	case "ArtifactGenerator":
+		return ref.Group == "source.extensions.fluxcd.io"
 	default:
 		return false
 	}
@@ -1006,172 +972,6 @@ func isScalingRelationship(source, target *ResourceRef) bool {
 	default:
 		return false
 	}
-}
-
-// lookupObjectMetadata returns the typed K8s object (or *unstructured.Unstructured
-// for CRDs) for kind/namespace/name. Used to source labels/annotations for
-// ManagedBy synthesis and Pod spec fields (ServiceAccountName, NodeName).
-//
-// Typed-resource lookups go through the ResourceProvider's accessor methods
-// (Pods, Deployments, …). For CRDs and any kind without a provider method,
-// falls back to the DynamicProvider so GitOps annotations on managed CRs
-// (HelmRelease, ExternalSecret, Certificate, etc.) still drive the chip —
-// without the fallback, the UI's chip would silently disappear for any
-// resource kind not in the typed switch below.
-func lookupObjectMetadata(kindLower, namespace, name string, provider ResourceProvider, dp DynamicProvider) any {
-	if provider != nil {
-		if obj := lookupTypedMetadata(kindLower, namespace, name, provider); obj != nil {
-			return obj
-		}
-	}
-	// Fallback for CRDs and any kind not in the typed switch. dp.Get
-	// returns a *unstructured.Unstructured, which satisfies metav1.Object.
-	if dp != nil {
-		if gvr, ok := dp.GetGVR(kindLower); ok {
-			if u, err := dp.Get(gvr, namespace, name); err == nil && u != nil {
-				return u
-			}
-		}
-	}
-	return nil
-}
-
-// lookupTypedMetadata is the original typed-resource switch. Split out from
-// lookupObjectMetadata so the CRD fallback path is clearly the second tier.
-func lookupTypedMetadata(kindLower, namespace, name string, provider ResourceProvider) any {
-	switch kindLower {
-	case "pod", "pods":
-		pods, _ := provider.Pods()
-		for _, p := range pods {
-			if p.Namespace == namespace && p.Name == name {
-				return p
-			}
-		}
-	case "deployment", "deployments":
-		ds, _ := provider.Deployments()
-		for _, d := range ds {
-			if d.Namespace == namespace && d.Name == name {
-				return d
-			}
-		}
-	case "statefulset", "statefulsets":
-		ss, _ := provider.StatefulSets()
-		for _, s := range ss {
-			if s.Namespace == namespace && s.Name == name {
-				return s
-			}
-		}
-	case "daemonset", "daemonsets":
-		ds, _ := provider.DaemonSets()
-		for _, d := range ds {
-			if d.Namespace == namespace && d.Name == name {
-				return d
-			}
-		}
-	case "replicaset", "replicasets":
-		rs, _ := provider.ReplicaSets()
-		for _, r := range rs {
-			if r.Namespace == namespace && r.Name == name {
-				return r
-			}
-		}
-	case "job", "jobs":
-		jobs, _ := provider.Jobs()
-		for _, j := range jobs {
-			if j.Namespace == namespace && j.Name == name {
-				return j
-			}
-		}
-	case "cronjob", "cronjobs":
-		cjs, _ := provider.CronJobs()
-		for _, c := range cjs {
-			if c.Namespace == namespace && c.Name == name {
-				return c
-			}
-		}
-	case "service", "services":
-		svcs, _ := provider.Services()
-		for _, s := range svcs {
-			if s.Namespace == namespace && s.Name == name {
-				return s
-			}
-		}
-	case "configmap", "configmaps":
-		cms, _ := provider.ConfigMaps()
-		for _, c := range cms {
-			if c.Namespace == namespace && c.Name == name {
-				return c
-			}
-		}
-	case "secret", "secrets":
-		ss, _ := provider.Secrets()
-		for _, s := range ss {
-			if s.Namespace == namespace && s.Name == name {
-				return s
-			}
-		}
-	case "serviceaccount", "serviceaccounts":
-		if serviceAccountProvider, ok := provider.(ServiceAccountProvider); ok {
-			serviceAccounts, _ := serviceAccountProvider.ServiceAccounts()
-			for _, serviceAccount := range serviceAccounts {
-				if serviceAccount.Namespace == namespace && serviceAccount.Name == name {
-					return serviceAccount
-				}
-			}
-		}
-	case "ingress", "ingresses":
-		is, _ := provider.Ingresses()
-		for _, i := range is {
-			if i.Namespace == namespace && i.Name == name {
-				return i
-			}
-		}
-	case "poddisruptionbudget", "poddisruptionbudgets", "pdb", "pdbs":
-		pdbs, _ := provider.PodDisruptionBudgets()
-		for _, p := range pdbs {
-			if p.Namespace == namespace && p.Name == name {
-				return p
-			}
-		}
-	case "networkpolicy", "networkpolicies", "netpol":
-		nps, _ := provider.NetworkPolicies()
-		for _, n := range nps {
-			if n.Namespace == namespace && n.Name == name {
-				return n
-			}
-		}
-	case "horizontalpodautoscaler", "horizontalpodautoscalers", "hpa", "hpas":
-		hpas, _ := provider.HorizontalPodAutoscalers()
-		for _, h := range hpas {
-			if h.Namespace == namespace && h.Name == name {
-				return h
-			}
-		}
-	case "persistentvolumeclaim", "persistentvolumeclaims", "pvc", "pvcs":
-		pvcs, _ := provider.PersistentVolumeClaims()
-		for _, p := range pvcs {
-			if p.Namespace == namespace && p.Name == name {
-				return p
-			}
-		}
-	case "persistentvolume", "persistentvolumes", "pv", "pvs":
-		// Cluster-scoped: ignore namespace.
-		pvs, _ := provider.PersistentVolumes()
-		for _, p := range pvs {
-			if p.Name == name {
-				return p
-			}
-		}
-	case "node", "nodes":
-		// Cluster-scoped: ignore namespace.
-		nodes, _ := provider.Nodes()
-		for _, n := range nodes {
-			if n.Name == name {
-				return n
-			}
-		}
-	}
-	return nil
 }
 
 var topologyNodeKindAliases = map[string]string{

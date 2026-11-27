@@ -1,14 +1,17 @@
+import { shortRevisionForCommit, commitURLForRepo, gitTreeURL } from '../git-source-links'
 import { AlertTriangle, ArrowUpDown, ChevronDown, ChevronRight, ChevronUp, CircleAlert, Clock3, GitBranch, GitCommit, Info, Loader2, Plus, RefreshCw, Trash2 } from 'lucide-react'
 import { IssueGuidance } from '../../issues/IssueGuidance'
 import { PaneLoader } from '../../ui/PaneLoader'
 import { clsx } from 'clsx'
-import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react'
-import type { GitOpsChange, GitOpsDrift, GitOpsHistoryItem, GitOpsInsight, GitOpsInsightRef, GitOpsIssue, GitOpsPlanItem, GitOpsRemediation, GitOpsResourceTree, GitOpsTreeNode } from '../../../types'
+import { Fragment, useEffect, useId, useRef, useState, type ReactNode } from 'react'
+import type { GitOpsChange, GitOpsDrift, GitOpsHistoryItem, GitOpsInsight, GitOpsInsightSummary, GitOpsInsightRef, GitOpsIssue, GitOpsPlanItem, GitOpsRemediation, GitOpsResourceTree, GitOpsTreeNode } from '../../../types'
 import { HealthStatusBadge, SyncStatusBadge } from '../GitOpsStatusBadge'
 import { radarHealthNote } from '../health-provenance'
 import { SEVERITY_BADGE, SEVERITY_TEXT } from '../../../utils/badge-colors'
 import { formatRelativeAgeTime } from '../../../utils/format'
 import { Tooltip } from '../../ui/Tooltip'
+import { Badge } from '../../ui/Badge'
+import { parseInterval } from '../SyncCountdown'
 import { RadarUpgradeNote, radarUpgradeNoteText } from '../../ui/RadarUpgradeNote'
 import type { RadarUpgradeRequirement } from '../../../types/fetch-error'
 import { SearchBox } from '../../ui/SearchBox'
@@ -35,6 +38,7 @@ import {
   type ResourceStatusFacet,
 } from './insights-helpers'
 import { DriftPanel } from './DriftPanel'
+import { TABLE_DENSITY } from '../../ui/table-density'
 
 interface GitOpsStatusStripProps {
   insight?: GitOpsInsight | null
@@ -87,6 +91,9 @@ export function GitOpsStatusStrip({ insight, loading, renderRevisionMeta }: GitO
     (i) => i.severity === 'critical' && i.scope === 'operation' && i.stuck,
   )
   const operationTooltipMessage = summary.rawOperationMessage || summary.operationMessage
+  // A source alone only before the first apply: once Flux recorded an applied
+  // revision that Radar can't match to the source, the plain revision line stays.
+  const fluxChain = summary.tool === 'fluxcd' && !!(summary.appliedRevision || (summary.sourceRevision && !summary.lastRevision))
   return (
     <div className="border-b border-theme-border bg-theme-base px-4 py-2">
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
@@ -125,7 +132,8 @@ export function GitOpsStatusStrip({ insight, loading, renderRevisionMeta }: GitO
           </Tooltip>
         )}
         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-theme-text-tertiary">
-          {shortRev && (
+          {fluxChain && <FluxRevisionChain summary={summary} renderRevisionMeta={renderRevisionMeta} />}
+          {shortRev && !fluxChain && (
             <span className="inline-flex items-baseline gap-1">
               <span className="shrink-0">Revision:</span>
               {commitUrl ? (
@@ -159,66 +167,94 @@ export function GitOpsStatusStrip({ insight, loading, renderRevisionMeta }: GitO
   )
 }
 
-// shortRevisionForCommit normalizes a controller-reported revision to a
-// commit-ish short form. Git SHAs collapse to 7 chars; revisions that
-// already look short (tags, semver, "master@sha1:..." truncated) pass
-// through. Returns empty when the input is empty/whitespace.
-function shortRevisionForCommit(revision: string): string {
-  const trimmed = revision.trim()
-  if (!trimmed) return ''
-  // Flux records "master@sha1:9f4969..." — strip the prefix and shorten.
-  const sha1Match = trimmed.match(/sha1:([0-9a-f]{7,40})/i)
-  if (sha1Match) return sha1Match[1].slice(0, 7)
-  // Pure 40-char SHA → 7 chars.
-  if (/^[0-9a-f]{40}$/i.test(trimmed)) return trimmed.slice(0, 7)
-  return trimmed
+// FluxRevisionChain reads source → applied → objects. Without a readable
+// source it shows the applied step alone and says nothing about freshness.
+function FluxRevisionChain({ summary, renderRevisionMeta }: { summary: GitOpsInsightSummary; renderRevisionMeta?: (revision: string) => ReactNode }) {
+  const applied = summary.appliedRevision || ''
+  const nextRun = fluxNextRunMinutes(summary)
+  const suspended = summary.autoSyncMode === 'Suspended'
+  // The estimate is computed from the clock, so re-render each minute while it shows.
+  const [, setTick] = useState(0)
+  const counting = nextRun !== null
+  useEffect(() => {
+    if (!counting) return
+    const timer = setInterval(() => setTick((t) => t + 1), 60_000)
+    return () => clearInterval(timer)
+  }, [counting])
+  return (
+    <span className="inline-flex flex-wrap items-baseline gap-x-1.5 gap-y-1">
+      {summary.sourceRevision && (
+        <>
+          <span className="shrink-0">Source</span>
+          <Tooltip content={summary.sourceRevision} delay={400}>
+            <span className="font-mono font-medium text-theme-text-primary">{shortFluxRevision(summary.sourceRevision)}</span>
+          </Tooltip>
+          {summary.sourceFetchedAt && <span>· fetched {formatRelativeAgeTime(summary.sourceFetchedAt)}</span>}
+        </>
+      )}
+      {applied && (
+        <>
+          {summary.sourceRevision && <span aria-hidden>→</span>}
+          <span className="shrink-0">Applied</span>
+          <Tooltip content={applied} delay={400}>
+            <span className={clsx('font-mono font-medium', summary.pending && !suspended ? SEVERITY_TEXT.warning : 'text-theme-text-primary')}>{appliedLabel(summary)}</span>
+          </Tooltip>
+          {renderRevisionMeta?.(applied)}
+          {nextRun !== null && <span>· next run in ~{nextRun}m</span>}
+        </>
+      )}
+      {summary.objects ? (
+        <>
+          <span aria-hidden>→</span>
+          <span>{summary.objects} objects</span>
+        </>
+      ) : null}
+      {summary.pending && (suspended
+        ? <Badge severity="neutral" size="sm">Source is ahead (suspended)</Badge>
+        : <Badge severity="warning" size="sm">Pending: source is ahead of the last successful apply</Badge>)}
+    </span>
+  )
 }
 
-// gitTreeURL derives a "browse the source directory" URL from a joined
-// summary.source ("repoURL · path · chart") plus a revision. Used when a
-// resource is Missing — we can't show its live state, but we CAN point at
-// where it's declared in Git so the operator can read the source. Returns
-// null when the host isn't recognized; caller hides the affordance then.
-function gitTreeURL(source: string | undefined, revision: string): string | null {
-  if (!source) return null
-  const parts = source.split(' · ').map((s) => s.trim()).filter(Boolean)
-  if (parts.length === 0) return null
-  const repoOnly = parts[0]!
-  const subPath = parts[1] || ''
-  const clean = repoOnly.replace(/\.git$/, '').replace(/\/$/, '')
-  let sha = revision || 'HEAD'
-  const m = (revision || '').match(/sha1:([0-9a-f]{7,40})/i)
-  if (m) sha = m[1]
-  const pathSegment = subPath ? `/${encodeURI(subPath)}` : ''
-  if (/^https?:\/\/github\.com\//.test(clean)) return `${clean}/tree/${sha}${pathSegment}`
-  if (/^https?:\/\/gitlab\.com\//.test(clean)) return `${clean}/-/tree/${sha}${pathSegment}`
-  if (/^https?:\/\/bitbucket\.org\//.test(clean)) return `${clean}/src/${sha}${pathSegment}`
-  return null
+// Flux records OCI artifacts as "<tag>@sha256:<digest>"; the chain shows
+// the digest's first 7 hex chars, like a Git short SHA.
+function shortFluxRevision(revision: string): string {
+  const digest = revision.match(/sha256:([0-9a-f]{7,64})/i)
+  return digest ? digest[1].slice(0, 7) : shortRevisionForCommit(revision)
 }
 
-// commitURLForRepo derives the remote URL for a commit when we recognize
-// the source host. Returns null for unrecognized hosts (private gitea,
-// self-hosted, etc.) — the caller renders the SHA as plain text in that
-// case rather than a wrong-looking link.
-//
-// `source` arrives joined as "repoURL · path · chart" (see Summary.Source
-// builder server-side). The repo URL is always the first segment; the rest
-// are path/chart suffixes that would confuse the commit URL constructor.
-function commitURLForRepo(source: string | undefined, revision: string): string | null {
-  if (!source || !revision) return null
-  const repoOnly = source.split(' · ')[0].trim()
-  const clean = repoOnly.replace(/\.git$/, '').replace(/\/$/, '')
-  // Pull out a usable SHA: full or short SHA; or the sha1:... form Flux uses.
-  let sha = revision
-  const m = revision.match(/sha1:([0-9a-f]{7,40})/i)
-  if (m) sha = m[1]
-  if (!/^[0-9a-f]{7,40}$/i.test(sha)) return null
-  // Recognized hosts. Self-hosted GitLab/Gitea variants would need the
-  // server to surface a `commitUrlTemplate` annotation — out of scope here.
-  if (/^https?:\/\/github\.com\//.test(clean)) return `${clean}/commit/${sha}`
-  if (/^https?:\/\/gitlab\.com\//.test(clean)) return `${clean}/-/commit/${sha}`
-  if (/^https?:\/\/bitbucket\.org\//.test(clean)) return `${clean}/commits/${sha}`
-  return null
+// A HelmRelease is compared by digest, but people read the chart version.
+function appliedLabel(summary: GitOpsInsightSummary): string {
+  const applied = summary.appliedRevision || ''
+  const short = shortFluxRevision(applied)
+  if (summary.kind === 'HelmRelease' && summary.lastRevision && summary.lastRevision !== applied) {
+    return `${summary.lastRevision} (${short})`
+  }
+  return short
+}
+
+// fluxNextRunMinutes estimates a Kustomization's next run from its last
+// successful apply and interval. The server sends the interval only while the
+// latest reconcile succeeded: after a failure Flux retries on other timers.
+// HelmRelease history records deploys, not runs.
+function fluxNextRunMinutes(summary: GitOpsInsightSummary): number | null {
+  if (summary.kind !== 'Kustomization' || summary.autoSyncMode === 'Suspended') return null
+  const last = Date.parse(summary.lastApplied || '')
+  const attempt = Date.parse(summary.lastApplyAttempt || '')
+  if (Number.isFinite(attempt) && !(last >= attempt)) return null
+  const seconds = summary.interval ? parseInterval(summary.interval) : null
+  if (!Number.isFinite(last) || !seconds) return null
+  const remaining = last + seconds * 1000 - Date.now()
+  return remaining > 0 ? Math.ceil(remaining / 60000) : null
+}
+
+// formatFluxDuration rounds the Go duration Flux records ("984.729484ms",
+// "1.102930992s") for display; anything else passes through.
+function formatFluxDuration(duration: string): string {
+  const match = duration.match(/^(\d+(?:\.\d+)?)(ms|s)$/)
+  if (!match) return duration
+  const value = Number(match[1])
+  return match[2] === 'ms' ? `${Math.round(value)}ms` : `${value.toFixed(1)}s`
 }
 
 // buildHealthSummary turns the per-resource Changes list into a one-line
@@ -1138,7 +1174,7 @@ export function GitOpsChangesView({ insight, error, onOpenResource, onSyncResour
           </div>
         ) : (
           <>
-            <div className="grid grid-cols-[minmax(0,1fr)_120px_120px_220px] gap-3 border-b border-theme-border bg-theme-base/40 px-4 py-2">
+            <div className={clsx('grid grid-cols-[minmax(0,1fr)_120px_120px_220px] gap-3 border-b border-theme-border bg-theme-base/40 py-2', TABLE_DENSITY.cellXClass)}>
               <ResSortHeader label="Resource" sortKey="name" sort={sort} onSort={onSort} />
               <ResSortHeader label="Sync" sortKey="sync" sort={sort} onSort={onSort} />
               <ResSortHeader label="Health" sortKey="health" sort={sort} onSort={onSort} />
@@ -1443,12 +1479,14 @@ function ChangeRow({
   const rowInteractive = expandable || (!isAbsent && !!onOpenResource)
   const hookLabel = change.hookPhase || hook
   const canSyncResource = !!onSyncResource && isArgoResourceSyncEligible(change, declared, hookLabel)
+  const syncDisabledReasonId = useId()
   const syncResourceButton = canSyncResource ? (
     <button
       type="button"
-      onClick={() => onSyncResource(change.ref)}
-      disabled={!!syncResourceDisabledReason}
-      className="inline-flex w-full items-center justify-center gap-1.5 rounded border border-theme-border bg-theme-base px-2 py-1 text-[11px] font-medium text-theme-text-secondary transition-colors hover:bg-theme-hover hover:text-theme-text-primary disabled:cursor-not-allowed disabled:opacity-50"
+      onClick={() => { if (!syncResourceDisabledReason) onSyncResource(change.ref) }}
+      aria-disabled={!!syncResourceDisabledReason}
+      aria-describedby={syncResourceDisabledReason ? syncDisabledReasonId : undefined}
+      className="inline-flex w-full items-center justify-center gap-1.5 rounded border border-theme-border bg-theme-base px-2 py-1 text-[11px] font-medium text-theme-text-secondary transition-colors hover:bg-theme-hover hover:text-theme-text-primary aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
     >
       <RefreshCw className="h-3 w-3" />
       Sync resource
@@ -1466,7 +1504,7 @@ function ChangeRow({
           across rows regardless of how long "Open <Kind> <name> →" is. With
           an `auto` last column, each row's 1fr column got a different
           residual width, pushing the badges to inconsistent offsets. */}
-      <div className="grid w-full grid-cols-[minmax(0,1fr)_120px_120px_220px] gap-3 px-4 py-3 text-sm">
+      <div className={clsx('grid w-full grid-cols-[minmax(0,1fr)_120px_120px_220px] gap-3 text-sm', TABLE_DENSITY.cellClass)}>
         <button
           type="button"
           onClick={handleRowClick}
@@ -1551,9 +1589,12 @@ function ChangeRow({
         </div>
         <div className="self-start space-y-1.5">
           {syncResourceButton && syncResourceDisabledReason ? (
-            <Tooltip content={syncResourceDisabledReason} delay={200} wrapperClassName="block">
-              {syncResourceButton}
-            </Tooltip>
+            <>
+              <span id={syncDisabledReasonId} className="sr-only">{syncResourceDisabledReason}</span>
+              <Tooltip preserveWords content={syncResourceDisabledReason} delay={200} wrapperClassName="block">
+                {syncResourceButton}
+              </Tooltip>
+            </>
           ) : syncResourceButton}
           {/* Three affordance states:
               - Live resource (not Missing): "Open <kind> <name> →" opens the
@@ -1662,6 +1703,7 @@ interface GitOpsActivityInsightViewProps {
   // is true, history rows with an ID expose a Rollback button that fires this
   // with the target entry. The consumer is responsible for the confirmation
   // dialog + the actual mutation.
+  rollbackDisabledReason?: string
   onRollback?: (item: GitOpsHistoryItem) => void
   // Set when the connected Radar is too old to roll back: every Rollback
   // renders disabled, with the upgrade note above the history.
@@ -1669,7 +1711,7 @@ interface GitOpsActivityInsightViewProps {
   rollbackBlockedReason?: string
 }
 
-export function GitOpsActivityInsightView({ insight, error, onRollback, rollbackUpgrade, rollbackBlockedReason }: GitOpsActivityInsightViewProps) {
+export function GitOpsActivityInsightView({ insight, error, onRollback, rollbackDisabledReason, rollbackUpgrade, rollbackBlockedReason }: GitOpsActivityInsightViewProps) {
   if (error && !insight) return <InsightErrorState error={error} />
   if (!insight) return <PaneLoader label="Loading GitOps activity…" className="h-full" />
   const canRollback = !!insight.capabilities?.rollback && !!onRollback
@@ -1687,18 +1729,19 @@ export function GitOpsActivityInsightView({ insight, error, onRollback, rollback
         <SectionHeader
           icon={Clock3}
           title="History"
-          hint={canRollback && !upgrade && !rollbackBlockedReason ? 'Each revision can be rolled back to.' : undefined}
+          hint={canRollback && !upgrade && !rollbackBlockedReason && !rollbackDisabledReason ? 'Each revision can be rolled back to.' : undefined}
         />
         {upgrade && <RadarUpgradeNote requirement={upgrade} className="border-b border-theme-border px-4 py-2.5" />}
         {canRollback && rollbackBlockedReason && <p className="border-b border-theme-border px-4 py-2.5 text-xs text-theme-text-secondary">{rollbackBlockedReason}</p>}
         <HistoryRows
           items={insight.history ?? []}
           canRollback={canRollback}
+          // A newer Radar comes first, then the role: without patch access, disabling auto-sync is not an option either.
           rollbackBlockedReason={rollbackBlockedReason || (upgrade
             ? radarUpgradeNoteText(upgrade)
-            : autoSyncBlocksRollback
+            : rollbackDisabledReason || (autoSyncBlocksRollback
               ? 'Auto-sync is enabled. Disable it to enable rollback — otherwise the controller will sync forward to HEAD again.'
-              : undefined)}
+              : undefined))}
           onRollback={onRollback}
         />
       </section>
@@ -1720,6 +1763,7 @@ function HistoryRows({
   rollbackBlockedReason?: string
   onRollback?: (item: GitOpsHistoryItem) => void
 }) {
+  const rollbackDescriptionId = useId()
   if (items.length === 0) {
     return (
       <div className="flex items-center gap-3 px-4 py-6 text-sm text-theme-text-tertiary">
@@ -1739,6 +1783,7 @@ function HistoryRows({
         // to it is meaningless.
         const showRollback = canRollback && !!item.id && !!onRollback
         const blockedReason = historyRollbackBlockedReason(item, rollbackBlockedReason)
+        const descriptionId = blockedReason ? `${rollbackDescriptionId}-${index}` : undefined
         return (
           // `group` enables the Rollback button's hover-reveal; baseline
           // opacity-40 keeps it touch-discoverable.
@@ -1751,37 +1796,44 @@ function HistoryRows({
             </div>
             <div className="min-w-0 text-sm">
               <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-                <span className="font-mono text-xs text-theme-text-primary">{item.revision || item.phase || '-'}</span>
+                <span className="font-mono text-xs text-theme-text-primary">{(item.kind === 'event' ? item.id : item.kind === 'condition' && item.id ? `${item.id} condition` : item.revision) || item.phase || '-'}</span>
                 <PhaseChip phase={item.phase} message={item.message} />
                 <span className="text-[11px] text-theme-text-tertiary">{formatRelativeAgeTime(item.deployedAt)}</span>
+                {item.duration && <span className="text-[11px] text-theme-text-tertiary">took {formatFluxDuration(item.duration)}</span>}
+                {item.kind === 'revision' && item.runs ? <span className="text-[11px] text-theme-text-tertiary">{item.runs} {item.runs === 1 ? 'run' : 'runs'}</span> : null}
+                {item.firstAt && item.firstAt !== item.deployedAt && <span className="text-[11px] text-theme-text-tertiary">first {formatRelativeAgeTime(item.firstAt)}</span>}
                 {item.initiatedBy && (
                   <span className="text-[11px] text-theme-text-tertiary">by {item.initiatedBy}</span>
                 )}
                 {showRollback && (
-                  <Tooltip
-                    content={blockedReason || `Roll back to revision ${item.revision || `#${item.id}`}`}
-                    delay={200}
-                    wrapperClassName="ml-auto"
-                  >
-                    {/* Two visually distinct states:
-                        - Enabled: low-emphasis baseline (opacity-40), brightens on row hover
-                        - Disabled (auto-sync on, or an entry with no source): full opacity but desaturated, cursor-not-allowed,
-                          no hover affordance — reads unambiguously as "not actionable, here's why" */}
-                    <button
-                      type="button"
-                      onClick={() => !blockedReason && onRollback?.(item)}
-                      disabled={!!blockedReason}
-                      aria-disabled={!!blockedReason}
-                      className={clsx(
-                        'rounded border px-1.5 py-0.5 text-[10px] transition-opacity',
-                        blockedReason
-                          ? 'cursor-not-allowed border-theme-border bg-theme-base text-theme-text-tertiary'
-                          : 'border-theme-border bg-theme-elevated text-theme-text-secondary opacity-40 hover:bg-theme-hover hover:text-theme-text-primary hover:opacity-100 focus-visible:opacity-100 group-hover:opacity-100'
-                      )}
+                  <>
+                    {descriptionId && <span id={descriptionId} className="sr-only">{blockedReason}</span>}
+                    <Tooltip
+                      preserveWords
+                      content={blockedReason || `Roll back to revision ${item.revision || `#${item.id}`}`}
+                      delay={200}
+                      wrapperClassName="ml-auto"
                     >
-                      Rollback
-                    </button>
-                  </Tooltip>
+                      {/* Two visually distinct states:
+                          - Enabled: low-emphasis baseline (opacity-40), brightens on row hover
+                          - Disabled (auto-sync on, or an entry with no source): full opacity but desaturated, cursor-not-allowed,
+                            no hover affordance — reads unambiguously as "not actionable, here's why" */}
+                      <button
+                        type="button"
+                        onClick={() => !blockedReason && onRollback?.(item)}
+                        aria-disabled={!!blockedReason}
+                        aria-describedby={descriptionId}
+                        className={clsx(
+                          'rounded border px-1.5 py-0.5 text-[10px] transition-opacity',
+                          blockedReason
+                            ? 'cursor-not-allowed border-theme-border bg-theme-base text-theme-text-tertiary'
+                            : 'border-theme-border bg-theme-elevated text-theme-text-secondary opacity-40 hover:bg-theme-hover hover:text-theme-text-primary hover:opacity-100 focus-visible:opacity-100 group-hover:opacity-100'
+                        )}
+                      >
+                        Rollback
+                      </button>
+                    </Tooltip>
+                  </>
                 )}
               </div>
               {sourceDisplay && (

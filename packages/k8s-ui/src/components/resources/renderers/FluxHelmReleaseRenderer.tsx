@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
-import { Package, Settings, CheckCircle2, History, FileCode2, GitBranch } from 'lucide-react'
+import { FluxHealthCheckExprs } from './FluxHealthCheckExprs'
+import { Package, Settings, CheckCircle2, History, FileCode2 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, ProblemAlerts, ResourceLink } from '../../ui/drawer-components'
 import { GitOpsStatusBadge, ManagedResourcesList, SyncCountdown } from '../../gitops'
@@ -7,6 +8,7 @@ import { fluxConditionsToGitOpsStatus, parseFluxInventory, type FluxCondition } 
 import { TimeValue } from '../../ui/ScheduleValue'
 import { getFluxDeployedRelease, getFluxHandledRequestToken, getFluxReleaseAttemptTime } from '../../../utils/flux-history'
 import { Tooltip } from '../../ui/Tooltip'
+import { Badge } from '../../ui/Badge'
 
 export interface FluxValuesReference {
   kind?: 'ConfigMap' | 'Secret'
@@ -77,14 +79,12 @@ export function FluxHelmReleaseRenderer({ data, onNavigate, renderValuesReferenc
   const values = spec.values || {}
   const valueKeys = Object.keys(values)
 
-  // Dependencies
-  const dependsOn: Array<{ name: string; namespace?: string }> = spec.dependsOn || []
-
   // Chart reference
   const chartRef = spec.chart?.spec || {}
   const sourceRef = chartRef.sourceRef || {}
 
   const lastRelease = getFluxDeployedRelease(data)
+  const deployedRevision = lastRelease?.chartVersion || status.lastAppliedRevision
 
   return (
     <>
@@ -134,23 +134,6 @@ export function FluxHelmReleaseRenderer({ data, onNavigate, renderValuesReferenc
           )}
         </PropertyList>
       </Section>
-
-      {/* Dependencies */}
-      {dependsOn.length > 0 && (
-        <Section title={`Dependencies (${dependsOn.length})`} icon={GitBranch}>
-          <div className="flex flex-wrap gap-1">
-            {dependsOn.map((dep, idx) => (
-              <ResourceLink
-                key={idx}
-                name={dep.name}
-                kind="helmreleases"
-                namespace={dep.namespace || data.metadata?.namespace || ''}
-                onNavigate={onNavigate}
-              />
-            ))}
-          </div>
-        </Section>
-      )}
 
       {/* Values */}
       {(valuesFrom.length > 0 || valueKeys.length > 0) && (
@@ -253,6 +236,8 @@ export function FluxHelmReleaseRenderer({ data, onNavigate, renderValuesReferenc
         </Section>
       )}
 
+      <FluxHealthCheckExprs exprs={spec.healthCheckExprs} />
+
       {/* Current Release */}
       {lastRelease && (
         <Section title="Current Release" icon={CheckCircle2}>
@@ -338,7 +323,7 @@ export function FluxHelmReleaseRenderer({ data, onNavigate, renderValuesReferenc
 
       {/* Revision info */}
       {(status.helmChart || status.lastAppliedRevision || status.lastAttemptedRevision || handledRequest) && (
-        <Section title="Revision Info" defaultExpanded={false}>
+        <Section title="Revision Info" defaultExpanded={true}>
           <PropertyList>
             {status.helmChart && (
               <Property label="Helm Chart" value={status.helmChart} />
@@ -347,7 +332,7 @@ export function FluxHelmReleaseRenderer({ data, onNavigate, renderValuesReferenc
               <Property label="Applied Revision" value={status.lastAppliedRevision} />
             )}
             {status.lastAttemptedRevision && (
-              <Property label="Attempted Revision" value={status.lastAttemptedRevision} />
+              <Property label="Attempted Revision" value={<><span className="break-words">{status.lastAttemptedRevision}</span>{deployedRevision && deployedRevision !== status.lastAttemptedRevision && <> <Badge severity="warning" size="sm">not the last successful apply</Badge></>}</>} />
             )}
             <Property label="Last handled manual request" value={handledRequest} />
           </PropertyList>

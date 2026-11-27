@@ -37,12 +37,16 @@ type authFakeProm struct {
 	queryCalls  int
 	rangeBody   string
 	queryBody   string // instant-query body; empty falls back to authVectorBody
+	// queryFn renders an instant query's body; "" falls through.
+	queryFn func(query string) string
 }
 
 func (f *authFakeProm) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	q := r.URL.Query()
+	// A real store reads the parameters from the URL or a POST body alike.
+	_ = r.ParseForm()
+	q := r.Form
 	switch r.URL.Path {
 	case "/api/v1/query":
 		if q.Get("query") == "up" {
@@ -54,6 +58,15 @@ func (f *authFakeProm) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if body == "" {
 			body = authVectorBody
 		}
+		// The charts' cluster scope check: a store with no cluster labels.
+		if strings.HasPrefix(q.Get("query"), "label_replace(") {
+			body = `{"status":"success","data":{"resultType":"vector","result":[]}}`
+		}
+		if f.queryFn != nil {
+			if rendered := f.queryFn(q.Get("query")); rendered != "" {
+				body = rendered
+			}
+		}
 		_, _ = w.Write([]byte(body))
 	case "/api/v1/query_range":
 		f.rangeParams = append(f.rangeParams, q)
@@ -62,6 +75,8 @@ func (f *authFakeProm) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			body = authMatrixBody
 		}
 		_, _ = w.Write([]byte(body))
+	case "/api/v1/label/__name__/values":
+		_, _ = w.Write([]byte(`{"status":"success","data":[]}`))
 	default:
 		http.NotFound(w, r)
 	}
@@ -88,13 +103,13 @@ func setupAuthFakeProm(t *testing.T) *authFakeProm {
 	t.Helper()
 	f := &authFakeProm{}
 	srv := httptest.NewServer(f)
-	Initialize(nil, nil, "auth-test")
+	Initialize(nil, nil, "auth-test", nil)
 	SetManualURL(srv.URL)
 	seedScopeCache(t)
 	t.Cleanup(func() {
 		srv.Close()
 		Reset()
-		Initialize(nil, nil, "")
+		Initialize(nil, nil, "", nil)
 	})
 	return f
 }
@@ -173,6 +188,8 @@ var metricsMatrix = []struct {
 	{"raw range query", "/prometheus/query?query=up", gateCall{"", "pods", "", "list"}},
 	{"raw instant query", "/prometheus/query?query=up&type=instant", gateCall{"", "pods", "", "list"}},
 	{"hpa", "/prometheus/hpa/alpha/web", gateCall{"autoscaling", "horizontalpodautoscalers", "alpha", "get"}},
+	{"substrate workerpool", "/prometheus/substrate/workerpools/alpha/pool", gateCall{"ate.dev", "workerpools", "alpha", "get"}},
+	{"substrate node", "/prometheus/substrate/nodes/worker-1", gateCall{"", "nodes", "", "get"}},
 }
 
 func TestMetricsRoutes_NoGatePassesThrough(t *testing.T) {

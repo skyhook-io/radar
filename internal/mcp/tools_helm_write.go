@@ -168,9 +168,9 @@ func refuseFluxManagedRelease(detail *helm.HelmReleaseDetail) error {
 
 // storedSensitiveValues reads every stored revision's values as the caller,
 // through the client the call is pinned to, and returns their sensitive values.
-func storedSensitiveValues(client *helm.Client, in manageHelmInput, user *pkgauth.User) map[string]bool {
+func storedSensitiveValues(ctx context.Context, client *helm.Client, in manageHelmInput, user *pkgauth.User) map[string]bool {
 	secrets := map[string]bool{}
-	if detail, readErr := client.GetReleaseAsUser(in.Namespace, in.Name, user, nil); readErr == nil {
+	if detail, readErr := client.GetReleaseAsUser(ctx, in.Namespace, in.Name, user, nil); readErr == nil {
 		for _, revision := range detail.History {
 			if v, readErr := client.GetValuesRevisionAsUser(in.Namespace, in.Name, true, revision.Revision, user); readErr == nil {
 				collectSensitiveValues(v.UserSupplied, secrets)
@@ -228,20 +228,38 @@ func manageHelm(ctx context.Context, _ *mcp.CallToolRequest, in manageHelmInput)
 		return nil, nil, err
 	}
 	operation := k8s.OperationContext()
-	config, clusterContext := k8s.GetConfigSnapshot()
-	ctx = context.WithValue(ctx, confirmationContextKey{}, clusterContext)
+	admission, err := k8s.CaptureServingConnection()
+	if err != nil {
+		return nil, nil, fmt.Errorf("nothing was changed: %w; retry after reconnecting", err)
+	}
+	ctx = admission.Bind(ctx)
+	ctx = context.WithValue(ctx, confirmationContextKey{}, admission.ID())
+	var confirmed *mutationConfirmation
+	if in.Confirm != "" {
+		confirmed, err = verifyMutationConfirmation(ctx, "uninstall_helm", in.Confirm)
+		if err != nil {
+			var mismatch *confirmationMismatch
+			if errors.As(err, &mismatch) && mismatch.contextChanged {
+				return nil, nil, fmt.Errorf("Radar's cluster connection changed since the preview; nothing was uninstalled. Check the current cluster, then omit confirm and review a fresh preview")
+			}
+			return nil, nil, fmt.Errorf("uninstall confirmation rejected; omit confirm and review a fresh preview")
+		}
+	}
 	if _, err := helm.CheckWritePermission(ctx, in.Namespace); err != nil {
 		return nil, nil, err
 	}
-	if config == nil || operation.Err() != nil || k8s.ActiveClusterContext() != clusterContext {
+	if admission.Connection().Config() == nil || operation.Err() != nil {
 		return nil, nil, fmt.Errorf("cluster connection changed or is unavailable; retry after reconnecting")
 	}
 	// Pin every read and write in this call to the same cluster, even if the
 	// local operator switches contexts while Helm downloads a chart.
-	client := helm.NewStandaloneClient(config)
+	client := helm.GetClient(ctx)
+	if client == nil {
+		return nil, nil, fmt.Errorf("Helm client not initialized")
+	}
 	user := userFromContext(ctx)
 	if in.Action != "install" {
-		detail, err := client.GetReleaseAsUser(in.Namespace, in.Name, user, mcpHelmObjectScope(ctx, ""))
+		detail, err := client.GetReleaseAsUser(ctx, in.Namespace, in.Name, user, mcpHelmObjectScope(ctx, ""))
 		if err != nil {
 			return nil, nil, fmt.Errorf("read release before %s: %w", in.Action, err)
 		}
@@ -253,6 +271,9 @@ func manageHelm(ctx context.Context, _ *mcp.CallToolRequest, in manageHelmInput)
 			return nil, nil, fmt.Errorf("release is %s; wait for the active Helm operation, or ask an operator to recover a stranded release before retrying", detail.Status)
 		}
 		if err := refuseFluxManagedRelease(detail); err != nil {
+			return nil, nil, err
+		}
+		if err := refuseControllerManagedRelease(in.Action, detail); err != nil {
 			return nil, nil, err
 		}
 		if in.Action == "uninstall" {
@@ -267,19 +288,8 @@ func manageHelm(ctx context.Context, _ *mcp.CallToolRequest, in manageHelmInput)
 			}
 			binding := string(bindingBytes)
 			if in.Confirm != "" {
-				confirmed, err := verifyMutationConfirmation(ctx, "uninstall_helm", in.Confirm)
-				if err != nil {
-					return nil, nil, fmt.Errorf("uninstall confirmation rejected; omit confirm and review a fresh preview")
-				}
-				if confirmed != binding {
+				if confirmed.Target != binding {
 					return nil, nil, fmt.Errorf("release changed since the preview; omit confirm and review a new preview")
-				}
-				// Helm stores the uninstalling status when it records the first hook run
-				// (or after hooks, with none). Until then, or if that write fails, the
-				// release still reads deployed and a retried confirm would pass the
-				// binding and start a second uninstall.
-				if !consumeMutationConfirmation(in.Confirm) {
-					return nil, nil, fmt.Errorf("this confirmation was already used; an uninstall may still be running, so inspect get_helm_release, then omit confirm for a fresh preview if needed")
 				}
 			} else {
 				preview, err := client.UninstallPreviewAsUser(in.Namespace, in.Name, user)
@@ -298,24 +308,28 @@ func manageHelm(ctx context.Context, _ *mcp.CallToolRequest, in manageHelmInput)
 			}
 		}
 	}
+	// Uninstall can purge history before Helm returns an error, so capture the
+	// values needed to redact that error while the revisions still exist.
+	var uninstallSecrets map[string]bool
+	if confirmed != nil {
+		uninstallSecrets = storedSensitiveValues(ctx, client, in, user)
+	}
 	if operation.Err() != nil {
 		return nil, nil, fmt.Errorf("cluster connection changed; retry on the intended cluster")
 	}
-	audit.Outcome = "failed_or_unconfirmed"
-	// Only Helm's own errors can echo stored values; Radar's refusals above
-	// can't, so they skip the extra reads. Uninstall can purge history before
-	// it fails, so its values are read first.
-	var uninstallSecrets map[string]bool
-	if in.Action == "uninstall" {
-		uninstallSecrets = storedSensitiveValues(client, in, user)
+	if confirmed != nil {
+		if err := confirmed.consumeForUninstall(ctx); err != nil {
+			return nil, nil, err
+		}
 	}
+	audit.Outcome = "failed_or_unconfirmed"
 	defer func() {
 		if err == nil {
 			return
 		}
 		secrets := uninstallSecrets
 		if secrets == nil {
-			secrets = storedSensitiveValues(client, in, user)
+			secrets = storedSensitiveValues(ctx, client, in, user)
 		}
 		err = &knownValuesError{err: err, secrets: secrets}
 	}()
@@ -380,7 +394,7 @@ func manageHelm(ctx context.Context, _ *mcp.CallToolRequest, in manageHelmInput)
 		if refused {
 			return nil, nil, fmt.Errorf("Helm %s refused before applying changes: %w; inspect get_helm_release; for source errors ask the Radar configuration owner to configure and confirm the release source", in.Action, err)
 		}
-		if in.Action == "uninstall" && uninstallPurgedDespiteError(client, in, user) {
+		if in.Action == "uninstall" && uninstallPurgedDespiteError(ctx, client, in, user) {
 			return nil, nil, fmt.Errorf("Helm uninstall removed the release and purged its history, then reported errors from a later step such as a post-delete hook: %w; the release can't be rolled back; resource deletion may still be in progress (finalizers), so check for leftover release and hook resources and external cleanup", err)
 		}
 		return nil, nil, fmt.Errorf("Helm %s failed: %w; for source errors ask the Radar configuration owner to configure the source and confirm it for this release; inspect get_helm_release before retrying because the operation may have partially changed the release", in.Action, err)
@@ -453,8 +467,8 @@ func helmRollbackPreviewResult(in manageHelmInput, preview *helm.MCPRollbackResu
 // uninstallPurgedDespiteError reports whether a failed uninstall still removed
 // the release: Helm purges history after deleting resources even when a later
 // post-delete hook fails, and returns that hook's error.
-func uninstallPurgedDespiteError(client *helm.Client, in manageHelmInput, user *pkgauth.User) bool {
-	_, err := client.GetReleaseAsUser(in.Namespace, in.Name, user, nil)
+func uninstallPurgedDespiteError(ctx context.Context, client *helm.Client, in manageHelmInput, user *pkgauth.User) bool {
+	_, err := client.GetReleaseAsUser(ctx, in.Namespace, in.Name, user, nil)
 	return errors.Is(err, driver.ErrReleaseNotFound)
 }
 
@@ -468,4 +482,34 @@ func helmUninstallPreviewResult(in manageHelmInput, status, token string, previe
 	addCappedList(result, "resources", preview.Delete)
 	addCappedList(result, "kept", preview.Kept)
 	return toJSONResult(result)
+}
+
+// refuseControllerManagedRelease refuses a write to a release a controller
+// other than Flux installs, naming it only when the caller can read it.
+func refuseControllerManagedRelease(action string, detail *helm.HelmReleaseDetail) error {
+	if c := detail.Controller; c != nil && c.Tool != "flux" {
+		return controllerRefusal(action, c)
+	}
+	if detail.Controller == nil && detail.ManagedByK3s {
+		return fmt.Errorf("release is managed by the k3s/RKE2 helm-controller, so Radar won't change it with Helm: a change made here is overwritten when its install Job reruns. The owning HelmChart's namespace is unreadable or access couldn't be checked; change the release through its HelmChart")
+	}
+	return nil
+}
+
+// controllerRefusal says where a release's controller wants the change made.
+func controllerRefusal(action string, c *helm.ReleaseController) error {
+	owner := fmt.Sprintf("release is managed by %s %s %s", c.Tool, c.Kind, c.Ref())
+	switch {
+	case action == "uninstall" && c.Addon != "":
+		return fmt.Errorf("%s, which k3s applies from the server manifest %q and re-applies if deleted; to remove it, start the k3s servers with --disable %s", owner, c.Addon, c.Addon)
+	case action == "uninstall":
+		return fmt.Errorf("%s; delete the %s instead (it would reinstall the release)", owner, c.Kind)
+	case c.ValuesRef != nil && c.ValuesRef.Exists != nil && *c.ValuesRef.Exists:
+		return fmt.Errorf("%s; change its values in %s %s/%s instead", owner, c.ValuesRef.Kind, c.ValuesRef.Namespace, c.ValuesRef.Name)
+	case c.ValuesRef != nil && c.ValuesRef.Exists != nil:
+		return fmt.Errorf("%s; create a %s %s/%s to change its values instead", owner, c.ValuesRef.Kind, c.ValuesRef.Namespace, c.ValuesRef.Name)
+	case c.ValuesRef != nil:
+		return fmt.Errorf("%s; change its values in %s %s/%s instead (create it if it does not exist)", owner, c.ValuesRef.Kind, c.ValuesRef.Namespace, c.ValuesRef.Name)
+	}
+	return fmt.Errorf("%s; change it through that %s instead", owner, c.Kind)
 }

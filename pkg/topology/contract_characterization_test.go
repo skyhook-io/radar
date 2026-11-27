@@ -33,7 +33,7 @@ import (
 // The characterization goldens record what the public topology functions
 // return today for one fixture cluster: the graph, then for every fixture
 // object the Related Resources, ManagedBy and delete preview production
-// computes for it, plus selected neighborhoods and a per-user projection.
+// computes for it, plus a per-user projection.
 // They pin behavior, not correctness — several recorded answers are known
 // defects. A change meant to leave public answers untouched keeps them
 // byte-identical; a change that alters them regenerates them with
@@ -366,6 +366,12 @@ func charCluster() *charFixture {
 	typed("", "PersistentVolume", "persistentvolumes", pv)
 	addSecret(&corev1.Secret{ObjectMeta: charMeta("team", "db-creds", nil)})
 
+	// A Longhorn Volume and the PV whose CSI handle names it.
+	lhPV := &corev1.PersistentVolume{ObjectMeta: charMeta("", "pv-lh-0", nil), Spec: corev1.PersistentVolumeSpec{PersistentVolumeSource: corev1.PersistentVolumeSource{CSI: &corev1.CSIPersistentVolumeSource{Driver: "driver.longhorn.io", VolumeHandle: "vol-lh-0"}}}}
+	p.pvs = append(p.pvs, lhPV)
+	typed("", "PersistentVolume", "persistentvolumes", lhPV)
+	dyn("longhorn.io", "v1beta2", "Volume", "volumes", true, charUnstructured("longhorn.io/v1beta2", "Volume", "longhorn-system", "vol-lh-0", nil, map[string]any{"numberOfReplicas": int64(3)}, nil))
+
 	// infra/agent: DaemonSet Pods on two Nodes.
 	agent := &appsv1.DaemonSet{ObjectMeta: charMeta("infra", "agent", nil), Spec: appsv1.DaemonSetSpec{Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "agent"}}}}
 	p.daemonSets = append(p.daemonSets, agent)
@@ -395,9 +401,18 @@ func charCluster() *charFixture {
 	dyn("kustomize.toolkit.fluxcd.io", "v1", "Kustomization", "kustomizations", true,
 		charUnstructured("kustomize.toolkit.fluxcd.io/v1", "Kustomization", "flux-system", "shop", nil, map[string]any{"sourceRef": map[string]any{"kind": "GitRepository", "name": "repo"}, "path": "./shop"},
 			inventory("shop_cart_apps_Deployment", "shop_redis_helm.toolkit.fluxcd.io_HelmRelease")),
-		charUnstructured("kustomize.toolkit.fluxcd.io/v1", "Kustomization", "flux-system", "platform", nil, map[string]any{"sourceRef": map[string]any{"kind": "GitRepository", "name": "repo"}, "path": "./platform"},
-			inventory("flux-system_shop_kustomize.toolkit.fluxcd.io_Kustomization")))
+		charUnstructured("kustomize.toolkit.fluxcd.io/v1", "Kustomization", "flux-system", "platform", nil, map[string]any{"sourceRef": map[string]any{"kind": "GitRepository", "name": "repo"}, "path": "./platform", "dependsOn": []any{map[string]any{"name": "infra"}}},
+			inventory("flux-system_shop_kustomize.toolkit.fluxcd.io_Kustomization")),
+		// flux-system/infra: platform waits for it through spec.dependsOn,
+		// and nothing else relates the two.
+		charUnstructured("kustomize.toolkit.fluxcd.io/v1", "Kustomization", "flux-system", "infra", nil, map[string]any{"sourceRef": map[string]any{"kind": "GitRepository", "name": "repo"}, "path": "./infra"}, inventory()))
 	dyn("source.toolkit.fluxcd.io", "v1", "GitRepository", "gitrepositories", true, charUnstructured("source.toolkit.fluxcd.io/v1", "GitRepository", "flux-system", "repo", nil, map[string]any{"url": "https://example.com/repo.git"}, nil))
+	// The artifact chain: an ExternalArtifact made by an ArtifactGenerator
+	// that composes the shared repository.
+	dyn("source.extensions.fluxcd.io", "v1beta1", "ArtifactGenerator", "artifactgenerators", true, charUnstructured("source.extensions.fluxcd.io/v1beta1", "ArtifactGenerator", "flux-system", "bundle", nil,
+		map[string]any{"sources": []any{map[string]any{"alias": "repo", "kind": "GitRepository", "name": "repo"}}}, nil))
+	dyn("source.toolkit.fluxcd.io", "v1", "ExternalArtifact", "externalartifacts", true, charUnstructured("source.toolkit.fluxcd.io/v1", "ExternalArtifact", "flux-system", "bundle-app", nil,
+		map[string]any{"sourceRef": map[string]any{"apiVersion": "source.extensions.fluxcd.io/v1beta1", "kind": "ArtifactGenerator", "name": "bundle"}}, nil))
 	dyn("helm.toolkit.fluxcd.io", "v2", "HelmRelease", "helmreleases", true, charUnstructured("helm.toolkit.fluxcd.io/v2", "HelmRelease", "shop", "redis",
 		map[string]string{"kustomize.toolkit.fluxcd.io/name": "shop", "kustomize.toolkit.fluxcd.io/namespace": "flux-system"},
 		map[string]any{"chart": map[string]any{"spec": map[string]any{"chart": "redis", "sourceRef": map[string]any{"kind": "HelmRepository", "name": "bitnami", "namespace": "flux-system"}}}}, nil))
@@ -517,7 +532,8 @@ type charCase struct {
 
 func charCases() []charCase {
 	return []charCase{
-		// The SSE broadcaster's relationship cache (internal/server/sse.go buildFullTopology).
+		// The all-namespace relationship graph's options, held fixed for the
+		// parity baseline.
 		{"sse-relationship-cache", charSSEOptions},
 		{"relationship-options", RelationshipBuildOptions},
 		{"resources-default", DefaultBuildOptions},
@@ -567,31 +583,6 @@ type charRootRecord struct {
 	DeletePreview *CascadeDeletePreview `json:"deletePreview"`
 }
 
-type charNeighborhoodRecord struct {
-	Root     string    `json:"root"`
-	Profile  Profile   `json:"profile"`
-	Hops     int       `json:"hops"`
-	MaxNodes int       `json:"maxNodes"`
-	Subgraph *Subgraph `json:"subgraph"`
-}
-
-// charNeighborhoodRoots are roots whose bounded neighborhoods depend on edge
-// order (BFS budget selection), so a reorder that leaves every other answer
-// alone still shows.
-var charNeighborhoodRoots = []ResourceRef{
-	{Kind: "Deployment", Group: "apps", Namespace: "shop", Name: "web"},
-	{Kind: "Application", Group: "argoproj.io", Namespace: "argocd", Name: "shop"},
-	{Kind: "Kustomization", Group: "kustomize.toolkit.fluxcd.io", Namespace: "flux-system", Name: "shop"},
-	{Kind: "Pod", Namespace: "shop", Name: "web-7d9f8-0"},
-	{Kind: "Node", Name: "node-a"},
-	{Kind: "CronJob", Group: "batch", Namespace: "team", Name: "nightly"},
-	{Kind: "GatewayClass", Group: "gateway.networking.k8s.io", Name: "envoy"},
-}
-
-func charRefKey(ref ResourceRef) string {
-	return resourceid.ResourceKey(ref.Group, ref.Kind, ref.Namespace, ref.Name)
-}
-
 // charRoots records what production computes for every fixture object: the
 // fetched-object Related Resources the drawer and AI context use (production
 // passes the URL's plural kind), ManagedBy from the object's own metadata,
@@ -612,23 +603,6 @@ func charRoots(f *charFixture, topo *Topology, idx *RelationshipsIndex) []charRo
 		})
 	}
 	sort.SliceStable(records, func(i, j int) bool { return records[i].Root < records[j].Root })
-	return records
-}
-
-func charNeighborhoods(topo *Topology, idx *RelationshipsIndex, dp DynamicProvider) []charNeighborhoodRecord {
-	var records []charNeighborhoodRecord
-	for _, root := range charNeighborhoodRoots {
-		for _, opts := range []NeighborhoodOptions{{Profile: ProfileAuto, Hops: 1}, {Profile: ProfileAll, Hops: 2}, {Profile: ProfileAll, Hops: 1, MaxNodes: 2}} {
-			sub := BuildNeighborhoodWithIndex(topo, root, opts, idx, dp)
-			if sub != nil {
-				// List order follows the builder's partly map-ordered edges;
-				// membership (which nodes the budget admitted) is the answer.
-				canonical := charGraph(&Topology{Nodes: sub.Nodes, Edges: sub.Edges})
-				sub.Nodes, sub.Edges = canonical.Nodes, canonical.Edges
-			}
-			records = append(records, charNeighborhoodRecord{Root: charRefKey(root), Profile: opts.Profile, Hops: opts.Hops, MaxNodes: opts.MaxNodes, Subgraph: sub})
-		}
-	}
 	return records
 }
 
@@ -686,10 +660,9 @@ func charRecord(t *testing.T, f *charFixture, opts BuildOptions) []byte {
 func charSnapshotRecord(t *testing.T, f *charFixture, topo *Topology, idx *RelationshipsIndex) []byte {
 	t.Helper()
 	return charJSON(t, struct {
-		Graph         Topology                 `json:"graph"`
-		Roots         []charRootRecord         `json:"roots"`
-		Neighborhoods []charNeighborhoodRecord `json:"neighborhoods"`
-	}{charGraph(topo), charRoots(f, topo, idx), charNeighborhoods(topo, idx, f.dynamic)})
+		Graph Topology         `json:"graph"`
+		Roots []charRootRecord `json:"roots"`
+	}{charGraph(topo), charRoots(f, topo, idx)})
 }
 
 // charProjection is a per-user projection as the REST drawer serves it: a
@@ -858,7 +831,7 @@ func TestTopologyCharacterizationKeepsDuplicatePairs(t *testing.T) {
 	if edges != 2 {
 		t.Fatalf("CronJob -> Job with two owner records: %d manages edges, want 2", edges)
 	}
-	rel := GetRelationships("cronjobs", "team", "nightly", topo, f.provider, f.dynamic)
+	rel := graphRelationships("cronjobs", "team", "nightly", topo, f.provider, f.dynamic)
 	children := 0
 	for _, child := range rel.Children {
 		if child.Kind == "Job" && child.Name == "nightly-28999" {

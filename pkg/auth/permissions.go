@@ -5,7 +5,7 @@ import (
 	"log"
 	"slices"
 	"sort"
-	"strings"
+	"strconv"
 	"sync"
 	"time"
 
@@ -32,13 +32,11 @@ type UserPermissions struct {
 	AllowedNamespaces []string // nil = all namespaces; see doc above
 	ExpiresAt         time.Time
 
-	// ContextName stamps the K8s context this entry was computed under.
-	// PermissionCache.Get refuses entries whose stamp doesn't match the
-	// cache's current context — this closes the cross-cluster authorization
-	// window between client-swap (PerformContextSwitch step 2) and
-	// post-switch invalidation. Without the stamp, an in-flight request
-	// mid-swap reads new-cluster data through old-cluster AllowedNamespaces.
-	ContextName string
+	// connection names the client the entry was discovered on. A reconnect,
+	// even under the same context name, can reach a cluster where this user
+	// has different access, so the cache hides entries from other connections
+	// from the moment the new client is installed, before any invalidation.
+	connection string
 
 	// canI caches per-(verb, group, resource, namespace) SubjectAccessReview
 	// results for this user. Used by the per-kind authorization gate that
@@ -80,16 +78,17 @@ func (p *UserPermissions) SetCanI(verb, group, resource, namespace string, allow
 
 // PermissionCache caches per-user permission lookups (thread-safe)
 type PermissionCache struct {
-	mu          sync.RWMutex
-	cache       map[string]*UserPermissions // keyed by cacheKey(username, groups)
-	ttl         time.Duration
-	contextName func() string // current K8s context; entries with a different stamp are invisible
-}
+	mu                sync.RWMutex
+	cache             map[string]*UserPermissions // keyed by cacheKey(username, groups)
+	ttl               time.Duration
+	currentConnection func() string
+	discoveryTimeout  time.Duration
 
-// cacheKeySep separates the username from the groups fingerprint in a cache
-// key. It is a control byte that cannot appear in a Kubernetes username or
-// group name, so a username's entries remain enumerable by splitting on it.
-const cacheKeySep = "\x00"
+	// flights holds the discoveries Resolve is running, keyed by identity and
+	// connection. Guarded by mu, so joining a run and finding its cached
+	// answer can't interleave.
+	flights map[string]*flight[*UserPermissions]
+}
 
 // cacheKey builds the composite cache key for an identity. The verdicts stored
 // in a UserPermissions entry are computed by SubjectAccessReviews that run with
@@ -98,25 +97,46 @@ const cacheKeySep = "\x00"
 // set inherit another identity's RBAC ceiling for the cache TTL. Groups are
 // canonicalized (sorted + deduped) so order and duplicates don't fork the key;
 // empty/nil groups is a valid, distinct identity (not a wildcard).
+//
+// Each name is length-prefixed rather than joined with a separator: names come
+// from identity-provider claims without any restriction on their bytes, so no
+// separator is guaranteed absent, and with one "alice" in group
+// "team<sep>prod" would key the same as "alice<sep>team" in group "prod".
 func cacheKey(username string, groups []string) string {
-	return username + cacheKeySep + groupsFingerprint(groups)
+	canonical := canonicalGroups(groups)
+	n := len(username) + 4
+	for _, g := range canonical {
+		n += len(g) + 4
+	}
+	b := make([]byte, 0, n)
+	b = appendKeyPart(b, username)
+	for _, g := range canonical {
+		b = appendKeyPart(b, g)
+	}
+	return string(b)
+}
+
+func appendKeyPart(b []byte, s string) []byte {
+	b = strconv.AppendInt(b, int64(len(s)), 10)
+	b = append(b, ':')
+	return append(b, s...)
 }
 
 // IdentityCacheKey is cacheKey for callers outside this package that cache
-// per-user SubjectAccessReview results.
+// per-user SubjectAccessReview results. The key is self-delimiting, so a
+// caller may append further fields to it.
 func IdentityCacheKey(username string, groups []string) string {
 	return cacheKey(username, groups)
 }
 
-// groupsFingerprint returns a deterministic fingerprint of a group set:
-// sorted, deduped, and joined. Empty-string elements are dropped (an empty
-// group is not a real principal), so nil, [], [""], and ["", ""] all
-// fingerprint to "" — one identity. The proxy path already trims empties, but
-// the OIDC path (internal/auth/oidc.go) does not; dropping them here makes the
-// no-groups collision explicit rather than accidental.
-func groupsFingerprint(groups []string) string {
+// canonicalGroups returns a group set sorted and deduped. Empty-string
+// elements are dropped (an empty group is not a real principal), so nil, [],
+// [""], and ["", ""] are all one identity. The proxy path already trims
+// empties, but the OIDC path (internal/auth/oidc.go) does not; dropping them
+// here makes the no-groups collision explicit rather than accidental.
+func canonicalGroups(groups []string) []string {
 	if len(groups) == 0 {
-		return ""
+		return nil
 	}
 	uniq := make([]string, 0, len(groups))
 	seen := make(map[string]struct{}, len(groups))
@@ -131,67 +151,69 @@ func groupsFingerprint(groups []string) string {
 		uniq = append(uniq, g)
 	}
 	sort.Strings(uniq)
-	return strings.Join(uniq, cacheKeySep)
+	return uniq
 }
 
-// NewPermissionCache creates a new permission cache with a 2-minute TTL.
-// Use WithContextName to wire cluster-identity stamping; without it, every
-// entry stamps as "" and the stamp check is a no-op (test-friendly default).
+// NewPermissionCache creates a new permission cache with a 2-minute TTL and a
+// 2-minute discovery budget. Without WithConnectionKey every entry belongs to
+// the empty connection.
 func NewPermissionCache() *PermissionCache {
 	return &PermissionCache{
-		cache:       make(map[string]*UserPermissions),
-		ttl:         2 * time.Minute,
-		contextName: func() string { return "" },
+		cache:            make(map[string]*UserPermissions),
+		ttl:              2 * time.Minute,
+		discoveryTimeout: 2 * time.Minute,
 	}
 }
 
-// WithContextName wires the cache to a context-name provider so entries
-// can be stamped at write time and verified at read time. Production code
-// passes k8s.GetContextName so a request straddling a context switch
-// can't be authorized by the previous cluster's RBAC.
-func (pc *PermissionCache) WithContextName(provider func() string) *PermissionCache {
-	if provider == nil {
-		provider = func() string { return "" }
-	}
+// WithConnectionKey binds permission entries to the client that discovered them.
+// A reconnect under the same context name can have different permissions.
+// provider returns the current connection's key; it runs under the cache's
+// lock, so it must be quick and must not call back into the cache. Without
+// one, every entry belongs to the empty connection.
+func (pc *PermissionCache) WithConnectionKey(provider func() string) *PermissionCache {
 	pc.mu.Lock()
 	defer pc.mu.Unlock()
-	pc.contextName = provider
+	pc.currentConnection = provider
 	return pc
 }
 
-// Get returns cached permissions for a user, or nil if not cached / expired
-// / stamped with a different context than the current one.
+func (pc *PermissionCache) connectionLocked() string {
+	if pc.currentConnection == nil {
+		return ""
+	}
+	return pc.currentConnection()
+}
+
+// Get returns the user's cached permissions, or nil when none are cached, they
+// expired, or they were discovered on another connection.
 func (pc *PermissionCache) Get(username string, groups []string) *UserPermissions {
 	pc.mu.RLock()
 	defer pc.mu.RUnlock()
+	return pc.liveLocked(cacheKey(username, groups), pc.connectionLocked())
+}
 
-	perms, ok := pc.cache[cacheKey(username, groups)]
-	if !ok || time.Now().After(perms.ExpiresAt) {
-		return nil
-	}
-	if pc.contextName != nil && perms.ContextName != pc.contextName() {
-		// Entry was computed against a different cluster — refuse it
-		// rather than authorizing the current cluster's reads with
-		// the previous cluster's RBAC.
+func (pc *PermissionCache) liveLocked(key, connection string) *UserPermissions {
+	perms := pc.cache[key]
+	if perms == nil || perms.connection != connection || time.Now().After(perms.ExpiresAt) {
 		return nil
 	}
 	return perms
 }
 
-// Set stores permissions for a user. Stamps the entry with the cache's
-// current context so cross-cluster requests can't see it. Opportunistically
-// evicts expired entries so a long-running deploy with churning users
-// doesn't accumulate.
+// Set stores an already-known entry for a user on the connection current at
+// the time of the call (discovery goes through Resolve), and evicts
+// expired entries so a long-running install with churning users doesn't
+// accumulate them.
 func (pc *PermissionCache) Set(username string, groups []string, perms *UserPermissions) {
 	pc.mu.Lock()
 	defer pc.mu.Unlock()
+	pc.setLocked(cacheKey(username, groups), pc.connectionLocked(), perms)
+}
 
+func (pc *PermissionCache) setLocked(key, connection string, perms *UserPermissions) {
 	now := time.Now()
 	perms.ExpiresAt = now.Add(pc.ttl)
-	if pc.contextName != nil {
-		perms.ContextName = pc.contextName()
-	}
-	key := cacheKey(username, groups)
+	perms.connection = connection
 	pc.cache[key] = perms
 
 	for k, p := range pc.cache {
@@ -204,11 +226,66 @@ func (pc *PermissionCache) Set(username string, groups []string, perms *UserPerm
 	}
 }
 
-// Invalidate removes all cached permissions (e.g., on context switch)
+// Invalidate removes all cached permissions (e.g., on context switch). A
+// caller after it never shares a discovery that began before it.
 func (pc *PermissionCache) Invalidate() {
 	pc.mu.Lock()
 	defer pc.mu.Unlock()
 	pc.cache = make(map[string]*UserPermissions)
+	pc.flights = nil
+}
+
+// Resolve shares discovery for concurrent misses on one identity and connection.
+// Discovery has its own budget so even a burst of short-lived requests can warm
+// the cache. A nil answer, expired budget or superseded connection fails closed.
+// Invalidate detaches a run from the cache, but its existing callers can still
+// use its answer while the connection is current. discover must honor its context.
+// connection must be captured together with the client discover reads; a caller
+// naming a connection that is no longer current fails closed at once. Without a
+// connection provider, use the empty connection key. ok is false exactly when
+// perms is nil.
+func (pc *PermissionCache) Resolve(ctx context.Context, username string, groups []string, connection string, discover func(context.Context) *UserPermissions) (*UserPermissions, bool) {
+	key := cacheKey(username, groups)
+	flightKey := string(appendKeyPart([]byte(key), connection))
+
+	pc.mu.Lock()
+	if ctx.Err() != nil || pc.connectionLocked() != connection {
+		pc.mu.Unlock()
+		return nil, false
+	}
+	if perms := pc.liveLocked(key, connection); perms != nil {
+		pc.mu.Unlock()
+		return perms, true
+	}
+	f := pc.flights[flightKey]
+	if f == nil {
+		f = startFlight(ctx, &pc.mu, "permission discovery", pc.discoveryTimeout, discover, func(f *flight[*UserPermissions], perms *UserPermissions) *UserPermissions {
+			current := pc.flights[flightKey] == f
+			if current {
+				delete(pc.flights, flightKey)
+			}
+			if pc.connectionLocked() != connection {
+				return nil
+			}
+			if current && perms != nil {
+				if live := pc.liveLocked(key, connection); live != nil {
+					return live
+				}
+				pc.setLocked(key, connection, perms)
+			}
+			return perms
+		})
+		if pc.flights == nil {
+			pc.flights = make(map[string]*flight[*UserPermissions])
+		}
+		pc.flights[flightKey] = f
+	} else {
+		f.join()
+	}
+	pc.mu.Unlock()
+
+	perms, ok := f.await(ctx, &pc.mu, nil)
+	return perms, ok && perms != nil
 }
 
 // DiscoverNamespaces checks which namespaces a user can access via SubjectAccessReview.

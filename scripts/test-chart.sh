@@ -104,9 +104,9 @@ else fail "pod template carries an RBAC checksum — got: $DEFAULT_CHECKSUM"; fi
 rbac_checksum "checksum/rbac — Secrets reads enabled" --set rbac.secrets=true
 SECRETS_CHECKSUM=$CHECKSUM
 assert_differs "$SECRETS_CHECKSUM" "$DEFAULT_CHECKSUM" "enabling Secrets and VictoriaMetrics reads rolls the pod"
-ADDED_RULES=$(yq -o=json -I=0 'select(.kind == "ClusterRole" and .metadata.name == "radar") | .rules | map(select(.apiGroups[0] == "operator.victoriametrics.com" or (.apiGroups[0] == "" and .resources[0] == "secrets" and .resourceNames == null)))' <<< "$OUT")
-assert_same "$ADDED_RULES" '[{"apiGroups":[""],"resources":["secrets"],"verbs":["get","list","watch"]},{"apiGroups":["operator.victoriametrics.com"],"resources":["vmagents","vmclusters","vmsingles"],"verbs":["get","list","watch"]}]' "enabling Secrets adds exactly the Secrets and VictoriaMetrics read rules"
-REMAINING_RULES=$(yq -o=json -I=0 'select(.kind == "ClusterRole" and .metadata.name == "radar") | .rules | map(select(.apiGroups[0] != "operator.victoriametrics.com" and (.apiGroups[0] != "" or .resources[0] != "secrets" or .resourceNames != null)))' <<< "$OUT")
+ADDED_RULES=$(yq -o=json -I=0 'select(.kind == "ClusterRole" and .metadata.name == "radar") | .rules | map(select(.apiGroups[0] == "operator.victoriametrics.com" or (.apiGroups[0] == "metallb.io" and .resources[0] == "bgppeers") or (.apiGroups[0] == "" and .resources[0] == "secrets" and .resourceNames == null)))' <<< "$OUT")
+assert_same "$ADDED_RULES" '[{"apiGroups":[""],"resources":["secrets"],"verbs":["get","list","watch"]},{"apiGroups":["operator.victoriametrics.com"],"resources":["vmagents","vmclusters","vmsingles"],"verbs":["get","list","watch"]},{"apiGroups":["metallb.io"],"resources":["bgppeers"],"verbs":["get","list","watch"]}]' "enabling Secrets adds exactly the Secrets, MetalLB BGPPeer and VictoriaMetrics read rules"
+REMAINING_RULES=$(yq -o=json -I=0 'select(.kind == "ClusterRole" and .metadata.name == "radar") | .rules | map(select(.apiGroups[0] != "operator.victoriametrics.com" and (.apiGroups[0] != "metallb.io" or .resources[0] != "bgppeers") and (.apiGroups[0] != "" or .resources[0] != "secrets" or .resourceNames != null)))' <<< "$OUT")
 assert_same "$REMAINING_RULES" "$DEFAULT_RULES" "enabling Secrets leaves every other collector rule unchanged"
 rbac_checksum "checksum/rbac — Secrets reads turned back off" --set rbac.secrets=false
 assert_differs "$CHECKSUM" "$SECRETS_CHECKSUM"         "disabling Secrets and VictoriaMetrics reads rolls the pod"
@@ -437,6 +437,40 @@ echo
 render "OSS mode (cloud disabled): no cloud RBAC at all"
 assert_not_contains 'name: radar-cluster-read$'                 "no cluster-read outside cloud mode"
 assert_not_contains 'name: radar-cloud-viewer-cluster-read$'    "no tier bindings outside cloud mode"
+echo
+
+render "the stock Cloud owner gets Argo CD actions by default" $CLOUD
+assert_contains 'name: radar-owner-access-argocd$'                     "write role rendered"
+assert_contains 'name: radar:owner-access:argocd$'         "owner-only write binding rendered"
+echo
+
+render "explicit false disables the Cloud owner write grant on upgrade" $CLOUD --is-upgrade --set cloud.defaultRbac.integrationWrite.argocd.owner=false
+assert_not_contains 'name: radar-owner-access-argocd$'                 "no write role"
+assert_not_contains 'name: radar:owner-access:argocd$'     "no owner write binding"
+echo
+
+render "legacy values (integrationWrite absent) follow the default: on" $CLOUD --is-upgrade --set cloud.defaultRbac.integrationWrite=null
+assert_contains 'name: radar-owner-access-argocd$'                     "absent map inherits the grant"
+echo
+
+render "malformed integrationWrite map cannot fall back to the grant" $CLOUD --set-string cloud.defaultRbac.integrationWrite=false --skip-schema-validation
+assert_not_contains 'name: radar-owner-access-argocd$'                 "invalid integrationWrite map stays off"
+echo
+
+render "malformed argocd map cannot fall back to the grant" $CLOUD --set-string cloud.defaultRbac.integrationWrite.argocd=false --skip-schema-validation
+assert_not_contains 'name: radar-owner-access-argocd$'                 "invalid argocd map stays off"
+echo
+
+render "string false must not enable integration writes" $CLOUD --set-string cloud.defaultRbac.integrationWrite.argocd.owner=false --skip-schema-validation
+assert_not_contains 'name: radar-owner-access-argocd$'                 "string-false write grant stays off"
+echo
+
+render "string false must not enable the owner tier write binding" $CLOUD --set cloud.defaultRbac.integrationWrite.argocd.owner=true --set-string cloud.defaultRbac.owner=false --skip-schema-validation
+assert_not_contains 'name: radar-owner-access-argocd$'                 "disabled owner tier has no write grant"
+echo
+
+render "string false must not enable integration write collections" $CLOUD --set cloud.defaultRbac.integrationWrite.argocd.owner=true --set rbac.crdGroups.argo=false --set-string rbac.crdGroups.all=false --skip-schema-validation
+assert_not_contains 'name: radar-owner-access-argocd$'                 "disabled collections have no write grant"
 echo
 
 if [[ $FAIL -eq 0 ]]; then

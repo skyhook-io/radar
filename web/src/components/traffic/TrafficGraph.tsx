@@ -15,17 +15,33 @@ import {
   type EdgeMouseHandler,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import ELK from 'elkjs/lib/elk.bundled.js'
-import type { AggregatedFlow } from '../../types'
+import type { ELK } from 'elkjs/lib/elk.bundled.js'
+import type { AggregatedFlow, TrafficPortSource } from '../../types'
 import { clsx } from 'clsx'
 import { X, ArrowRight, Globe, Server, Activity, Puzzle, Crosshair } from 'lucide-react'
+import { GraphExportButton, MiddleEllipsis, PaneLoader } from '@skyhook-io/k8s-ui'
 import { isClusterAddon, type AddonMode } from './TrafficView'
 import { SEVERITY_BADGE, SEVERITY_DOT, SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-colors'
 import { getNamespaceColor } from '../../utils/traffic-colors'
 import { Tooltip } from '../ui/Tooltip'
-import { isRateBasedSource, isExternalKind, requestRateOf, errorRateOf, formatRate, displayVolume, latencyWeightOf, edgesOnPort, protocolLabel, type TrafficFocus } from './trafficFilters'
+import { TrafficData } from './TrafficData'
+import { describeTrafficNode } from './traffic-export'
+import { dataByProtocol, protocolsOf, throughputLabel, totalDataByProtocol, protocolName, isRateBasedSource, isExternalKind, requestRateOf, errorRateOf, formatRate, formatConnections, formatVolume, MAX_VISIBLE_PORTS, displayVolume, latencyWeightOf, edgesOnPort, protocolLabel, portLabel, type TrafficFocus } from './trafficFilters'
 
-const elk = new ELK()
+// ELK is 1.5 MB; load it with the first traffic layout, not with the app.
+let elkPromise: Promise<ELK> | null = null
+function loadElk(): Promise<ELK> {
+  elkPromise ??= import('elkjs/lib/elk.bundled.js')
+    .then(({ default: ELKImpl }) => new ELKImpl())
+    .catch((err) => {
+      // Let a later layout try again where the browser refetches failed
+      // modules. Chromium caches the failure until reload, so there the
+      // graph stays unavailable until the user reloads.
+      elkPromise = null
+      throw err
+    })
+  return elkPromise
+}
 
 // ELK layout options for traffic graph
 const elkOptions = {
@@ -66,26 +82,20 @@ interface TrafficGraphProps {
   onFocus?: (focus: TrafficFocus) => void
   /** The focused node, which is not offered as a focus again. */
   focusedId?: string
+  /** Whether the layout engine failed to load, in which case the graph draws
+   *  nothing and the view lists the connections in its place. */
+  onLayoutUnavailable: (unavailable: boolean) => void
+  /** Seconds the byte figures cover, so an edge measured only in bytes can be
+   *  labelled with its throughput. */
+  windowSeconds: number
+  /** Saves an exported image instead of a browser download (desktop app). */
+  onDownloadBlob?: (blob: Blob, filename: string) => void
 }
 
 // Phase 2.1: Calculate edge width based on connection count (log scale)
 function getEdgeWidth(connections: number): number {
   // 1K -> 1.5px, 10K -> 2.5px, 100K -> 3.5px, 1M -> 4.5px, 10M -> 5.5px
   return Math.min(6, Math.max(1.5, Math.log10(Math.max(connections, 1000)) - 1.5))
-}
-
-// Phase 2.2: Format connection counts for display
-function formatConnections(count: number): string {
-  if (count >= 1_000_000_000) return `${(count / 1_000_000_000).toFixed(1)}B`
-  if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`
-  if (count >= 1_000) return `${(count / 1_000).toFixed(0)}K`
-  return count.toString()
-}
-
-// A volume in the source's own unit: a rate to two significant places for a
-// rate-based source, a whole count otherwise.
-function formatVolume(volume: number, isRateBased: boolean): string {
-  return isRateBased ? formatRate(volume) : formatConnections(volume)
 }
 
 function formatLatency(ms: number): string {
@@ -147,6 +157,8 @@ function StatusDistributionBar({ counts }: { counts: Record<string, number> }) {
 interface PortInfo {
   port: number
   connections: number
+  /** Set when no edge observed this port: taken from a Service, or, on port 0, several Service ports. */
+  portSource?: TrafficPortSource
 }
 
 interface TrafficNodeData extends Record<string, unknown> {
@@ -184,10 +196,9 @@ const SERVICE_CATEGORY_COLORS: Record<string, { bg: string; border: string; dot:
 const NODE_WIDTH = 180
 const NODE_BASE_HEIGHT = 56 // Base height without ports
 const NODE_PORT_HEIGHT = 18 // Height per port row
-const MAX_VISIBLE_PORTS = 4 // Maximum ports to show before "+N more"
 
 // Custom node component
-function TrafficNode({ data }: { data: TrafficNodeData }) {
+export function TrafficNode({ data }: { data: TrafficNodeData }) {
   const isExternal = isExternalKind(data.kind)
   const isInternet = data.kind === 'Internet'
   const isAddonInternet = data.kind === 'AddonInternet' // Separate internet for addon traffic
@@ -248,10 +259,15 @@ function TrafficNode({ data }: { data: TrafficNodeData }) {
           />
         )}
         <div className="flex-1 min-w-0">
-          <div className={clsx(
-            'text-sm font-medium truncate',
-            isAddonInternet ? 'text-purple-300' : isInternet ? 'text-sky-300' : (isAddon || isAddonNode) ? 'text-purple-200' : hasNamespaceColor ? 'text-white' : 'text-theme-text-primary'
-          )}>{data.label}</div>
+          {/* Middle-cut: workloads of one release share a long prefix and differ only at the end.
+              MiddleEllipsis exposes only the cut text, so screen readers get the full name instead. */}
+          <span className="sr-only">{data.label}</span>
+          <div aria-hidden="true">
+            <MiddleEllipsis text={data.label} title={data.label} className={clsx(
+              'text-sm font-medium',
+              isAddonInternet ? 'text-purple-300' : isInternet ? 'text-sky-300' : (isAddon || isAddonNode) ? 'text-purple-200' : hasNamespaceColor ? 'text-white' : 'text-theme-text-primary'
+            )} />
+          </div>
           {data.namespace ? (
             <div className={clsx(
               'text-xs truncate',
@@ -287,15 +303,15 @@ function TrafficNode({ data }: { data: TrafficNodeData }) {
         </div>
       )}
       {/* Ports section */}
-      {data.ports && data.ports.filter(p => p.port !== 0).length > 0 && (
+      {data.ports && data.ports.filter(p => portLabel(p.port, p.portSource) !== null).length > 0 && (
         <div className="mt-1.5 space-y-0.5">
-          {data.ports.filter(p => p.port !== 0).slice(0, MAX_VISIBLE_PORTS).map((portInfo) => (
+          {data.ports.filter(p => portLabel(p.port, p.portSource) !== null).slice(0, MAX_VISIBLE_PORTS).map((portInfo) => (
             <div key={portInfo.port} className="flex items-center justify-between gap-1 text-xs">
               <span className={clsx(
                 'font-mono',
                 (hasNamespaceColor || isAddonNode) ? 'text-cyan-300' : 'text-blue-600 dark:text-blue-300'
               )}>
-                :{portInfo.port}
+                :{portLabel(portInfo.port, portInfo.portSource)}
               </span>
               {/* A port serving traffic with no HTTP has no request rate to show, and
                   "0" beside the port reads as an idle port rather than an unmeasured
@@ -314,18 +330,18 @@ function TrafficNode({ data }: { data: TrafficNodeData }) {
               )}
             </div>
           ))}
-          {data.ports.filter(p => p.port !== 0).length > MAX_VISIBLE_PORTS && (
+          {data.ports.filter(p => portLabel(p.port, p.portSource) !== null).length > MAX_VISIBLE_PORTS && (
             <div className={clsx(
               'text-xs',
               (hasNamespaceColor || isAddonNode) ? 'text-white/50' : 'text-theme-text-tertiary'
             )}>
-              +{data.ports.filter(p => p.port !== 0).length - MAX_VISIBLE_PORTS} more
+              +{data.ports.filter(p => portLabel(p.port, p.portSource) !== null).length - MAX_VISIBLE_PORTS} more
             </div>
           )}
         </div>
       )}
       {/* Total connections (only if no ports shown, or all ports are 0) */}
-      {(!data.ports || data.ports.filter(p => p.port !== 0).length === 0) && data.totalConnections != null && data.totalConnections > 0 && (
+      {(!data.ports || data.ports.filter(p => portLabel(p.port, p.portSource) !== null).length === 0) && data.totalConnections != null && data.totalConnections > 0 && (
         <div className="mt-1">
           <span className={clsx(
             'text-xs truncate',
@@ -346,7 +362,8 @@ function TrafficNode({ data }: { data: TrafficNodeData }) {
 // Legend component
 function TrafficLegend() {
   return (
-    <div className="absolute bottom-2 left-2 bg-theme-surface border border-theme-border rounded-lg p-2.5 text-xs z-10 shadow-lg max-w-xs">
+    // Clears the graph controls, which sit in the same corner.
+    <div className="absolute bottom-2 left-14 bg-theme-surface border border-theme-border rounded-lg p-2.5 text-xs z-10 shadow-lg max-w-xs">
       <div className="font-medium text-theme-text-primary mb-2">Legend</div>
       <div className="space-y-1.5">
         <div className="flex items-center gap-2">
@@ -424,14 +441,6 @@ interface EdgeData {
   flow?: AggregatedFlow
 }
 
-// Format bytes for display
-function formatBytes(bytes: number): string {
-  if (bytes >= 1_000_000_000) return `${(bytes / 1_000_000_000).toFixed(1)} GB`
-  if (bytes >= 1_000_000) return `${(bytes / 1_000_000).toFixed(1)} MB`
-  if (bytes >= 1_000) return `${(bytes / 1_000).toFixed(1)} KB`
-  return `${bytes} B`
-}
-
 // Details panel component
 function DetailsPanel({
   selection,
@@ -453,31 +462,37 @@ function DetailsPanel({
   const isNode = selection.type === 'node'
   const nodeData = isNode ? (selection.data as TrafficNodeData) : null
   const edgeData = !isNode ? (selection.data as EdgeData) : null
+  const edgeDataFigures = edgeData?.flow ? dataByProtocol(edgeData.flow) : []
+  const edgeProtocolKeys = edgeData?.flow ? protocolsOf(edgeData.flow) : []
+  const edgeProtocols = edgeProtocolKeys.map(protocolName).join(' + ')
+  const edgeL7 = edgeData?.flow?.l7Protocol
+  const distinctL7 = edgeL7 && edgeL7.toLowerCase() !== 'mixed' && !edgeProtocolKeys.some(p => p.toLowerCase() === edgeL7.toLowerCase())
 
   // Find related flows for node
   const relatedFlows = isNode
     ? flows.filter(f => {
         const sourceId = f.source.namespace ? `${f.source.namespace}/${f.source.name}` : f.source.name
         const destId = f.destination.namespace ? `${f.destination.namespace}/${f.destination.name}` : f.destination.name
-        return sourceId === selection.id || destId === selection.id
+        return (f.source.kind !== 'SkipEdge' && sourceId === selection.id) ||
+          (f.destination.kind !== 'SkipEdge' && destId === selection.id)
       })
     : []
 
   // Categorize flows by direction
   const incomingFlows = relatedFlows.filter(f => {
     const destId = f.destination.namespace ? `${f.destination.namespace}/${f.destination.name}` : f.destination.name
-    return destId === selection.id
+    return f.destination.kind !== 'SkipEdge' && destId === selection.id
   })
   const outgoingFlows = relatedFlows.filter(f => {
     const sourceId = f.source.namespace ? `${f.source.namespace}/${f.source.name}` : f.source.name
-    return sourceId === selection.id
+    return f.source.kind !== 'SkipEdge' && sourceId === selection.id
   })
 
   // Compute aggregate stats for node
   const nodeStats = isNode ? {
-    totalBytes: relatedFlows.reduce((sum, f) => sum + f.bytesSent + f.bytesRecv, 0),
+    data: totalDataByProtocol(relatedFlows),
     protocols: relatedFlows.reduce((acc, f) => {
-      const proto = f.protocol?.toUpperCase() || 'TCP'
+      const proto = protocolName(f.protocol || 'tcp')
       acc[proto] = (acc[proto] || 0) + displayVolume(f, isRateBased)
       return acc
     }, {} as Record<string, number>),
@@ -617,12 +632,12 @@ function DetailsPanel({
             </div>
 
             {/* Stats grid */}
-            {nodeStats && (nodeStats.totalBytes > 0 || nodeStats.lastSeen || nodeStats.totalRequests > 0) && (
+            {nodeStats && (nodeStats.data.some(e => e.sent > 0 || e.recv > 0) || nodeStats.lastSeen || nodeStats.totalRequests > 0) && (
               <div className="grid grid-cols-2 gap-2">
-                {nodeStats.totalBytes > 0 && (
+                {nodeStats.data.some(e => e.sent > 0 || e.recv > 0) && (
                   <div className="p-2 rounded bg-theme-elevated text-xs">
                     <div className="text-theme-text-tertiary">Data transferred</div>
-                    <div className="text-theme-text-primary font-medium">{formatBytes(nodeStats.totalBytes)}</div>
+                    <div className="text-theme-text-primary font-medium"><TrafficData entries={nodeStats.data} /></div>
                   </div>
                 )}
                 {nodeStats.flowCount > 1 && (
@@ -664,7 +679,7 @@ function DetailsPanel({
                         .map(([proto, count]) => (
                           <span key={proto} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-theme-bg text-theme-text-secondary">
                             <span className="font-medium">{proto}</span>
-                            <span className="text-theme-text-tertiary">{formatVolume(count, isRateBased)}{isRateBased ? '/s' : ''}</span>
+                            {!(isRateBased && !count) && <span className="text-theme-text-tertiary">{formatVolume(count, isRateBased)}{isRateBased ? '/s' : ''}</span>}
                           </span>
                         ))}
                     </div>
@@ -741,13 +756,13 @@ function DetailsPanel({
                         ) : (
                           <ArrowRight className="h-3 w-3 text-theme-text-tertiary shrink-0" />
                         )}
-                        {flow.port !== 0 && (
-                          <span className="text-blue-400 font-mono">:{flow.port}</span>
+                        {portLabel(flow.port, flow.portSource) && (
+                          <span className="text-blue-400 font-mono">:{portLabel(flow.port, flow.portSource)}</span>
                         )}
                       </div>
                       <div className="flex items-center gap-2 text-[10px]">
-                        <span className="px-1 py-0.5 rounded bg-theme-bg text-theme-text-tertiary uppercase">
-                          {flow.protocol || 'tcp'}
+                        <span className="px-1 py-0.5 rounded bg-theme-bg text-theme-text-tertiary">
+                          {protocolName(flow.protocol || 'tcp')}
                         </span>
                         {flow.connections > 0 && (
                           <span className="text-theme-text-secondary">
@@ -756,7 +771,7 @@ function DetailsPanel({
                         )}
                         {(flow.bytesSent > 0 || flow.bytesRecv > 0) && (
                           <span className="text-theme-text-tertiary">
-                            {formatBytes(flow.bytesSent + flow.bytesRecv)}
+                            <TrafficData entries={dataByProtocol(flow)} compact />
                           </span>
                         )}
                         {flow.errorCount != null && flow.errorCount > 0 && (
@@ -793,13 +808,13 @@ function DetailsPanel({
                         <span className="text-theme-text-primary truncate flex-1">
                           {flow.destination.name}
                         </span>
-                        {flow.port !== 0 && (
-                          <span className="text-blue-400 font-mono">:{flow.port}</span>
+                        {portLabel(flow.port, flow.portSource) && (
+                          <span className="text-blue-400 font-mono">:{portLabel(flow.port, flow.portSource)}</span>
                         )}
                       </div>
                       <div className="flex items-center gap-2 text-[10px]">
-                        <span className="px-1 py-0.5 rounded bg-theme-bg text-theme-text-tertiary uppercase">
-                          {flow.protocol || 'tcp'}
+                        <span className="px-1 py-0.5 rounded bg-theme-bg text-theme-text-tertiary">
+                          {protocolName(flow.protocol || 'tcp')}
                         </span>
                         {flow.connections > 0 && (
                           <span className="text-theme-text-secondary">
@@ -808,7 +823,7 @@ function DetailsPanel({
                         )}
                         {(flow.bytesSent > 0 || flow.bytesRecv > 0) && (
                           <span className="text-theme-text-tertiary">
-                            {formatBytes(flow.bytesSent + flow.bytesRecv)}
+                            <TrafficData entries={dataByProtocol(flow)} compact />
                           </span>
                         )}
                         {flow.errorCount != null && flow.errorCount > 0 && (
@@ -845,16 +860,18 @@ function DetailsPanel({
               </div>
 
               <div className="grid grid-cols-2 gap-2 text-xs">
-                {edgeData.port !== 0 && (
+                {portLabel(edgeData.port, edgeData.flow?.portSource) && (
                   <div className="p-2 rounded bg-theme-elevated">
                     <div className="text-theme-text-tertiary">Port</div>
-                    <div className="text-theme-text-primary font-medium">{edgeData.port}</div>
+                    <div className="text-theme-text-primary font-medium">{portLabel(edgeData.port, edgeData.flow?.portSource)}</div>
                   </div>
                 )}
                 <div className="p-2 rounded bg-theme-elevated">
                   <div className="text-theme-text-tertiary">Protocol</div>
-                  <div className="text-theme-text-primary font-medium uppercase">
-                    {protocolLabel(edgeData.flow?.l7Protocol, edgeData.protocol)}
+                  <div className="text-theme-text-primary font-medium">
+                    {edgeProtocolKeys.length > 1
+                      ? distinctL7 ? protocolLabel(protocolName(edgeL7), edgeProtocols) : edgeProtocols
+                      : protocolLabel(edgeData.flow?.l7Protocol && protocolName(edgeData.flow.l7Protocol), protocolName(edgeData.protocol))}
                   </div>
                 </div>
                 {(!isRateBased || edgeData.connections > 0) && (
@@ -869,10 +886,10 @@ function DetailsPanel({
                   </div>
                 )}
                 {edgeData.flow && (edgeData.flow.bytesSent > 0 || edgeData.flow.bytesRecv > 0) && (
-                  <div className="p-2 rounded bg-theme-elevated">
-                    <div className="text-theme-text-tertiary">Data</div>
+                  <div className={clsx('p-2 rounded bg-theme-elevated', edgeDataFigures.length > 1 && 'col-span-2')}>
+                    <div className="text-theme-text-tertiary">{edgeDataFigures.length > 1 ? 'Data by protocol' : 'Data'}</div>
                     <div className="text-theme-text-primary font-medium">
-                      {formatBytes(edgeData.flow.bytesSent + edgeData.flow.bytesRecv)}
+                      <TrafficData entries={edgeDataFigures} directional explainOverlap />
                     </div>
                   </div>
                 )}
@@ -1139,7 +1156,7 @@ function trafficEdgeId(sourceId: string, destId: string, flow: AggregatedFlow): 
   return `${sourceId}->${destId}:${flow.port}${flow.directionUnknown ? ':unoriented' : ''}`
 }
 
-export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups = false, serviceCategories, addonMode = 'show', trafficSource = '', selection: viewSelection, onSelectionChange, onFocus, focusedId }: TrafficGraphProps) {
+export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups = false, serviceCategories, addonMode = 'show', trafficSource = '', selection: viewSelection, onSelectionChange, onFocus, focusedId, onLayoutUnavailable, windowSeconds, onDownloadBlob }: TrafficGraphProps) {
   // Beyla is rate-based too: its Connections field carries requests per second,
   // not a connection count, so it needs the same label Istio gets.
   const isRateBased = isRateBasedSource(trafficSource)
@@ -1147,6 +1164,7 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
   const [layoutedNodes, setLayoutedNodes] = useState<Node<TrafficNodeData>[]>([])
   const [layoutedEdges, setLayoutedEdges] = useState<Edge[]>([])
   const [selection, setSelection] = useState<Selection | null>(null)
+  const [elkUnavailable, setElkUnavailable] = useState(false)
 
   // Store flow data by edge ID for click handler lookup
   const flowByEdgeId = useMemo(() => {
@@ -1158,7 +1176,11 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
       const destId = flow.destination.namespace
         ? `${flow.destination.namespace}/${flow.destination.name}`
         : flow.destination.name
-      const edgeId = trafficEdgeId(sourceId, destId, flow)
+      const edgeId = flow.destination.kind === 'AddonGroupTarget'
+        ? `${sourceId}->addon-group`
+        : flow.source.kind === 'AddonGroupSource'
+          ? `addon-group->${destId}`
+          : trafficEdgeId(sourceId, destId, flow)
       map.set(edgeId, flow)
     })
     return map
@@ -1174,6 +1196,8 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
 
     // Track primary port for each node (most common destination port)
     const nodePorts = new Map<string, Map<number, number>>() // nodeId -> port -> connection count
+    const observedPorts = new Set<string>() // `${nodeId}|${port}` seen on an edge that observed it
+    const multiplePorts = new Set<string>() // nodes an edge reached on several possible Service ports
 
     // Count connections per node
     flows.forEach((flow) => {
@@ -1184,24 +1208,23 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
         ? `${flow.destination.namespace}/${flow.destination.name}`
         : flow.destination.name
 
-      connectionCounts.set(sourceId, (connectionCounts.get(sourceId) || 0) + 1)
-      connectionCounts.set(destId, (connectionCounts.get(destId) || 0) + 1)
-
-      // Sum total connections
-      // Display-only sums: the unrounded rate for a rate-based source.
+      // A placeholder retains volume only for the endpoint outside the virtual edge.
       const volume = displayVolume(flow, isRateBased)
-      totalConnections.set(sourceId, (totalConnections.get(sourceId) || 0) + volume)
-      totalConnections.set(destId, (totalConnections.get(destId) || 0) + volume)
+      if (flow.source.kind !== 'SkipEdge') {
+        connectionCounts.set(sourceId, (connectionCounts.get(sourceId) || 0) + 1)
+        totalConnections.set(sourceId, (totalConnections.get(sourceId) || 0) + volume)
+        if (flow.connections >= hotPathThreshold && hotPathThreshold > 0) hotNodes.add(sourceId)
+      }
+      if (flow.destination.kind !== 'SkipEdge') {
+        connectionCounts.set(destId, (connectionCounts.get(destId) || 0) + 1)
+        totalConnections.set(destId, (totalConnections.get(destId) || 0) + volume)
 
-      // Track ports for destination nodes
-      if (!nodePorts.has(destId)) nodePorts.set(destId, new Map())
-      const portCounts = nodePorts.get(destId)!
-      portCounts.set(flow.port, (portCounts.get(flow.port) || 0) + volume)
-
-      // Track hot path nodes (Phase 2.3)
-      if (flow.connections >= hotPathThreshold && hotPathThreshold > 0) {
-        hotNodes.add(sourceId)
-        hotNodes.add(destId)
+        if (!nodePorts.has(destId)) nodePorts.set(destId, new Map())
+        const portCounts = nodePorts.get(destId)!
+        portCounts.set(flow.port, (portCounts.get(flow.port) || 0) + volume)
+        if (!flow.portSource) observedPorts.add(`${destId}|${flow.port}`)
+        if (flow.portSource === 'serviceMultiple') multiplePorts.add(destId)
+        if (flow.connections >= hotPathThreshold && hotPathThreshold > 0) hotNodes.add(destId)
       }
     })
 
@@ -1211,7 +1234,10 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
       if (!ports || ports.size === 0) return []
       const portList: PortInfo[] = []
       ports.forEach((connections, port) => {
-        portList.push({ port, connections })
+        const portSource: TrafficPortSource | undefined = port === 0
+          ? (multiplePorts.has(nodeId) ? 'serviceMultiple' : undefined)
+          : (observedPorts.has(`${nodeId}|${port}`) ? undefined : 'service')
+        portList.push({ port, connections, ...(portSource && { portSource }) })
       })
       // Sort by connection count descending
       return portList.sort((a, b) => b.connections - a.connections)
@@ -1380,8 +1406,10 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
       // A source that measures rates has no count for an edge with no requests on
       // it — a plain TCP conversation, or one whose direction is unknown. Printing
       // "0/s" there reads as no traffic, on an edge that may be carrying megabytes.
-      const countLabel = isRateBased && !flow.connections ? '' : connStr
-      const edgeLabel = [l7Label + countLabel, latencyLabel, errorLabel]
+      const bytesOnly = isRateBased && !flow.connections
+      const countLabel = bytesOnly ? '' : connStr
+      const throughput = bytesOnly ? throughputLabel(flow, windowSeconds) : ''
+      const edgeLabel = [throughput || l7Label + countLabel, latencyLabel, errorLabel]
         .join('')
         .replace(/^ · /, '')
 
@@ -1435,13 +1463,14 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
       addonGroupEdge, // Pass this for adding after group is created
       addonGroupOutEdge, // Pass this for adding group → kubernetes edge
     }
-  }, [flows, hotPathThreshold, showNamespaceGroups, serviceCategories, addonMode, isRateBased, connLabel])
+  }, [flows, hotPathThreshold, showNamespaceGroups, serviceCategories, addonMode, isRateBased, connLabel, windowSeconds])
 
   // Apply ELK layout
-  const applyLayout = useCallback(async () => {
+  const applyLayout = useCallback(async (claim: () => boolean) => {
     if (rawNodes.length === 0) {
       setLayoutedNodes([])
       setLayoutedEdges([])
+      setElkUnavailable(false)
       return
     }
 
@@ -1464,8 +1493,21 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
     const groupEdgeInfo = addonGroupEdge
     const groupOutEdgeInfo = addonGroupOutEdge
 
+    let elk: ELK
+    try {
+      elk = await loadElk()
+    } catch (error) {
+      if (!claim()) return
+      // A grid of the raw nodes would drop the grouped-addon edges and read as
+      // the real traffic, so the view lists the connections instead.
+      console.error('ELK failed to load:', error)
+      setElkUnavailable(true)
+      return
+    }
+
     try {
       const layoutResult = await elk.layout(elkGraph)
+      if (!claim()) return
 
       // Index ELK's positioned children by id once — a .find() per node here is
       // O(nodes²) and bites on dense traffic graphs.
@@ -1560,7 +1602,7 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
           target: 'addon-group',
           type: 'smoothstep',
           animated: isHotEdge,
-          label: isRateBased ? `${formatRate(displayVolume(groupFlow, isRateBased))}/s` : formatConnections(connections),
+          label: isRateBased && !connections ? throughputLabel(groupFlow, windowSeconds) : isRateBased ? `${formatRate(displayVolume(groupFlow, isRateBased))}/s` : formatConnections(connections),
           labelBgStyle: {
             fill: '#581c87', // purple-900
             fillOpacity: 0.9,
@@ -1594,7 +1636,7 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
           target: targetId,
           type: 'smoothstep',
           animated: isHotEdge,
-          label: isRateBased ? `${formatRate(displayVolume(groupFlow, isRateBased))}/s` : formatConnections(connections),
+          label: isRateBased && !connections ? throughputLabel(groupFlow, windowSeconds) : isRateBased ? `${formatRate(displayVolume(groupFlow, isRateBased))}/s` : formatConnections(connections),
           labelBgStyle: {
             fill: '#581c87', // purple-900
             fillOpacity: 0.9,
@@ -1620,7 +1662,9 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       setLayoutedNodes(finalNodes as any)
       setLayoutedEdges(finalEdges)
+      setElkUnavailable(false)
     } catch (error) {
+      if (!claim()) return
       console.error('ELK layout error:', error)
       // Fallback to simple layout
       const positionedNodes = rawNodes.map((node, index) => ({
@@ -1632,13 +1676,38 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
       }))
       setLayoutedNodes(positionedNodes)
       setLayoutedEdges(rawEdges)
+      setElkUnavailable(false)
     }
-  }, [rawNodes, rawEdges, addonMode, addonGroupEdge, addonGroupOutEdge, hotPathThreshold, isRateBased])
+  }, [rawNodes, rawEdges, addonMode, addonGroupEdge, addonGroupOutEdge, hotPathThreshold, isRateBased, windowSeconds])
 
-  // Run layout when flows change
+  // Run layout when flows change. Runs install their results in the order
+  // they started, so a fast-changing graph still lands each layout instead of
+  // a newer run discarding every one in flight; a run that finishes after a
+  // newer one already installed, or after unmount, is dropped.
+  const layoutRunRef = useRef(0)
+  const installedRunRef = useRef(0)
+  const mountedRef = useRef(true)
   useEffect(() => {
-    applyLayout()
+    mountedRef.current = true
+    return () => { mountedRef.current = false }
+  }, [])
+  useEffect(() => {
+    const run = ++layoutRunRef.current
+    applyLayout(() => {
+      if (!mountedRef.current || run < installedRunRef.current) return false
+      installedRunRef.current = run
+      return true
+    })
   }, [applyLayout])
+
+  // Unmounting clears the report: a remounted graph starts over and says so itself.
+  useEffect(() => {
+    onLayoutUnavailable(elkUnavailable)
+    return () => onLayoutUnavailable(false)
+  }, [elkUnavailable, onLayoutUnavailable])
+
+  // The first layout waits for the ELK chunk; later ones keep the drawn graph.
+  const firstLayoutPending = rawNodes.length > 0 && layoutedNodes.length === 0 && !elkUnavailable
 
   const [nodes, setNodes, onNodesChange] = useNodesState(layoutedNodes)
   const [edges, setEdges, onEdgesChange] = useEdgesState(layoutedEdges)
@@ -1716,6 +1785,10 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
     onSelectionChange?.(null)
   }, [onSelectionChange])
 
+  // Still mounted so later refreshes retry the engine where the browser
+  // refetches a failed module.
+  if (elkUnavailable) return null
+
   return (
     <div className="w-full h-full relative">
       <ReactFlow
@@ -1740,9 +1813,13 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
         nodesConnectable={false}
       >
         <Background />
-        <Controls />
+        <Controls>
+          <GraphExportButton defaultFilename="traffic" title="Export traffic" onDownloadBlob={onDownloadBlob} describeNode={describeTrafficNode} />
+        </Controls>
         <FitViewOnChange shouldFitViewRef={shouldFitViewRef} layoutedNodes={layoutedNodes} />
       </ReactFlow>
+
+      {firstLayoutPending && <PaneLoader label="Laying out traffic…" className="absolute inset-0" />}
 
       {/* Legend */}
       <TrafficLegend />

@@ -41,5 +41,8 @@ it('states that conditions have not been reported', () => {
   act(() => root.render(<CNPGOperatorConditions conditions={[]} />))
   expect(host.textContent).toContain('No conditions reported')
   expect(host.querySelector('button')!.getAttribute('aria-expanded')).toBe('false')
+  act(() => host.querySelector('button')!.click())
+  expect(host.textContent).toContain('The operator has not reported status.conditions.')
+  expect(host.querySelector('section')!.className.split(' ').sort()).toEqual('mx-4 mb-4 rounded-xl border border-theme-border bg-theme-surface px-4 py-3 shadow-theme-sm'.split(' ').sort())
   act(() => root.unmount())
 })

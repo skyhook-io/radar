@@ -1,0 +1,6 @@
+[
+  {"pvcName":"restored","pvcNamespace":"recovery","pvName":"restored-pv","restoreMethod":"CSISnapshot","snapshotDataMoved":true,"snapshotDataMovementInfo":{"dataMover":"velero","uploaderType":"kopia","snapshotHandle":"repo-snapshot","operationID":"download-op","Phase":"InProgress"}},
+  {"restoreMethod":"PodVolumeRestore","snapshotDataMoved":false,"pvrInfo":{"snapshotHandle":"fs-snapshot","uploaderType":"kopia","podName":"app","podNamespace":"recovery","volumeName":"data"}},
+  {"pvcName":"native","pvcNamespace":"recovery","restoreMethod":"NativeSnapshot","snapshotDataMoved":false,"nativeSnapshotInfo":{"snapshotHandle":"snap-123","volumeType":"gp3","volumeAZ":"us-east-1a","iops":"3000"}},
+  {"pvcName":"csi","pvcNamespace":"recovery","restoreMethod":"CSISnapshot","snapshotDataMoved":false,"csiSnapshotInfo":{"snapshotHandle":"csi-handle","driver":"ebs.csi.aws.com","vscName":"content-123"}}
+]

@@ -1,18 +1,21 @@
 import { useState, useMemo, useCallback } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { fetchJSON, isForbiddenError, isKindSyncFailed, isStillLoadingError, useCapabilities, useNamespaceCapabilities, useResources, useSecretCertExpiry, useTopPodMetrics, useTopNodeMetrics, useBulkDeleteResources, useBulkRestartWorkloads, useBulkScaleWorkloads, useAudit, useIssues, fetchResourceList, isListTooLargeError, isUnretryableReadError } from '../../api/client'
+import { fetchJSON, useNamespaceScope, isForbiddenError, isKindSyncFailed, isStillLoadingError, useCapabilities, useNamespaceCapabilities, useResources, useSecretCertExpiry, useTopPodMetrics, useTopNodeMetrics, useBulkDeleteResources, useBulkRestartWorkloads, useBulkScaleWorkloads, useAuditBadges, useIssues, fetchResourceList, isListTooLargeError, isUnretryableReadError, useRadarFeature } from '../../api/client'
 import { isBadgeWorthy } from '../../utils/auditBadges'
 import { ISSUE_SEVERITY_RANK } from '@skyhook-io/k8s-ui'
 import type { Issue, AuditBadgeMessage } from '@skyhook-io/k8s-ui'
 import { stripBasename } from '../../api/config'
-import { createListRefetchInterval, type ResourceListResult } from '../../api/resourceLists'
+import { createListRefetchInterval, listSyncPending, type ResourceListResult } from '../../api/resourceLists'
 import { useAPIResources } from '../../api/apiResources'
 import { useConnection } from '../../context/ConnectionContext'
 import { getSecretStoreProviderType } from '@skyhook-io/k8s-ui'
 import { usePinnedKinds } from '../../hooks/useFavorites'
 import { useResourceCounts } from '../../hooks/useResourceCounts'
 import { useCNPGSidebarWorkspace } from '../cnpg/useCNPGSidebarWorkspace'
+import { useVeleroSidebarWorkspace } from '../velero/useVeleroSidebarWorkspace'
+import { isVeleroBackupKind } from '../velero/routes'
+import { useMergedSidebarWorkspaces } from '../workspace/sidebar'
 import { renderResourceKindList, resourceKindListMode, useResourceHostFeatures } from '../../integrations/resourceHosts'
 import { useOpenLogs, useOpenWorkloadLogs } from '../dock'
 import {
@@ -23,11 +26,13 @@ import {
   intersectWorkloadWrites,
   hasCuratedColumns,
 } from '@skyhook-io/k8s-ui'
-import type { Capabilities, ResourceQueryResult, WorkloadWritePermissions } from '@skyhook-io/k8s-ui'
+import type { APIResource, Capabilities, ResourceQueryResult, WorkloadWritePermissions } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
 import { apiVersionToGroup, kindToPluralWithGroup, type NavigateToResource } from '../../utils/navigation'
 import { CreateResourceDialog } from '../shared/CreateResourceDialog'
 import { getSkeletonYaml } from '../../utils/skeleton-yaml'
+import { EmptyNamespaceHint } from './EmptyNamespaceHint'
+import { emptyNamespaceHint } from './namespaceHint'
 
 interface ResourcesViewProps {
   namespaces: string[]
@@ -70,6 +75,13 @@ function resourceCountKey(kind: NonNullable<SelectedKindInfo>): string {
   return kind.group ? `${kind.group}/${kind.kind}` : kind.kind
 }
 
+function namespacedKind(apiResources: APIResource[] | undefined, kind: SelectedKindInfo): boolean {
+  if (!kind) return false
+  const match = apiResources?.find(r => r.name === kind.name && r.group === kind.group)
+    ?? CORE_RESOURCES.find(r => r.name === kind.name && r.group === kind.group)
+  return match?.namespaced ?? false
+}
+
 function hasResourceCount(counts: Record<string, number> | undefined, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(counts ?? {}, key)
 }
@@ -78,6 +90,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   const location = useLocation()
   const navigate = useNavigate()
   const { connection } = useConnection()
+  const { data: namespaceScope } = useNamespaceScope()
 
   const { data: capabilities, isPending: capabilitiesPending } = useCapabilities()
   const hostFeatures = useResourceHostFeatures()
@@ -124,6 +137,8 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
     return result
   }, [issuesData])
   const cnpgSidebarWorkspace = useCNPGSidebarWorkspace({ apiResources, namespaces, withMetrics: selectedKind?.group === 'postgresql.cnpg.io' })
+  const veleroSidebarWorkspace = useVeleroSidebarWorkspace({ apiResources })
+  const sidebarCategoryWorkspaces = useMergedSidebarWorkspaces(cnpgSidebarWorkspace, veleroSidebarWorkspace)
   const workloadWrites = namespaces.length === 0
     ? capabilities?.workloadWrites
     : namespaces.length === 1
@@ -161,7 +176,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   // kind shared across groups doesn't bleed findings across the two lists. Only
   // "badge-worthy" findings count (reference-integrity / lifecycle) — posture
   // and best-practice nags fire near-universally and would just be noise.
-  const audit = useAudit(namespaces)
+  const audit = useAuditBadges(namespaces)
   const auditBadges = useMemo(() => {
     if (!selectedKind || !audit.data?.findings) return undefined
     const wantGroup = selectedKind.group
@@ -182,7 +197,9 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
     return map
   }, [audit.data?.findings, audit.data?.checks, selectedKind, selectedKindCanonical])
 
-  const selectedCountKey = selectedKind ? resourceCountKey(selectedKind) : ''
+  const selectedCountKey = selectedKind && selectedKindCanonical
+    ? resourceCountKey({ ...selectedKind, kind: selectedKindCanonical })
+    : ''
   const selectedCount = selectedCountKey ? countsData?.counts[selectedCountKey] : undefined
   const selectedCountKnown = selectedCountKey ? hasResourceCount(countsData?.counts, selectedCountKey) : false
   const selectedCountUnavailable = selectedCountKey ? countsData?.unavailable?.includes(selectedCountKey) ?? false : false
@@ -234,6 +251,8 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
 
   const loadingInterval = useMemo(() => createListRefetchInterval(120000), [])
 
+  const selectedKindListsAsTable = resourceKindListMode(selectedKind, hostFeatures, capabilitiesPending) === 'table'
+
   // Fetch full data only for the selected kind
   const selectedKindQuery = useQuery({
     queryKey: ['resources', selectedKind?.name, isSelectedCrd ? selectedKind?.group : '', namespaces],
@@ -249,7 +268,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
         summary: selectedKindSummaryServed, table: wantsTable, signal,
       })
     },
-    enabled: !!selectedKind && !selectedKindQueryBlocked && resourceKindListMode(selectedKind, hostFeatures, capabilitiesPending) === 'table',
+    enabled: !!selectedKind && !selectedKindQueryBlocked && selectedKindListsAsTable,
     staleTime: 30000,
     // Safety net — SSE k8s_event drives near-real-time invalidation. A list
     // whose namespaces are still loading is re-read until they finish.
@@ -280,6 +299,21 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       dataUpdatedAt: selectedKindQuery.dataUpdatedAt,
     }
   }, [selectedKind, selectedKindQueryBlocked, waitingForGuardCount, selectedKindQuery.data?.items, selectedKindQuery.data?.coverage, selectedKindQuery.isLoading, selectedKindQuery.error, selectedKindQuery.refetch, selectedKindQuery.dataUpdatedAt])
+
+  // An empty filtered list reads as "there are none" unless it says what the
+  // filter hides. Under --namespace-scope the cache holds no other namespace,
+  // so there is nothing to count. The All-namespaces counts are the query the
+  // sidebar runs at All, and it runs only while a filtered list is empty.
+  const selectedKindRows = selectedKindQueryResult && !selectedKindQueryResult.isLoading && !largeListGuard ? selectedKindQueryResult.data?.length : undefined
+  const selectedKindNamespaced = namespacedKind(apiResources, selectedKind)
+  const wantsEmptyHint = namespaces.length > 0 && selectedKindRows === 0 && selectedKindNamespaced &&
+    namespaceScope?.cacheScoped === false && !listSyncPending(selectedKindQueryResult?.coverage) && selectedKindListsAsTable
+  const { data: allNamespaceCounts } = useResourceCounts([], { enabled: wantsEmptyHint })
+  const emptyHint = useMemo(() => {
+    if (!wantsEmptyHint || !selectedCountKey) return null
+    const total = hasResourceCount(allNamespaceCounts?.counts, selectedCountKey) ? allNamespaceCounts?.counts[selectedCountKey] : undefined
+    return emptyNamespaceHint(total, allNamespaceCounts?.coverage?.[selectedCountKey])
+  }, [wantsEmptyHint, selectedCountKey, allNamespaceCounts])
 
   // Metrics
   const { data: topPodMetrics } = useTopPodMetrics({ enabled: topPodMetricsEnabled, namespaces })
@@ -318,6 +352,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   // Dock actions
   const openLogs = useOpenLogs()
   const openWorkloadLogs = useOpenWorkloadLogs()
+  const { support: replicaSetLogSupport } = useRadarFeature('replicaSetLogs')
 
   // Bulk delete
   const bulkDeleteMutation = useBulkDeleteResources()
@@ -345,9 +380,9 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   const [createDialogYaml, setCreateDialogYaml] = useState('')
   const [createDialogTitle, setCreateDialogTitle] = useState<string | undefined>()
 
-  const handleCreateResource = useCallback((kind: { name: string; kind: string; group: string } | null) => {
+  const handleCreateResource = useCallback((kind: SelectedKindInfo, initialYaml?: string) => {
     if (kind?.kind) {
-      setCreateDialogYaml(getSkeletonYaml(kind.kind, kind.group))
+      setCreateDialogYaml(initialYaml ?? getSkeletonYaml(kind.kind, kind.group))
       setCreateDialogTitle(`Create ${kind.kind}`)
     } else {
       setCreateDialogYaml('')
@@ -380,6 +415,9 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       rememberedKindSearch={rememberedKindSearch}
       onKindFiltersChange={onKindFiltersChange}
       onApplyNamespacesToAllSections={onApplyNamespacesToAllSections}
+      emptyScopeHint={emptyHint && selectedKindCanonical
+        ? <EmptyNamespaceHint hint={emptyHint} namespaces={namespaces} kind={selectedKindCanonical} onShowAll={namespaceScope?.canClearNamespace ? onClearNamespaces : undefined} />
+        : undefined}
       // Injected data
       apiResources={apiResources}
       // Lightweight counts for sidebar (replaces 233 parallel queries)
@@ -395,7 +433,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
         ? { kind: selectedKind.name, reason: 'too-many', count: typeof selectedKindQuery.error.data?.count === 'number' ? selectedKindQuery.error.data.count : undefined, limit: selectedKindRowLimit, namespaces }
         : largeListGuard}
       onSelectedKindChange={setSelectedKind}
-      sidebarCategoryWorkspaces={cnpgSidebarWorkspace}
+      sidebarCategoryWorkspaces={sidebarCategoryWorkspaces}
       topPodMetrics={topPodMetrics}
       topNodeMetrics={topNodeMetrics}
       certExpiry={certExpiry}
@@ -422,11 +460,13 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       // Dock actions
       onOpenLogs={openLogs}
       onOpenWorkloadLogs={openWorkloadLogs}
+      replicaSetLogs={replicaSetLogSupport === 'supported'}
       // Create resource
       onCreateResource={handleCreateResource}
       renderKindView={renderKindView}
       // Bulk operations
-      onBulkDelete={(items, options) => bulkDeleteMutation.mutate({ items, force: options?.force }, { onSuccess: results => { if (!results.some(({ result }) => result.outcomeUnknown)) options?.onSuccess?.() } })}
+      // A Velero backup is deleted one at a time, through Velero (Delete backup in its drawer).
+      onBulkDelete={isVeleroBackupKind(selectedKind?.name, selectedKind?.group) ? undefined : (items, options) => bulkDeleteMutation.mutate({ items, force: options?.force }, { onSuccess: results => { if (!results.some(({ result }) => result.outcomeUnknown)) options?.onSuccess?.() } })}
       isBulkDeleting={bulkDeleteMutation.isPending}
       onBulkRestart={canBulkRestartSelectedKind ? (items, options) => bulkRestartMutation.mutate({ items }, { onSuccess: options?.onSuccess }) : undefined}
       isBulkRestarting={canBulkRestartSelectedKind && bulkRestartMutation.isPending}

@@ -17,7 +17,7 @@ A backup destination, a WAL archive and a destination for one ScheduledBackup me
 
 ## Where it lives
 
-CNPG stays inside **Resources**; there is no new global navigation item. When the `postgresql.cnpg.io` CRDs are discovered, the Resources sidebar's CloudNativePG group gains a **Views** block above its exact kinds:
+CNPG stays inside **Resources**; there is no new global navigation item. When the `postgresql.cnpg.io` CRDs are discovered, the Resources sidebar's **Integrations** block lists it as **Databases**, with "CloudNativePG" beneath and the Clusters badge on the row; opened, it lists these destinations, with its other kinds folded under **Other kinds**:
 
 | Destination | Route | Job | Detail home for |
 |---|---|---|---|
@@ -31,7 +31,7 @@ Above the Clusters table a summary counts what CNPG is configured to do: **No ba
 
 Destination badges count **affected clusters**, not findings, and follow the namespace filter. Outside the CloudNativePG views the Clusters badge counts without disk use or measured replication lag, so it reads as a lower bound (≥N) and its zero as unknown (–).
 
-**The Cluster kind's list is the Clusters view.** `/resources/clusters?apiGroup=postgresql.cnpg.io`, where the sidebar, favorites, search and links from Issues, Home, Checks and investigations land, renders the Clusters view in place of the generic table; its drawer, history and Back behave as for any kind. `/cnpg` stays the workspace's own home. A Radar without these views, or whose capabilities could not be read, keeps the generic table; on the first capabilities load the page waits rather than flashing the table. Cluster API's `clusters` kind (`cluster.x-k8s.io`) is untouched. **Create**, on both routes, guides name, namespace, instances and volume size into a strict-create manifest, so it can never update an existing Cluster.
+**The Cluster kind's list is the Clusters view.** `/resources/clusters?apiGroup=postgresql.cnpg.io`, where the sidebar, favorites, search and links from Issues, Home, Checks and investigations land, renders the Clusters view in place of the generic table; its drawer, history and Back behave as for any kind. The sidebar treats **Clusters** as that kind's list: it is highlighted on that route, pins to Favorites as the kind, and the kind is not listed again under **Other kinds**. `/cnpg` stays the workspace's own home. A Radar without these views, or whose capabilities could not be read, keeps the generic table, and the sidebar lists the kind under **Other kinds**, where that table stays reachable; on the first capabilities load the page waits rather than flashing the table. Cluster API's `clusters` kind (`cluster.x-k8s.io`) is untouched. **Create**, on both routes, guides name, namespace, instances and volume size into a strict-create manifest, so it can never update an existing Cluster.
 
 **What "every Cluster" means.** Every Cluster the caller may list, in the namespaces Radar can see for them: the namespace filter, the caller's namespace visibility and Radar's own watch scope. Namespaces Radar's cache does not hold read as not read, and the count reads ≥N — never an empty list or a total that looks exact.
 
@@ -153,7 +153,7 @@ The three WAL measures overlap and are shown side by side, never added up. Disk 
 | Instances: node, QoS, running vs desired image, start times | Instance Pods | `list pods` | "Pods not readable" |
 | Zone | `topology.kubernetes.io/zone` on each Node | cluster-scoped `get nodes` | Zones unknown, never "single zone" |
 | Failover quorum | `FailoverQuorum` (1.27+): the recorded sync configuration, not the operator's verdict; shows whether R + W > N | `get failoverquorums` | Not installed, or not found (quorum failover off) |
-| Disruption budgets | PDBs owned by the Cluster | `list poddisruptionbudgets` | `enablePDB: false` is the declared state, not a fault |
+| Disruption budgets | PDBs owned by the Cluster; the primary budget is read against the instance Pods and their Nodes: expected (healthy HA, the operator switches over before a drain), single instance (a drain waits), or not the idle state, with the reason | `list poddisruptionbudgets`; the reading also needs `list pods` + `list nodes`, as Issues does | `enablePDB: false` is the declared state, not a fault. Without Pods or Nodes the budget shows only its counts. While the only standby sits on a cordoned or draining node, as after a switchover off one, it reads as not idle until the node is uncordoned. When the caller can read the operator's leader Lease and it has expired, an expected budget reads as not idle: nothing would switch over |
 | Primary Lease | `Lease` of the Cluster's name (1.30+) | `get leases` | Absent before 1.30, not a fault |
 | Operator leader | `db9c8771.cnpg.io` Lease in the operator's namespace | `list deployments` + `get leases` | Operator namespace unknown |
 | Cluster Jobs | Jobs owned by the Cluster, by `cnpg.io/jobRole` | `list jobs` | "No access to Jobs" |
@@ -188,6 +188,9 @@ Certificate expiry is also an Issues-engine finding. A certificate you renew war
 **Access.** `get clusters`; CNPG series need the Prometheus pod-metrics grant (`get pods` in the namespace), and the volume chart `list persistentvolumeclaims` plus the PVC chart grant. Without Prometheus the response is `source: "none"` with the reason.
 
 ## Actions
+
+For Radar Cloud, see the [standard Owner grants](../deploy/helm/radar/README.md#cloud-owner-permissions)
+for administering existing CloudNativePG clusters.
 
 Capabilities (`GET .../capabilities` on Clusters, ScheduledBackups and Poolers) return the facts a confirmation is bound to and each action's verdict: allowed, or a reason naming the missing grant or the blocking state. Each action has its own state guard. There is deliberately no shared "no ready instance" refusal: lifting a fence, rehydrating and restarting are the way out of exactly that state. Actions are POSTs to `.../actions/{action}`, made with the caller's impersonated client.
 

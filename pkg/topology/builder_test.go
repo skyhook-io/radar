@@ -185,84 +185,6 @@ func (m *rolloutDynamicProvider) IsCRDGVR(gvr schema.GroupVersionResource) bool 
 	return gvr == m.gvr
 }
 
-func TestArgoWorkflowTemplateRefsFromWorkflowSpec(t *testing.T) {
-	obj := map[string]any{
-		"spec": map[string]any{
-			"workflowTemplateRef": map[string]any{"name": "main"},
-			"templates": []any{
-				map[string]any{
-					"name": "dag",
-					"dag": map[string]any{
-						"tasks": []any{
-							map[string]any{"name": "build", "templateRef": map[string]any{"name": "shared", "clusterScope": true}},
-							map[string]any{"name": "test", "templateRef": map[string]any{"name": "shared", "clusterScope": true}},
-						},
-					},
-				},
-				map[string]any{
-					"name": "steps",
-					"steps": []any{
-						[]any{map[string]any{"name": "cleanup", "templateRef": map[string]any{"name": "cleanup"}}},
-					},
-				},
-			},
-		},
-	}
-
-	refs := argoWorkflowTemplateRefsFromWorkflowSpec(obj, "spec")
-	if len(refs) != 3 {
-		t.Fatalf("expected 3 deduped refs, got %#v", refs)
-	}
-	want := []argoWorkflowTemplateRef{
-		{name: "main"},
-		{name: "shared", clusterScope: true},
-		{name: "cleanup"},
-	}
-	for i := range want {
-		if refs[i] != want[i] {
-			t.Fatalf("ref %d = %#v, want %#v", i, refs[i], want[i])
-		}
-	}
-}
-
-func TestAddArgoWorkflowTemplateEdges(t *testing.T) {
-	edges := addArgoWorkflowTemplateEdges(nil, "workflow/demo/run", "demo", []argoWorkflowTemplateRef{
-		{name: "local"},
-		{name: "global", clusterScope: true},
-		{name: "missing"},
-	}, map[string]string{
-		"demo/local": "workflowtemplate/demo/local",
-	}, map[string]string{
-		"global": "clusterworkflowtemplate//global",
-	})
-
-	if len(edges) != 2 {
-		t.Fatalf("expected 2 edges, got %#v", edges)
-	}
-	if edges[0].Source != "workflowtemplate/demo/local" || edges[0].Target != "workflow/demo/run" || edges[0].Type != EdgeConfigures {
-		t.Fatalf("local edge = %#v", edges[0])
-	}
-	if edges[1].Source != "clusterworkflowtemplate//global" || edges[1].Target != "workflow/demo/run" || edges[1].Type != EdgeConfigures {
-		t.Fatalf("cluster edge = %#v", edges[1])
-	}
-}
-
-func TestArgoWorkflowCronOwnerNamePrefersControllerOwnerReference(t *testing.T) {
-	controller := true
-	wf := &unstructured.Unstructured{}
-	wf.SetLabels(map[string]string{"workflows.argoproj.io/cron-workflow": "label-owner"})
-	wf.SetOwnerReferences([]metav1.OwnerReference{{
-		APIVersion: "argoproj.io/v1alpha1",
-		Kind:       "CronWorkflow",
-		Name:       "owner-ref",
-		Controller: &controller,
-	}})
-
-	if got := argoWorkflowCronOwnerName(wf); got != "owner-ref" {
-		t.Fatalf("argoWorkflowCronOwnerName = %q, want owner-ref", got)
-	}
-}
-
 func TestCreatePodOwnerEdgesAddsScaledJobShortcut(t *testing.T) {
 	controller := true
 	pod := &corev1.Pod{
@@ -756,8 +678,8 @@ func TestBuildResourcesTopology_PrometheusMonitors(t *testing.T) {
 			if indexed {
 				idx = IndexByResource(topo)
 			}
-			mr := GetRelationshipsWithIndex(monitor.Kind, monitor.Namespace, monitor.Name, topo, provider, dynamic, idx)
-			tr := GetRelationshipsWithIndex(target.Kind, target.Namespace, target.Name, topo, provider, dynamic, idx)
+			mr := graphRelationshipsWithIndex(monitor.Kind, monitor.Namespace, monitor.Name, topo, provider, dynamic, idx)
+			tr := graphRelationshipsWithIndex(target.Kind, target.Namespace, target.Name, topo, provider, dynamic, idx)
 			if mr == nil || len(mr.MonitorTargets) != 1 || mr.MonitorTargets[0] != *target || len(mr.Consumers) != 0 {
 				t.Fatalf("monitor relationships = %+v", mr)
 			}

@@ -352,7 +352,7 @@ func RedactIssueRelatedRefs(issue Issue, canRead func(Ref) bool) Issue {
 			changed = true
 			continue
 		}
-		if fact.Type == factNetworkPolicyIsolates || fact.Type == factTLSCertificateConsumers || fact.Type == factKueueAffectedRuns {
+		if fact.Type == factNetworkPolicyIsolates || fact.Type == factTLSCertificateConsumers || fact.Type == factKueueAffectedRuns || fact.Type == factVeleroLateSchedules || fact.Type == factVeleroRejectedRuns {
 			// issue.AffectedRefs now holds only the readable ones.
 			redacted, keep := redactAffectedRefsFact(fact, issue.AffectedRefs)
 			changed = true

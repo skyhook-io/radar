@@ -39,7 +39,10 @@ type agentLogFields struct {
 //	  est_tokens=539 truncated=false omitted=0 context_tier=none kind=Pod ns=prod
 func emitAgentLog(f agentLogFields) {
 	level := "info"
-	if f.Err != nil {
+	switch {
+	case isTimeout(f.Err):
+		level = "warn"
+	case f.Err != nil:
 		level = "error"
 	}
 	tier := f.ContextTier
@@ -145,10 +148,15 @@ func logToolCall[In any](
 		dur := time.Since(start)
 		toolErr := err
 		if toolErr == nil && result != nil && result.IsError {
-			toolErr = errors.New("tool returned an error result")
+			toolErr = result.GetError()
+			if toolErr == nil {
+				toolErr = errors.New("tool returned an error result")
+			}
 		}
 
-		if toolErr != nil && sensitive {
+		if isTimeout(toolErr) {
+			log.Printf("\033[1;35m[MCP]\033[0m \033[1m%s\033[0m \033[33mTIMEOUT\033[0m (%s)", name, dur.Round(time.Millisecond))
+		} else if toolErr != nil && sensitive {
 			log.Printf("\033[1;35m[MCP]\033[0m \033[1m%s\033[0m \033[31mERROR\033[0m (%s)", name, dur.Round(time.Millisecond))
 		} else if toolErr != nil {
 			log.Printf("\033[1;35m[MCP]\033[0m \033[1m%s\033[0m \033[31mERROR\033[0m (%s) %v", name, dur.Round(time.Millisecond), toolErr)

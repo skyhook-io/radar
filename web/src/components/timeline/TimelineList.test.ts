@@ -72,3 +72,21 @@ describe('splitRoutineActivity', () => {
     expect(routineTruncated).toBe(true)
   })
 })
+
+describe('a linked event behind the list cap', () => {
+  it('keeps the selected event in the list even when newer rows fill the cap', () => {
+    const target = ev({ id: 'linked', kind: 'ConfigMap' })
+    const newer = Array.from({ length: 5 }, (_, i) => ev({ id: `newer-${i}`, kind: 'Deployment' }))
+    const rows = [...newer].reverse().concat(target)
+    const capped = splitRoutineActivity(rows, 3, 'linked')
+    expect(capped.withoutRoutine.map((e) => e.id)).toContain('linked')
+    expect(capped.withRoutine.map((e) => e.id)).toContain('linked')
+    expect(capped.truncated).toBe(true)
+    expect(splitRoutineActivity(rows, 3).withoutRoutine.map((e) => e.id)).not.toContain('linked')
+  })
+
+  it('shows a linked routine child row with routine activity hidden', () => {
+    const routineRow = ev({ id: 'rs-linked', kind: 'ReplicaSet', owner: { kind: 'Deployment', name: 'web' } })
+    expect(splitRoutineActivity([routineRow], 10, 'rs-linked').withoutRoutine.map((e) => e.id)).toEqual(['rs-linked'])
+  })
+})

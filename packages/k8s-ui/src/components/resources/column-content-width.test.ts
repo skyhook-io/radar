@@ -1,0 +1,252 @@
+import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'fs'
+import { join } from 'path'
+import { CELL_PADDING_PX, type MeasureText, GROW_MAX_PX, columnSizingSpec, containerSquaresWidth, hasCuratedCellWidth, measureCellText, measureColumnContent, shortValueMin, usageLabelWidth, workloadImagesText } from './column-content-width'
+import { computeColumnLayout } from './column-sizing'
+
+// The curated grow or fit flags, parsed from the source as curated-column-ownership.test.ts does.
+function curatedSizedColumns(mode: 'grow' | 'fit'): string[] {
+  const src = readFileSync(join(__dirname, 'ResourcesView.tsx'), 'utf8')
+  const start = src.indexOf('const KNOWN_COLUMNS')
+  const body = src.slice(start, src.indexOf('\n}\n', start))
+  const found: string[] = []
+  let plural = ''
+  for (const line of body.split('\n')) {
+    const kind = line.match(/^  '?([a-z0-9.]+)'?: \[/)
+    if (kind) plural = kind[1]
+    const col = line.match(new RegExp(`key: '([a-zA-Z]+)'.*sizing: '${mode}'`))
+    if (col) found.push(`${plural}:${col[1]}`)
+  }
+  return found
+}
+
+// 10px per character, 0 for nothing: easy arithmetic.
+const measure: MeasureText = (text, _font, limit = Infinity) => Math.min(text.length * 10, limit + 10)
+// A badge's 12px label measures narrower than 14px body text.
+const fontMeasure: MeasureText = (text, font, limit = Infinity) => Math.min(text.length * (font === 'badge' ? 7 : 10), limit + 10)
+const ctx = { plural: 'events', cellFilterKind: 'events' }
+const pod = (name: string, extra: Record<string, any> = {}) => ({ metadata: { name, namespace: 'default', ...extra } })
+
+describe('columnSizingSpec', () => {
+  it('fits Name, Namespace and Node, grows flagged columns, and keeps the rest exact', () => {
+    expect(columnSizingSpec({ key: 'name' })).toEqual({ mode: 'fit', max: 480, keep: true, yieldRank: 4 })
+    // A kind can opt its Name out of the protection (Events): an ordinary fit column that gives way first.
+    expect(columnSizingSpec({ key: 'name', sizing: 'fit' })).toEqual({ mode: 'fit', max: 480, weight: 1, yieldRank: 1 })
+    expect(columnSizingSpec({ key: 'namespace' }).mode).toBe('fit')
+    expect(columnSizingSpec({ key: 'node' }).mode).toBe('fit')
+    expect(columnSizingSpec({ key: 'message', sizing: 'grow', growWeight: 3 })).toEqual({ mode: 'grow', weight: 3, max: GROW_MAX_PX })
+    expect(columnSizingSpec({ key: 'status' }).mode).toBe('exact')
+    expect(columnSizingSpec({ key: 'age' }).mode).toBe('exact')
+  })
+
+  it('sizes a column flagged fit to its longest value', () => {
+    expect(columnSizingSpec({ key: 'type', sizing: 'fit' })).toEqual({ mode: 'fit', max: 400, longest: true })
+    // Name, Namespace and Node keep their 95th percentile even if flagged.
+    expect(columnSizingSpec({ key: 'node', sizing: 'fit' }).longest).toBeUndefined()
+  })
+})
+
+describe('measureColumnContent', () => {
+  it('sizes Name to its longest name, not a percentile, with chrome and padding', () => {
+    const items = [...Array(95)].map((_, i) => pod(`n${String(i).padStart(9, '0')}`)) // 10 chars
+    for (let i = 0; i < 5; i++) items.push(pod('x'.repeat(40)))
+    const m = measureColumnContent(items, [{ key: 'name' }], ctx, measure)
+    // 400px of text + 22px copy button + padding
+    // ...and yields, when room is short, no further than its 75th percentile.
+    expect(m.name).toEqual({ content: 400 + 22 + CELL_PADDING_PX, yieldTo: 100 + 22 + CELL_PADDING_PX, fitTo: 100 + 22 + CELL_PADDING_PX })
+  })
+
+  it('measures a CAPI Machine\'s node from status.nodeRef, as its cell shows it', () => {
+    const machine = (name: string, node?: string) => ({ apiVersion: 'cluster.x-k8s.io/v1beta1', kind: 'Machine', metadata: { name, namespace: 'capi' }, status: node ? { nodeRef: { kind: 'Node', name: node } } : {} })
+    const nodeName = 'ip-10-0-12-34'
+    const m = measureColumnContent([machine('a', nodeName), machine('b')], [{ key: 'node' }], { plural: 'machines', cellFilterKind: 'machines' }, measure)
+    expect(m.node.stretch).toBe(nodeName.length * 10 + CELL_PADDING_PX)
+  })
+
+  it('measures what the Pod and Event count cells show, in the font they show it in', () => {
+    const fonts: string[] = []
+    const spy: MeasureText = (text, font, limit) => { fonts.push(`${text}:${font}`); return measure(text, font, limit) }
+    const pod = (restarts: number, gpu?: string) => ({
+      metadata: { name: 'p', namespace: 'x' },
+      spec: { containers: [{ name: 'c', resources: gpu ? { limits: { 'nvidia.com/gpu': gpu } } : {} }] },
+      status: { phase: 'Running', containerStatuses: [{ name: 'c', ready: true, restartCount: restarts, state: { running: {} } }] },
+    })
+    measureColumnContent([pod(3), pod(9, '2')], [{ key: 'restarts' }, { key: 'gpu' }], { plural: 'pods', cellFilterKind: 'pods' }, spy)
+    expect(fonts).toEqual(expect.arrayContaining(['3:body', '9:medium', '-:body', '2:monoSm']))
+    fonts.length = 0
+    const event = (count: number) => ({ metadata: { name: 'e', namespace: 'x' }, count })
+    measureColumnContent([event(1), event(2)], [{ key: 'count' }], ctx, spy)
+    expect(fonts).toEqual(['1:body', '2:medium'])
+  })
+
+  it('measures the exact columns whose cells it knows, and leaves the rest unmeasured', () => {
+    const p = { metadata: { name: 'a', namespace: 'x', creationTimestamp: new Date(Date.now() - 3 * 86400_000).toISOString() }, status: { phase: 'Running', containerStatuses: [{ name: 'c', ready: true, restartCount: 12, state: { running: {} } }] }, spec: { containers: [{ name: 'c' }] } }
+    const m = measureColumnContent([p], [{ key: 'age' }, { key: 'restarts' }, { key: 'status' }, { key: 'cpu' }, { key: 'containers' }], { plural: 'pods', cellFilterKind: 'pods' }, measure)
+    expect(m.age.content).toBe('3d'.length * 10 + CELL_PADDING_PX)
+    expect(m.restarts.content).toBe('12'.length * 10 + CELL_PADDING_PX)
+    expect(m.status.content).toBeGreaterThan('Running'.length * 10 + CELL_PADDING_PX) // badge chrome
+    expect(m.containers.content).toBe(10 + CELL_PADDING_PX) // one square
+    // Usage bars draw metrics, not resource data: unmeasured unless the host supplies a reader.
+    expect(m.cpu).toBeUndefined()
+    const withMetrics = measureColumnContent([p], [{ key: 'cpu' }], { plural: 'pods', cellFilterKind: 'pods', hostCellWidths: { cpu: (_r, mt) => usageLabelWidth({ used: '3m', total: '1000m', percent: '0%' }, mt) } }, measure)
+    expect(withMetrics.cpu.content).toBe('3m / 1000m'.length * 10 + 4 + '0%'.length * 10 + CELL_PADDING_PX)
+  })
+
+  it('trims outliers the same way for Namespace', () => {
+    const items = [...Array(39)].map(() => ({ metadata: { name: 'a', namespace: 'apps' } }))
+    items.push({ metadata: { name: 'a', namespace: 'x'.repeat(20) } })
+    const m = measureColumnContent(items, [{ key: 'namespace' }], ctx, measure)
+    expect(m.namespace).toEqual({ content: 40 + CELL_PADDING_PX, stretch: 200 + CELL_PADDING_PX })
+  })
+
+  it('reserves room for the Terminating chip and an audit badge beside a name', () => {
+    const deleting = pod('abc', { deletionTimestamp: '2026-01-01T00:00:00Z' })
+    const flagged = pod('abc')
+    const plain = measureColumnContent([pod('abc')], [{ key: 'name' }], ctx, measure).name.content
+    expect(measureColumnContent([deleting], [{ key: 'name' }], ctx, measure).name.content).toBeGreaterThan(plain + 90)
+    const audited = measureColumnContent([flagged], [{ key: 'name' }], { ...ctx, auditBadges: { 'default/abc': { danger: 1, warning: 0 } } }, measure)
+    expect(audited.name.content).toBeGreaterThan(plain)
+    const paused = { metadata: { name: 'abc', namespace: 'default', annotations: { 'crossplane.io/paused': 'true' } }, status: { conditions: [{ type: 'Synced', status: 'False', reason: 'ReconcilePaused' }] } }
+    expect(measureColumnContent([paused], [{ key: 'name' }], ctx, measure).name.content).toBeGreaterThan(plain + 60)
+  })
+
+  it('measures what the cell shows for curated grow columns', () => {
+    const event = { metadata: { name: 'e' }, message: 'm'.repeat(30), involvedObject: { kind: 'Pod', name: 'web-1', namespace: 'x' } }
+    const m = measureColumnContent([event], [{ key: 'message', sizing: 'grow' }, { key: 'object', sizing: 'grow' }], ctx, measure)
+    expect(m.message.content).toBe(300 + CELL_PADDING_PX)
+    expect(m.object.content).toBe('Pod/web-1'.length * 10 + CELL_PADDING_PX)
+  })
+
+  it('reads printer and custom columns through their own value reader', () => {
+    const col = { key: 'printer:Reason', sizing: 'grow' as const, getFilterValue: (r: any) => r.status.reason }
+    const m = measureColumnContent([{ metadata: { name: 'a' }, status: { reason: 'abcdef' } }], [col], { plural: 'widgets', cellFilterKind: '__generic_widgets' }, measure)
+    expect(m['printer:Reason'].content).toBe(60 + CELL_PADDING_PX)
+  })
+
+  it('does not measure exact columns, and stops counting a value past the cap', () => {
+    const event = { metadata: { name: 'e' }, message: 'm'.repeat(10_000) }
+    const m = measureColumnContent([event], [{ key: 'status' }, { key: 'message', sizing: 'grow' }], ctx, measure)
+    expect(m.status).toBeUndefined()
+    expect(m.message.content).toBeLessThanOrEqual(GROW_MAX_PX + 10 + CELL_PADDING_PX)
+  })
+
+  it('sizes a fit column to its longest value, with a badge\'s padding around it', () => {
+    const pool = (ready: string, reason?: string) => ({ metadata: { name: 'p' }, status: { conditions: [{ type: 'Ready', status: ready, reason }] } })
+    const items = [...Array(99)].map(() => pool('True'))
+    items.push(pool('False', 'UnhealthyDependents'))
+    const m = measureColumnContent(items, [{ key: 'status', sizing: 'fit' }], { plural: 'nodepools', cellFilterKind: 'nodepools' }, fontMeasure)
+    // One failing pool among a hundred ready ones still sets the width, in the
+    // badge's font, its padding included.
+    expect(m.status).toEqual({ content: 'UnhealthyDependents'.length * 7 + 18 + CELL_PADDING_PX })
+  })
+
+  it('lets a short-value column hold its longest value, and give way no further than its curated width or what it needs', () => {
+    // Curated 96px. A badge wider than that gets its width while there is room,
+    // and gives way to the curated width when the table is short...
+    const wide = { key: 'status', mode: 'fit' as const, floor: 96, max: 400, content: 130, min: shortValueMin(96, 70, 130) }
+    const age = { key: 'age', mode: 'exact' as const, floor: 100 }
+    expect(computeColumnLayout([wide, age], 230)).toEqual({ status: 130, age: 100 })
+    expect(computeColumnLayout([wide, age], 150)).toEqual({ status: 96, age: 100 })
+    // ...and one narrower than its curated width gives way to its heading and content.
+    const narrow = { ...wide, content: 86, min: shortValueMin(96, 70, 86) }
+    expect(computeColumnLayout([narrow, age], 150)).toEqual({ status: 86, age: 100 })
+    expect(computeColumnLayout([narrow, age], 190)).toEqual({ status: 90, age: 100 })
+  })
+
+  it('measures the Endpoints badge the audit puts in place of the guess', () => {
+    const svc = { metadata: { name: 's', namespace: 'default' }, spec: { selector: { app: 'x' } } }
+    const cols = [{ key: 'endpoints', sizing: 'fit' as const }]
+    const plain = measureColumnContent([svc], cols, { plural: 'services', cellFilterKind: 'services' }, fontMeasure)
+    expect(plain.endpoints.content).toBe('Active'.length * 7 + 18 + CELL_PADDING_PX)
+    const flagged = measureColumnContent([svc], cols, { plural: 'services', cellFilterKind: 'services', auditBadges: { 'default/s': { danger: 0, warning: 1 } } }, fontMeasure)
+    expect(flagged.endpoints.content).toBe('No endpoints'.length * 7 + 18 + CELL_PADDING_PX)
+  })
+
+  it('measures an Event reason in the medium weight its cell renders', () => {
+    const fonts: string[] = []
+    const spy: MeasureText = (t, font, limit) => { fonts.push(font); return measure(t, font, limit) }
+    const m = measureColumnContent([{ metadata: { name: 'e' }, reason: 'FailedScheduling' }], [{ key: 'reason', sizing: 'fit' }], ctx, spy)
+    expect(m.reason.content).toBe(160 + CELL_PADDING_PX)
+    expect(fonts).toEqual(['medium'])
+  })
+
+  it('skips a value whose reader throws rather than failing the table', () => {
+    const bad = { metadata: { name: 'abc' }, get message(): string { throw new Error('boom') } }
+    const m = measureColumnContent([bad], [{ key: 'message', sizing: 'grow' }], ctx, measure)
+    expect(m.message.content).toBe(CELL_PADDING_PX)
+  })
+
+  it('measures 50k rows quickly enough to run on every list update', () => {
+    const items = [...Array(50_000)].map((_, i) => ({
+      metadata: { name: `checkout-service-${i}-7c9f8d6b5-abcde`, namespace: `team-${i % 40}` },
+      spec: { nodeName: `ip-10-0-${i % 250}-${i % 200}.us-east-1.compute.internal` },
+      message: `Back-off restarting failed container app in pod checkout-service-${i}`,
+      involvedObject: { kind: 'Pod', name: `checkout-service-${i}` },
+    }))
+    const cols = [{ key: 'name' }, { key: 'namespace' }, { key: 'node' }, { key: 'message', sizing: 'grow' as const }, { key: 'object', sizing: 'grow' as const }]
+    measureColumnContent(items.slice(0, 100), cols, ctx) // warm the glyph cache
+    const start = performance.now()
+    measureColumnContent(items, cols, ctx)
+    const elapsed = performance.now() - start
+    // Typically ~40-80ms on a laptop; the bound only catches an accidental O(n²) or per-string canvas call.
+    expect(elapsed).toBeLessThan(1500)
+  })
+})
+
+describe('measureCellText', () => {
+  // No canvas here, so every glyph counts at the fallback width: the test is
+  // about which glyphs are counted.
+  const glyphs = (text: string) => measureCellText(text, 'body') / measureCellText('a', 'body')
+
+  it('collapses whitespace the way a one-line cell renders it', () => {
+    expect(glyphs('a\n\n   b\t c ')).toBe(glyphs('a b c'))
+    expect(glyphs('plain text')).toBe(10)
+  })
+
+  it('counts an emoji as one glyph, not two halves', () => {
+    expect(glyphs('ok 🚀')).toBe(4)
+  })
+})
+
+describe('containerSquaresWidth', () => {
+  it('counts a square per container, the gaps, and a divider between init and regular containers', () => {
+    expect(containerSquaresWidth([])).toBe(0)
+    expect(containerSquaresWidth([{}, {}, {}])).toBe(3 * 10 + 2 * 4)
+    expect(containerSquaresWidth([{ isInit: true }, {}, {}])).toBe(3 * 10 + 2 * 4 + 9)
+  })
+})
+
+describe('usageLabelWidth', () => {
+  it('measures "used / limit" and the percentage, or a bare usage and its tag', () => {
+    expect(usageLabelWidth({ used: '1', total: '2', percent: '3%' }, measure)).toBe('1 / 2'.length * 10 + 4 + 20)
+    expect(usageLabelWidth({ usage: '5m', tag: 'no limit' }, measure)).toBe(20 + 6 + 80)
+    expect(usageLabelWidth(null, measure)).toBe(10)
+  })
+})
+
+describe('curated grow and fit columns', () => {
+  it('each grow column has a reader for the text its cell shows', () => {
+    const flagged = curatedSizedColumns('grow')
+    expect(flagged.length).toBeGreaterThan(15)
+    expect(flagged.filter(entry => {
+      const [plural, column] = entry.split(':')
+      return !hasCuratedCellWidth(plural, column)
+    })).toEqual([])
+  })
+
+  it('each fit column has its own reader registered', () => {
+    // Name flagged fit (Events) only opts out of Name's protection; the Name reader measures it.
+    const flagged = curatedSizedColumns('fit').filter(entry => !entry.endsWith(':name'))
+    expect(flagged.length).toBeGreaterThan(5)
+    expect(flagged.filter(entry => {
+      const [plural, column] = entry.split(':')
+      return !hasCuratedCellWidth(plural, column)
+    })).toEqual([])
+  })
+
+  it('shows the first image in full and how many more', () => {
+    expect(workloadImagesText([])).toBe('')
+    expect(workloadImagesText(['nginx:1.27'])).toBe('nginx:1.27')
+    expect(workloadImagesText(['nginx:1.27', 'envoy:1.30', 'otel:0.9'])).toBe('nginx:1.27 +2')
+  })
+})

@@ -29,6 +29,7 @@ import {
 } from '@skyhook-io/k8s-ui'
 import {
   ApiError,
+  useResources,
   useUpgradeReadiness,
   type UpgradeReadinessCheck,
   type UpgradeReadinessCheckStatus,
@@ -38,6 +39,10 @@ import {
 } from '../../api/client'
 import type { SelectedResource } from '../../types'
 import { useConnection } from '../../context/ConnectionContext'
+import { useAPIResources } from '../../api/apiResources'
+import { getUpgradePlanStatus, isDistributionUpgradePlan, upgradePlanTarget } from '@skyhook-io/k8s-ui/components/resources/resource-utils-upgrade-plan'
+import { isLowerBound } from '@skyhook-io/k8s-ui/utils/resource-coverage'
+import type { ResourceCoverage } from '@skyhook-io/k8s-ui/types/resource-coverage'
 import { ChecksViewTabs } from './ChecksViewTabs'
 
 interface UpgradeReadinessViewProps {
@@ -81,6 +86,13 @@ export function UpgradeReadinessView({ namespaces, onNavigateToResource }: Upgra
   const requestedTarget = new URLSearchParams(location.search).get('target') ?? undefined
   const { data, isLoading, isFetching, isPlaceholderData, error, dataUpdatedAt, refreshScan } = useUpgradeReadiness(requestedTarget)
   const { connection } = useConnection()
+  const { data: apiResources } = useAPIResources()
+  const plansServed = !!apiResources?.some((r) => r.group === 'upgrade.cattle.io' && r.name === 'plans')
+  const plansQuery = useResources<any>('plans', undefined, 'upgrade.cattle.io', { enabled: plansServed })
+  // An unreadable Plan list shows no notice: absence of Plans is not claimed.
+  const upgradePlans = useMemo(() => (plansQuery.error ? [] : distributionUpgradePlans(plansQuery.data)), [plansQuery.error, plansQuery.data])
+  const plansPartial = planCountIsLowerBound(plansQuery.coverage)
+  const plansNotice = upgradePlans.length > 0 ? <UpgradePlansNotice plans={upgradePlans} partial={plansPartial} onNavigateToResource={onNavigateToResource} /> : null
   const targetOptions = useMemo(
     () => buildTargetOptions(data?.currentVersion, data?.reviewedThrough, requestedTarget ?? data?.targetVersion),
     [data?.currentVersion, data?.reviewedThrough, data?.targetVersion, requestedTarget],
@@ -104,6 +116,7 @@ export function UpgradeReadinessView({ namespaces, onNavigateToResource }: Upgra
     return (
       <div className="flex-1 flex flex-col min-h-0 p-4 gap-4">
         <ChecksViewTabs />
+        {plansNotice}
         <PaneLoader label="Analyzing upgrade impact…" className="flex-1" />
       </div>
     )
@@ -112,6 +125,7 @@ export function UpgradeReadinessView({ namespaces, onNavigateToResource }: Upgra
     return (
       <div className="flex-1 flex flex-col min-h-0 p-4 gap-4">
         <ChecksViewTabs />
+        {plansNotice}
         <div className="flex flex-1 items-center justify-center">
           <UpgradeReadinessError error={error} onResetTarget={resetTarget} />
         </div>
@@ -217,6 +231,7 @@ export function UpgradeReadinessView({ namespaces, onNavigateToResource }: Upgra
       {data.coverage.state === 'partial' && !data.coverage.scopedNamespaces?.length && !data.coverage.unavailableKinds?.length && scopedKinds.length === 0 && (
         <CoverageNotice headline="Some evidence is incomplete" body="Evidence labels on affected rows explain what Radar could not verify." />
       )}
+      {plansNotice}
       {data.coverage.state === 'no_access' ? (
         <section className="shrink-0">
           <EmptyState
@@ -236,7 +251,7 @@ export function UpgradeReadinessView({ namespaces, onNavigateToResource }: Upgra
             <span className="text-right text-xs tabular-nums text-theme-text-tertiary">{upgradeEvaluationSummary(data.checks.length, data.summary, incompleteUpgradeCheckCount(data.checks))}</span>
           </div>
           <CoverageMethodology data={data} />
-          <div className="hidden grid-cols-[minmax(230px,0.9fr)_minmax(320px,1.6fr)_160px] gap-4 border-b-subtle bg-theme-elevated px-4 py-2 text-[11px] font-medium uppercase tracking-wide text-theme-text-tertiary md:grid">
+          <div className="hidden grid-cols-[minmax(230px,0.9fr)_minmax(320px,1.6fr)_160px] gap-4 border-b-subtle bg-theme-elevated px-3.5 py-2 text-[11px] font-medium uppercase tracking-wide text-theme-text-tertiary md:grid">
             <span>Check</span>
             <span>Result</span>
             <span>Status</span>
@@ -422,6 +437,49 @@ export function summaryMeta(
   }
 }
 
+// The visible Plans are a lower bound unless the list covers the whole
+// cluster: a partial read, a list narrowed to the namespaces Radar collects,
+// or an older Radar that reports no coverage can't establish a total.
+export function planCountIsLowerBound(coverage: ResourceCoverage | undefined): boolean {
+  return !coverage || coverage.status === 'unknown' || isLowerBound(coverage)
+}
+
+// system-upgrade-controller Plans that upgrade the distribution itself (k3s,
+// RKE2). Other Plans (Rancher's system-agent upgrader, OS packages) don't
+// change the Kubernetes version, so they aren't listed here.
+export function distributionUpgradePlans(plans: any[] | undefined): { namespace: string; name: string; version: string; state: string }[] {
+  return (plans ?? []).filter(isDistributionUpgradePlan).map((p) => ({
+    namespace: p.metadata?.namespace ?? '',
+    name: p.metadata?.name ?? '',
+    version: upgradePlanTarget(p),
+    state: getUpgradePlanStatus(p).text,
+  }))
+}
+
+export function UpgradePlansNotice({ plans, partial, onNavigateToResource }: { plans: ReturnType<typeof distributionUpgradePlans>; partial?: boolean; onNavigateToResource: (resource: SelectedResource) => void }) {
+  return (
+    <div className="flex items-start gap-2 rounded-lg border border-theme-border bg-theme-elevated px-3 py-2 text-xs">
+      <FileSearch className="mt-0.5 h-4 w-4 shrink-0 text-theme-text-tertiary" />
+      <div>
+        <span className="font-medium text-theme-text-secondary">
+          {partial ? 'At least ' : ''}{plans.length} upgrade {plans.length === 1 ? 'Plan is' : 'Plans are'} defined for this cluster.
+        </span>{' '}
+        <span className="text-theme-text-tertiary">system-upgrade-controller upgrades the nodes it selects:</span>
+        <ul className="mt-1 space-y-0.5">
+          {plans.map((p) => (
+            <li key={`${p.namespace}/${p.name}`} className="text-theme-text-tertiary">
+              <button type="button" className="text-accent hover:underline" onClick={() => onNavigateToResource({ kind: 'plans', group: 'upgrade.cattle.io', namespace: p.namespace, name: p.name })}>
+                {p.namespace}/{p.name}
+              </button>{' '}
+              · {p.version} · {p.state}
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  )
+}
+
 function CoverageNotice({ headline, body }: { headline: string; body: string }) {
   return (
     <div className="flex items-start gap-2 rounded-lg border border-theme-border bg-theme-elevated px-3 py-2 text-xs">
@@ -446,7 +504,7 @@ function CheckRow({ check, onNavigateToResource }: { check: UpgradeReadinessChec
         type="button"
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
-        className="grid w-full cursor-pointer items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-theme-hover/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-theme-text-primary/20 md:grid-cols-[minmax(230px,0.9fr)_minmax(320px,1.6fr)_160px] md:gap-4"
+        className={clsx('grid w-full cursor-pointer items-center gap-3 text-left transition-colors hover:bg-theme-hover/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-theme-text-primary/20 md:grid-cols-[minmax(230px,0.9fr)_minmax(320px,1.6fr)_160px] md:gap-4', 'px-3.5 py-2.5' /* TABLE_DENSITY.cellClass in k8s-ui */)}
       >
         <div className="flex min-w-0 items-center gap-2.5">
           <Icon className={clsx('h-4 w-4 shrink-0', meta.iconClass)} />

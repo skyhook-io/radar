@@ -5,8 +5,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/skyhook-io/radar/internal/auth"
@@ -214,8 +216,8 @@ func TestOperatorConfigReadPrivacy(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("USERPROFILE", t.TempDir())
 	t.Setenv("RADAR_CLOUD_MODE", "false")
-	prometheuspkg.Initialize(nil, nil, "test")
-	t.Cleanup(func() { prometheuspkg.Initialize(nil, nil, "") })
+	prometheuspkg.Initialize(nil, nil, "test", nil)
+	t.Cleanup(func() { prometheuspkg.Initialize(nil, nil, "", nil) })
 	prometheuspkg.Configure("https://private-machine-user:private-machine-password@metrics.example/prom?token=private-machine-token", nil)
 	cfg := config.Config{Kubeconfig: "/private-machine-path", KubeconfigDirs: []string{"/private-machine-directory"}, TimelineDBPath: "/private-machine-db", AIHistoryDBPath: "/private-machine-ai", AIConsent: map[string]string{"private-machine-consent": "v1"}, PrometheusHeadersFromEnv: map[string]string{"Authorization": "PRIVATE_MACHINE_ENV"}, ArgoCDToken: "private-machine-token", KubecostAPIKey: "private-machine-key", Port: 9280}
 	if err := config.Save(cfg); err != nil {
@@ -244,5 +246,99 @@ func TestOperatorConfigReadPrivacy(t *testing.T) {
 	s.handleGetSettings(w, httptest.NewRequest(http.MethodGet, "/api/settings", nil))
 	if strings.Contains(w.Body.String(), "private-machine") || strings.Contains(w.Body.String(), "dark") || !strings.Contains(w.Body.String(), `"preferenceStorage":"browser"`) {
 		t.Fatalf("shared preferences: %s", w.Body.String())
+	}
+}
+
+func TestTrackedContextSwitchInManagedInstallations(t *testing.T) {
+	t.Cleanup(k8s.SetTestLocalMode())
+	t.Setenv("RADAR_CLOUD_MODE", "false")
+	for _, tc := range []struct {
+		name   string
+		server *Server
+		cloud  bool
+	}{
+		{name: "operator", server: &Server{authConfig: auth.Config{Mode: "proxy"}}},
+		{name: "cloud", server: &Server{cloudConnectCfg: CloudConnectConfig{CloudTunnelConfigured: true}}, cloud: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			router := chi.NewRouter()
+			router.Post("/contexts/{name}", tc.server.handleSwitchContext)
+			post := func(query string) *httptest.ResponseRecorder {
+				w := httptest.NewRecorder()
+				router.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/contexts/radar-nonexistent-test-context"+query, nil))
+				return w
+			}
+			legacy, requested := post(""), post("?track=1")
+			if !tc.cloud && requested.Code != http.StatusForbidden {
+				t.Fatalf("operator could start switch: %d", requested.Code)
+			}
+			if requested.Code != legacy.Code || requested.Body.String() != legacy.Body.String() || tc.server.contextSwitch.Snapshot() != nil {
+				t.Fatalf("tracked request changed managed behavior: %d %s vs %d %s", requested.Code, requested.Body, legacy.Code, legacy.Body)
+			}
+			for _, query := range []string{"?cancelSwitch=abc", "?stopSwitch=abc"} {
+				if response := post(query); response.Code != http.StatusForbidden {
+					t.Fatalf("managed %s: %d %s", query, response.Code, response.Body)
+				}
+			}
+		})
+	}
+}
+
+func TestSwitchEntryPointsRejectActiveTrackedSwitch(t *testing.T) {
+	t.Setenv("RADAR_CLOUD_MODE", "false")
+	t.Setenv("KUBERNETES_SERVICE_HOST", "")
+	t.Cleanup(k8s.SetTestLocalMode())
+	t.Cleanup(k8s.SetTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "current"}))
+	entered, release := make(chan struct{}), make(chan struct{})
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(entered)
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	defer target.Close()
+	defer close(release)
+	path := filepath.Join(t.TempDir(), "target.yaml")
+	data := `apiVersion: v1
+kind: Config
+clusters:
+- name: target
+  cluster:
+    server: ` + target.URL + `
+contexts:
+- name: target
+  context:
+    cluster: target
+current-context: target
+`
+	if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.SetTestRegistryEntry("target", path, "target"))
+	s := &Server{listenAddress: DefaultListenAddress}
+	router := chi.NewRouter()
+	router.Post("/contexts/{name}", s.handleSwitchContext)
+	router.Post("/capi/clusters/{ns}/{name}/connect", s.handleCAPIClusterConnect)
+	router.Post("/connection/retry", s.handleConnectionRetry)
+	post := func(path string) *httptest.ResponseRecorder {
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, path, nil))
+		return response
+	}
+	if response := post("/contexts/target?track=1"); response.Code != http.StatusAccepted {
+		t.Fatalf("start: %d %s", response.Code, response.Body)
+	}
+	op := s.contextSwitch.Snapshot()
+	defer s.contextSwitch.Cancel(op.ID, op.Target)
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("preflight did not start: %+v", s.contextSwitch.Snapshot())
+	}
+	for _, path := range []string{"/contexts/other", "/capi/clusters/ns/workload/connect", "/connection/retry"} {
+		if response := post(path); response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "already in progress") {
+			t.Errorf("%s: %d %s", path, response.Code, response.Body)
+		}
 	}
 }

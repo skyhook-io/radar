@@ -1,4 +1,5 @@
-import type { AggregatedFlow, TrafficFlow, TrafficWarningKind } from '../../types'
+import { formatBytes } from '@skyhook-io/k8s-ui/utils/format'
+import type { AggregatedFlow, TrafficFlow, TrafficPortSource, TrafficWarningKind } from '../../types'
 import type { TrafficEndpointPair, TrafficEndpointRef, TrafficMatch } from '../../api/traffic'
 import type { TrafficGraphSelection } from './TrafficGraph'
 
@@ -81,6 +82,86 @@ export function protocolLabel(l7Protocol: string | undefined, protocol: string):
   return `${l7Protocol} / ${protocol}`
 }
 
+export function protocolName(protocol: string): string {
+  return protocol.toLowerCase() === 'grpc' ? 'gRPC' : protocol.toUpperCase() || 'Unknown'
+}
+
+export interface ProtocolData {
+  protocol: string | null
+  sent: number
+  recv: number
+}
+
+type ByteFigures = Pick<AggregatedFlow, 'bytesByProtocol' | 'bytesSent' | 'bytesRecv'>
+
+const transportProtocols = new Set(['tcp', 'udp', 'icmp', 'icmpv6', 'sctp'])
+
+export function isPayloadProtocol(protocol: string): boolean {
+  return !transportProtocols.has(protocol.toLowerCase())
+}
+
+/** The protocols an edge's traffic was observed on, payload protocols first,
+ *  whether or not they carried byte figures. */
+export function protocolsOf(flow: Pick<AggregatedFlow, 'bytesByProtocol'>): string[] {
+  return Object.keys(flow.bytesByProtocol ?? {})
+    .sort((a, b) => Number(isPayloadProtocol(b)) - Number(isPayloadProtocol(a)) || a.localeCompare(b))
+}
+
+/** An edge's Data per protocol, payload protocols first. Only protocols that
+ *  carried bytes: a zero there usually means not measured (a failed byte query,
+ *  a source that reports none), and "0 B" would read as a measurement. A Radar
+ *  that predates the breakdown sends only the cross-protocol sum, which can
+ *  already mix HTTP and gRPC under one protocol name, so it comes back as one
+ *  figure with no protocol claimed. */
+export function dataByProtocol(flow: ByteFigures): ProtocolData[] {
+  const buckets = flow.bytesByProtocol
+  if (!buckets) return [{ protocol: null, sent: flow.bytesSent, recv: flow.bytesRecv }]
+  return protocolsOf(flow)
+    .map(protocol => ({ protocol, sent: buckets[protocol].bytesSent, recv: buckets[protocol].bytesRecv }))
+    .filter(e => e.sent + e.recv > 0)
+}
+
+/** The span a rate-based source's byte totals cover, in seconds: the view's
+ *  range, five minutes when it is under a minute, at most an hour — the same
+ *  rule the server's rate window follows. */
+export function rateWindowSeconds(timeRange: string): number {
+  const m = /^(\d+)([smh])$/.exec(timeRange)
+  const seconds = m ? Number(m[1]) * ({ s: 1, m: 60, h: 3600 } as const)[m[2] as 's' | 'm' | 'h'] : 0
+  return seconds < 60 ? 300 : Math.min(seconds, 3600)
+}
+
+/** Label for an edge a rate-based source measured only in bytes: its
+ *  throughput per protocol over the window, never added across protocols.
+ *  Empty without a per-protocol breakdown: an older Radar's byte sum can mix
+ *  TCP and UDP under one protocol name, so no protocol can be claimed for it. */
+export function throughputLabel(flow: ByteFigures, windowSeconds: number): string {
+  if (!flow.bytesByProtocol) return ''
+  return dataByProtocol(flow)
+    .map(e => {
+      const perSecond = (e.sent + e.recv) / windowSeconds
+      return `${protocolName(e.protocol!)} · ${perSecond < 1 ? '<1 B' : formatBytes(perSecond)}/s`
+    })
+    .join(' · ')
+}
+
+/** Data across several edges, added only within each protocol. */
+export function totalDataByProtocol(flows: ByteFigures[]): ProtocolData[] {
+  if (!flows.some(f => f.bytesByProtocol)) {
+    return [{ protocol: null, sent: flows.reduce((n, f) => n + f.bytesSent, 0), recv: flows.reduce((n, f) => n + f.bytesRecv, 0) }]
+  }
+  return dataByProtocol({ bytesSent: 0, bytesRecv: 0, bytesByProtocol: flows.reduce<AggregatedFlow['bytesByProtocol']>((acc, f) => mergeProtocolBytes(acc, f.bytesByProtocol), undefined) })
+}
+
+function mergeProtocolBytes(a: AggregatedFlow['bytesByProtocol'], b: AggregatedFlow['bytesByProtocol']): AggregatedFlow['bytesByProtocol'] {
+  if (!b) return a
+  const merged = { ...a }
+  for (const [protocol, bytes] of Object.entries(b)) {
+    const prev = merged[protocol]
+    merged[protocol] = { bytesSent: (prev?.bytesSent ?? 0) + bytes.bytesSent, bytesRecv: (prev?.bytesRecv ?? 0) + bytes.bytesRecv }
+  }
+  return merged
+}
+
 /**
  * The volume shown for an edge. For a rate-based source `connections` is its
  * request rate rounded with a floor of one — the graph sizes, sorts and filters
@@ -140,6 +221,7 @@ export function mergeFlowVolume(into: AggregatedFlow, flow: AggregatedFlow): voi
   }
   const weighted: LatencyWeighted = into
   weighted.latencyWeight = wInto + wFlow
+  into.bytesByProtocol = mergeProtocolBytes(into.bytesByProtocol, flow.bytesByProtocol)
   into.connections += flow.connections
   into.bytesSent += flow.bytesSent
   into.bytesRecv += flow.bytesRecv
@@ -334,6 +416,33 @@ export function mergedEdgePort(a: number, b: number): number {
 }
 
 /**
+ * The port as text, or null when there is none to show. A port taken from the
+ * destination's Services is declared, not observed, so it always says so.
+ */
+export function portLabel(port: number, portSource?: TrafficPortSource): string | null {
+  if (portSource === 'serviceMultiple') return 'multiple (from Service)'
+  if (port <= 0) return null
+  return portSource === 'service' ? `${port} (from Service)` : String(port)
+}
+
+/** mergedEdgePort, keeping the shown port's marking with it. An observed port
+ *  outranks the same number taken from a Service. */
+export function mergeEdgePortInto(
+  into: { port: number; portSource?: TrafficPortSource },
+  from: { port: number; portSource?: TrafficPortSource },
+): void {
+  const port = mergedEdgePort(into.port, from.port)
+  if (port === 0) {
+    if (from.portSource) into.portSource = from.portSource
+  } else if (port !== into.port) {
+    into.portSource = from.portSource
+  } else if (port === from.port && !from.portSource) {
+    into.portSource = undefined
+  }
+  into.port = port
+}
+
+/**
  * Whether an edge carries a port: its own, or one of the edges merged into it.
  * A merged edge shows one of its ports, so a selection made on another must
  * still find it.
@@ -380,6 +489,53 @@ export function endpointPair(flow: AggregatedFlow): TrafficEndpointPair {
 export function mergeRawPairs(into: GraphFlow, from: GraphFlow): void {
   const target = into.rawPairs ?? (into.rawPairs = [])
   for (const pair of from.rawPairs ?? []) target.push(pair)
+}
+
+export function groupAddonFlows(flows: GraphFlow[], isAddon: (name: string, namespace: string | undefined) => boolean): GraphFlow[] {
+  let internet: GraphFlow | undefined
+  let kubernetes: GraphFlow | undefined
+  const grouped: GraphFlow[] = []
+  for (const flow of flows) {
+    if (flow.source.kind === 'Internet' && isAddon(flow.destination.name, flow.destination.namespace)) {
+      if (!internet) {
+        internet = {
+          connections: 0, bytesSent: 0, bytesRecv: 0, flowCount: 0, lastSeen: flow.lastSeen,
+          source: { name: 'addon-internet', namespace: '', kind: 'AddonInternet' },
+          destination: { name: 'addon-group-target', namespace: '', kind: 'AddonGroupTarget' },
+          protocol: flow.protocol, port: flow.port, portSource: flow.portSource, l7Protocol: flow.l7Protocol,
+          rawPairs: [],
+        }
+      }
+      mergeEdgePortInto(internet, flow)
+      if (internet.protocol !== flow.protocol) internet.protocol = 'mixed'
+      if (internet.l7Protocol !== flow.l7Protocol) internet.l7Protocol = 'mixed'
+      mergeFlowVolume(internet, flow)
+      mergeRawPairs(internet, flow)
+      grouped.push({ ...flow, source: { name: 'addon-internet', namespace: '', kind: 'SkipEdge' } })
+    } else if (isAddon(flow.source.name, flow.source.namespace) && flow.destination.name === 'kubernetes' &&
+      (!flow.destination.namespace || flow.destination.namespace === 'default')) {
+      if (!kubernetes) {
+        kubernetes = {
+          connections: 0, bytesSent: 0, bytesRecv: 0, flowCount: 0, lastSeen: flow.lastSeen,
+          source: { name: 'addon-group-source', namespace: '', kind: 'AddonGroupSource' },
+          destination: { name: 'kubernetes', namespace: 'default', kind: 'Service' },
+          protocol: flow.protocol, port: flow.port, portSource: flow.portSource, l7Protocol: flow.l7Protocol,
+          rawPairs: [],
+        }
+      }
+      mergeEdgePortInto(kubernetes, flow)
+      if (kubernetes.protocol !== flow.protocol) kubernetes.protocol = 'mixed'
+      if (kubernetes.l7Protocol !== flow.l7Protocol) kubernetes.l7Protocol = 'mixed'
+      mergeFlowVolume(kubernetes, flow)
+      mergeRawPairs(kubernetes, flow)
+      grouped.push({ ...flow, destination: { ...flow.destination, kind: 'SkipEdge' } })
+    } else {
+      grouped.push(flow)
+    }
+  }
+  if (internet) grouped.push(internet)
+  if (kubernetes) grouped.push(kubernetes)
+  return grouped
 }
 
 // The renderer draws the addon group's virtual endpoints as one group node.
@@ -707,10 +863,10 @@ export function connectionRows<T extends AggregatedFlow>(flows: T[]): T[] {
 }
 
 /**
- * The verdict filter's choices, from the verdicts the flows contain. Caretta,
- * Beyla and Istio report every flow forwarded unless they saw an error, so when
- * forwarded is the only verdict present the filter would match everything and
- * none is offered. Any other verdict, even one without a chip of its own (Hubble
+ * The verdict filter's choices, from the verdicts the flows contain. Caretta
+ * and Istio report every flow forwarded unless they saw an error, and Beyla
+ * reports no verdict unless it saw one, so when forwarded is the only verdict
+ * present the filter would match everything and none is offered. Any other verdict, even one without a chip of its own (Hubble
  * also reports redirected, audit and more), makes Forwarded a real choice.
  */
 export function verdictChoices(seen: Iterable<string>): string[] {
@@ -747,3 +903,19 @@ export function emptyWarningHeadline(kind: TrafficWarningKind | undefined): stri
     default: return 'Unable to fetch traffic data'
   }
 }
+
+export function formatConnections(count: number): string {
+  if (count >= 1_000_000_000) return `${(count / 1_000_000_000).toFixed(1)}B`
+  if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`
+  if (count >= 1_000) return `${(count / 1_000).toFixed(0)}K`
+  return count.toString()
+}
+
+// A volume in the source's own unit: a rate to two significant places for a
+// rate-based source, a whole count otherwise.
+export function formatVolume(volume: number, isRateBased: boolean): string {
+  return isRateBased ? formatRate(volume) : formatConnections(volume)
+}
+
+/** Ports a traffic card lists before "+N more". */
+export const MAX_VISIBLE_PORTS = 4

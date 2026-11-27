@@ -62,8 +62,10 @@ export function cnpgViewNamedForKind(plural: string): boolean {
 }
 
 /** The CloudNativePG Cluster kind, whose list is the Clusters view. */
+export const CNPG_CLUSTER_KIND = { name: 'clusters', kind: 'Cluster', group: 'postgresql.cnpg.io' }
+
 export function isCNPGClusterKind(kind: { name: string; group: string } | null | undefined): boolean {
-  return !!kind && kind.name === 'clusters' && kind.group === 'postgresql.cnpg.io'
+  return !!kind && kind.name === CNPG_CLUSTER_KIND.name && kind.group === CNPG_CLUSTER_KIND.group
 }
 
 /**

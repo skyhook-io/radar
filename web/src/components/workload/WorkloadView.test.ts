@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { gitOpsOwnerFromRelationships } from '@skyhook-io/k8s-ui'
 import type { Relationships } from '../../types'
-import { collectServingRefs, memberOverviewParams, supportsBatchExecution } from './WorkloadView'
+import { collectServingRefs, isPrometheusMetricsAvailable, memberOverviewParams, supportsBatchExecution } from './WorkloadView'
 import { findInheritedGitOpsLookupRef } from '../../hooks/useResolvedGitOpsOwner'
 
 describe('findInheritedGitOpsLookupRef', () => {
@@ -91,5 +91,26 @@ describe('memberOverviewParams', () => {
     expect(next.get('run')).toBe('jobs/ml/train-workers-1')
     expect(next.has('tab')).toBe(false)
     expect(next.get('apiGroup')).toBe('jobset.x-k8s.io')
+  })
+})
+
+describe('isPrometheusMetricsAvailable', () => {
+  it('offers metrics for a core Node', () => {
+    expect(isPrometheusMetricsAvailable('Node', { apiVersion: 'v1', kind: 'Node' }, true)).toBe(true)
+    expect(isPrometheusMetricsAvailable('Node', undefined, true)).toBe(true)
+  })
+
+  it('offers no metrics for a Longhorn Node', () => {
+    const longhornNode = { apiVersion: 'longhorn.io/v1beta2', kind: 'Node' }
+    expect(isPrometheusMetricsAvailable('Node', longhornNode, false)).toBe(false)
+    expect(isPrometheusMetricsAvailable('Node', longhornNode, true)).toBe(false)
+    expect(isPrometheusMetricsAvailable('Node', undefined, false)).toBe(false)
+  })
+
+  it('keeps the workload rules', () => {
+    expect(isPrometheusMetricsAvailable('Deployment', {}, false)).toBe(true)
+    expect(isPrometheusMetricsAvailable('Pod', { status: { phase: 'Pending' } }, false)).toBe(false)
+    expect(isPrometheusMetricsAvailable('Pod', { status: { phase: 'Running' } }, false)).toBe(true)
+    expect(isPrometheusMetricsAvailable('ConfigMap', {}, false)).toBe(false)
   })
 })

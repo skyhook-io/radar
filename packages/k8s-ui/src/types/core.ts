@@ -59,6 +59,14 @@ export interface WorkloadWritePermissions {
   daemonSets: boolean
   statefulSets: boolean
   rollouts: boolean
+  /** Absent from a Radar older than Workflow Stop; treat absence as not allowed. */
+  workflows?: boolean
+  /** Can create Argo Workflows (submit a WorkflowTemplate). Absent from an older Radar; treat absence as not allowed. */
+  createWorkflows?: boolean
+  /** Can patch CronJobs (Suspend, Resume). Absent from an older Radar, which showed the actions to everyone. */
+  cronJobs?: boolean
+  /** Can create Jobs (Trigger a CronJob). Absent from an older Radar, which showed the action to everyone. */
+  createJobs?: boolean
 }
 
 export type WorkloadContainerType = 'container' | 'initContainer'
@@ -119,6 +127,9 @@ export interface IntegrationCapability {
 // Feature capabilities based on RBAC permissions
 export interface Capabilities {
   configManagement?: 'local' | 'operator' | 'cloud'
+  podExecUID?: boolean
+  podDebugImage?: string
+  podDebug?: boolean
   exec: boolean           // Terminal feature (pods/exec)
   localTerminal: boolean  // Local terminal available (not in-cluster, not disabled)
   /** Shell family where a hand-off command runs; absent from older Radars. */
@@ -129,7 +140,7 @@ export interface Capabilities {
   secretsUpdate: boolean  // Update secrets (inline editing)
   helmWrite: boolean      // Helm write operations (install, upgrade, rollback, uninstall, apply values)
   nodeWrite: boolean      // Node write operations (cordon, uncordon, drain)
-  workloadWrites?: WorkloadWritePermissions // Workload patch permissions (restart/scale controls)
+  workloadWrites?: WorkloadWritePermissions
   mcpExecTools?: boolean // Full MCP registration; does not grant the caller exec permission
   mcpHelmTools?: boolean // Native Helm MCP tool registered; target Kubernetes permissions still required
   mcpHttpTools?: boolean // Effective in-cluster HTTP registration; services/proxy permission is still required
@@ -154,6 +165,9 @@ export interface Capabilities {
   // Which Cloud-connect lane this deployment gets. Optional on the wire:
   // older backends don't advertise it — consumers fall back to wizard links.
   cloudConnect?: CloudConnectCapability
+  // An access check errored, so a false above may be unanswered rather than
+  // denied. Older Radars never send it.
+  checksIncomplete?: boolean
 }
 
 // CloudConnectCapability picks the Cloud funnel's connect lane: 'driver'
@@ -169,8 +183,13 @@ export interface CloudConnectCapability {
 }
 
 export interface FeatureCapabilities {
+  gitopsActionCapabilities?: boolean
  helmSourceIdentity?: boolean
   helmInventory?: boolean
+  datadogRightsizing?: boolean
+  datadogAgentPresence?: boolean
+  openobserveCollectorPresence?: boolean
+  openobserveLocalSetup?: boolean
   resourceReadCoverage?: boolean
   searchCoverage?: boolean
  applicationEvidence?: boolean
@@ -179,13 +198,32 @@ export interface FeatureCapabilities {
   yamlSchemas?: boolean
   workloadImages?: boolean
   deploymentPause?: boolean
+  substrateHealthMetrics?: boolean
   resourceIssues?: boolean
   resourceIssueCoverage?: boolean
+  // GET /api/issues/resource/... with ?correlate=<issueID>
+  issueCorrelation?: boolean
+  podDebugAccess?: boolean
   podEnvironment?: boolean
   policyResource?: boolean
   workloadHistory?: boolean
   cnpgWorkspace?: boolean
   cnpgProtectionSetup?: boolean
+  veleroWorkspace?: boolean
+  /** POST /api/velero/schedules/{namespace}/{name}/backup */
+  veleroBackupNow?: boolean
+  /** POST /api/velero/schedules/{namespace}/{name}/{pause|resume} */
+  veleroSchedulePause?: boolean
+  /** GET /api/velero/runs/{backups|restores} */
+  veleroRuns?: boolean
+  /** POST /api/velero/backups/{namespace}/{name}/delete and GET .../deletion */
+  veleroDeleteBackup?: boolean
+  veleroRunArtifacts?: boolean
+  veleroRunVolumes?: boolean
+  /** DELETE /api/resources/... honours ?uid=&resourceVersion= preconditions */
+  resourceDeletePreconditions?: boolean
+  /** POST /api/workloads/{kind}/{ns}/{name}/restart accepts {uid, resourceVersion}; an older Radar ignores the body and restarts unconditionally. */
+  workloadRestartPreconditions?: boolean
   gitopsWriteEvidence?: boolean
   agentSigninCheck?: boolean
   serviceEndpointSlices?: boolean
@@ -198,10 +236,21 @@ export interface FeatureCapabilities {
   // GET /api/workloads/rayclusters/{namespace}/{name}/pods. Older Radars that
   // serve the route omit the flag; radarFeatures falls back to v1.15.0.
   rayClusterPods?: boolean
+  replicaSetLogs?: boolean
   // Workload Pod info marks native sidecars (containerStatuses[].sidecar).
   podSidecarMarks?: boolean
   kueueQueueWorkloads?: boolean
   podFileUpload?: boolean
+  vulnerabilities?: boolean
+  vulnerabilitiesExport?: boolean // GET /api/vulnerabilities/export
+  runtimeAdvisoryChecks?: boolean
+  runtimeAdvisoryProgress?: boolean
+  sealedSecretsController?: boolean // GET /api/sealedsecrets/controller
+  traefikRoutes?: boolean // GET /api/traefik/routes
+  cronJobTriggerJobName?: boolean
+  sealedSecretsCert?: boolean // GET /api/sealedsecrets/cert
+  workflowStop?: boolean // POST /api/workflows/{namespace}/{name}/stop
+  workflowTemplateSubmit?: boolean // POST /api/workflowtemplates/{namespace}/{name}/submit
 }
 
 // DeploymentMode is the closed set of topologies Radar can run in.
@@ -591,6 +640,21 @@ export interface TopologyGroup {
 }
 
 // Selected resource (for resources view drawer)
+// What installs and reconciles a Helm release. Tool is "flux", "k3s", or a
+// tool a newer Radar knows; consumers show Kind and the object for any tool.
+export interface HelmReleaseController {
+  tool: string
+  kind: string
+  group: string
+  namespace: string
+  name: string
+  // Where values are changed when that is a separate object. exists: true
+  // it was read, false a complete read found none (create it), absent unknown.
+  valuesRef?: { kind: string; group: string; namespace: string; name: string; exists?: boolean }
+  // k3s: the Addon (server manifest) that applies and re-applies the HelmChart.
+  addon?: string
+}
+
 export interface SelectedResource {
   kind: string
   namespace: string
@@ -669,6 +733,14 @@ export interface ResourceRef {
   namespace: string
   name: string
   group?: string  // API group for CRDs (e.g., 'cert-manager.io')
+  /**
+   * Set when the subject's own spec names this object but the viewer may not
+   * read it ('denied'), or Radar couldn't check the viewer's access
+   * ('access_unverified'). Only the name
+   * is known: not whether it exists, nor its state. Absent means no qualifier
+   * was recorded, not that the object exists.
+   */
+  state?: 'denied' | 'access_unverified'
 }
 
 // Computed relationships for a resource
@@ -821,6 +893,7 @@ export interface ManagerClaim {
 // Parsed X.509 certificate metadata (from backend cert parsing)
 export interface CertificateInfo {
   subject: string
+  organizations?: string[]
   sans?: string[]
   issuer: string
   selfSigned?: boolean
@@ -834,6 +907,7 @@ export interface CertificateInfo {
 
 export interface SecretCertificateInfo {
   certificates: CertificateInfo[]
+  additionalKeys?: Record<string, CertificateInfo[]>
 }
 
 /** How much of a CertificateSigningRequest payload Radar could read (pkg/csr). */
@@ -1006,6 +1080,8 @@ export interface APIResource {
   definitionName?: string
   featured?: boolean
   verbs: string[]
+  /** kubectl short names from API discovery (e.g. "pdb"). Absent on older Radar. */
+  shortNames?: string[]
   observation?: DynamicResourceObservation
 }
 
@@ -1033,6 +1109,12 @@ export interface HelmRelease {
   managedByFlux?: boolean
   // Readable controller reference, in namespace/name form.
   managedByFluxHelmRelease?: string
+  // k3s/RKE2 ownership, kept when the controller (its HelmChart) is withheld.
+  managedByK3s?: boolean
+  // The controller that installs this release from its own definition (Flux,
+  // k3s, …); a Helm change made here can be overwritten by it. Older Radar sends only
+  // managedByFluxHelmRelease.
+  controller?: HelmReleaseController
 }
 
 export interface HelmRevision {
@@ -1113,6 +1195,12 @@ export interface HelmReleaseDetail {
   // Ownership is retained even when the controller reference is withheld.
   managedByFlux?: boolean
   managedByFluxHelmRelease?: string
+  // k3s/RKE2 ownership, kept when the controller (its HelmChart) is withheld.
+  managedByK3s?: boolean
+  // The controller that installs this release from its own definition (Flux,
+  // k3s, …); a Helm change made here can be overwritten by it. Older Radar sends only
+  // managedByFluxHelmRelease.
+  controller?: HelmReleaseController
 }
 
 export interface HelmHook {
@@ -1306,6 +1394,8 @@ export interface ObservedHelmRelease {
   healthSummary?: string
   // Absent doesn't mean Flux isn't managing it: its HelmRelease may be unreadable.
   managedByFluxHelmRelease?: string
+  // From objects the caller can read; absent doesn't mean none.
+  controller?: HelmReleaseController
 }
 
 // One entry of a Flux HelmRelease's status.history.
@@ -1624,11 +1714,16 @@ export interface TrafficEndpoint {
 }
 
 // Traffic flow between two endpoints
+/** Set when a port was not observed but taken from the destination's Services:
+ *  `service` for their one port, `serviceMultiple` (port 0) for several. */
+export type TrafficPortSource = 'service' | 'serviceMultiple'
+
 export interface TrafficFlow {
   source: TrafficEndpoint
   destination: TrafficEndpoint
   protocol: string // tcp, udp, http, grpc
   port: number
+  portSource?: TrafficPortSource
   l7Protocol?: string // HTTP, gRPC, DNS
   httpMethod?: string
   httpPath?: string
@@ -1656,7 +1751,7 @@ export interface TrafficFlow {
    *  measures a rate rather than observing individual responses, so it has a
    *  status code for no single flow. */
   errorRate?: number
-  verdict: string // forwarded, dropped, error
+  verdict: string // forwarded, dropped, error; empty when the source reports none
   /** The network plugin's own account of which policies decided this flow
    *  (Hubble reports it). Absent when the plugin said nothing. */
   policyVerdict?: {
@@ -1692,7 +1787,10 @@ export interface AggregatedFlow {
   destination: TrafficEndpoint
   protocol: string
   port: number
+  portSource?: TrafficPortSource
   flowCount: number
+  bytesByProtocol?: Record<string, { bytesSent: number; bytesRecv: number }>
+  /** Cross-protocol sums kept for compatibility; display the breakdown when present. */
   bytesSent: number
   bytesRecv: number
   connections: number
@@ -1953,9 +2051,21 @@ export interface WorkloadRevision {
   isCurrent: boolean
   replicas: number
   template?: string // Pod template spec as YAML (for revision diff)
-  // Rollouts only: mid-canary isCurrent (rolling out) and isStable (serving traffic) differ.
+  // Rollouts only: isStable identifies the abort target, regardless of traffic weight.
   isStable?: boolean
   podHash?: string
+  // This revision's own ready pods. Absent when the kind has no per-revision count.
+  readyReplicas?: number
+  // For blue-green Rollouts, whether the active Service selects this revision.
+  // For native workloads, whether this revision has ready pods. Absent means unknown:
+  // a StatefulSet or DaemonSet mid-update has no per-revision split. A canary
+  // Rollout leaves it unset because traffic weights are unknown.
+  serving?: boolean
+  // The kubernetes.io/change-cause note, when the rollout set one.
+  changeCause?: string
+  // Deployments only: whether the spec asks for this revision's pod template.
+  // isCurrent is just the highest number, which isn't it while a change waits.
+  matchesDesired?: boolean
 }
 
 // Workload log stream event data

@@ -1,20 +1,26 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
+  AlertBanner,
   ApplicationsList,
   ApplicationDetail,
+  ArgoSyncDetailsContext,
+  ApplicationDeploys,
+  applicationDeliveryRecords,
   CenteredEmpty,
   getRadarUpgradeRequirement,
   PageHeader,
+  PaneLoader,
   RadarUpgradeAction,
   radarUpgradeDetail,
   radarUpgradeHeadline,
   FreshnessControl,
-  IssueRow,
-  ISSUE_SEVERITY_RANK,
+  IssuesView,
+  appRelationshipFields,
   useToast,
   orderEnvs,
   matchWorkloadAcrossInstances,
+  resolveAppWorkloadSelection,
   workloadKey,
   healthOf,
   compareVersions,
@@ -26,7 +32,6 @@ import {
   eventsForApplication,
   memberRef,
   subjectRef,
-  compareIssueSortAnchors,
   canonicalResourceGroup,
   type AppRow,
   type AppWorkload,
@@ -39,6 +44,7 @@ import {
   type SelectedAppWorkload,
   type SelectedResource,
 } from "@skyhook-io/k8s-ui";
+import { buildIssueAppIndex } from "@skyhook-io/k8s-ui/components/issues";
 import { AlertTriangle, Boxes } from "lucide-react";
 import { SEVERITY_TEXT } from "@skyhook-io/k8s-ui/utils/badge-colors";
 import {
@@ -55,6 +61,8 @@ import { useTimelineSource } from "../../context/TimelineSource";
 import { apiVersionToGroup, kindToPluralWithGroup, relatedResourcePath, withCrossViewParams } from "../../utils/navigation";
 import { WorkloadView } from "../workload/WorkloadView";
 import { ApplicationCostTab } from "../cost/ApplicationCostTab";
+import { ArgoSyncDetails } from "./ArgoSyncDetails";
+import { WorkloadRevisionsButton } from "../workload/WorkloadRevisionsButton";
 import { useTimelineRetentionNote } from "../../context/TimelineCustomization";
 import { isOpenCostWorkloadKind } from "../cost/kinds";
 
@@ -75,9 +83,10 @@ const APPLICATION_TIMELINE_FOCUS_MS = 60 * 60 * 1000;
 const APPLICATION_TIMELINE_AFTER_MS = 45 * 60 * 1000;
 
 const APPLICATION_VIEWS: ReadonlySet<ApplicationRouteView> =
-  new Set<ApplicationRouteView>(["overview", "topology", "history", "cost"]);
+  new Set<ApplicationRouteView>(["overview", "deploys", "topology", "history", "cost"]);
 
 function parseApplicationView(value: string | null): ApplicationRouteView {
+  if (value === "timeline") return "history";
   if (!value || !APPLICATION_VIEWS.has(value as ApplicationRouteView))
     return "overview";
   return value as ApplicationRouteView;
@@ -147,6 +156,7 @@ export function ApplicationsView({
       <AppDetailRoute
         app={selected}
         apps={apps}
+        completeInventory={namespaces.length === 0 && query.data?.access?.restricted === false}
         onBack={() => selectApp(null)}
         onOpenResource={onOpenResource}
       />
@@ -217,11 +227,13 @@ export function ApplicationsView({
 function AppDetailRoute({
   app,
   apps,
+  completeInventory,
   onBack,
   onOpenResource,
 }: {
   app: AppRow;
   apps: AppRow[];
+  completeInventory: boolean;
   onBack: () => void;
   onOpenResource: (resource: SelectedResource) => void;
 }) {
@@ -248,14 +260,21 @@ function AppDetailRoute({
       refetchInterval: 10_000,
     },
   );
-  const issuesQuery = useIssues(appNamespaces);
+  const issueNamespaces = useMemo(() => {
+    if (!completeInventory) return appNamespaces;
+    const namespaces = new Set(appNamespaces);
+    for (const [field] of appRelationshipFields) {
+      for (const ref of app.relationships?.[field] ?? []) {
+        if (ref.namespace && !ref.state) namespaces.add(ref.namespace);
+      }
+    }
+    return [...namespaces].sort();
+  }, [appNamespaces, app.relationships, completeInventory]);
+  const issuesQuery = useIssues(issueNamespaces);
+  const issueData = issuesQuery.data;
   const appIssues = useMemo(
-    () =>
-      appIssuesForWorkloads(
-        issuesQuery.data?.issues ?? [],
-        app.workloads ?? [],
-      ),
-    [issuesQuery.data?.issues, app.workloads],
+    () => appIssuesForApplication(issueData?.issues ?? [], app, apps, completeInventory),
+    [issueData?.issues, app, apps, completeInventory],
   );
 
   // The selected workload (?workload=<key>) is the scope switch and wins over
@@ -264,22 +283,37 @@ function AppDetailRoute({
   // workload. A single-workload app does not expose app scope.
   const [searchParams, setSearchParams] = useSearchParams();
   const viewParam = searchParams.get("view");
-  const selectedRouteView = parseApplicationView(viewParam);
-  const selectedView: ApplicationView =
-    selectedRouteView === "cost" ? "overview" : selectedRouteView;
   const selectedWorkloadParam = searchParams.get("workload");
   const appWorkloads = app.workloads ?? [];
   const singleWorkloadKey =
     appWorkloads.length === 1 ? workloadKey(appWorkloads[0]) : null;
   const selectedWorkloadKey = singleWorkloadKey ?? selectedWorkloadParam;
+  const deploysTab = searchParams.get("tab") === "deploys";
+  const appDeploysAlias = selectedWorkloadKey === null && !viewParam && deploysTab;
+  const selectedRouteView = appDeploysAlias ? "deploys" : parseApplicationView(viewParam);
+  const selectedView: ApplicationView =
+    selectedRouteView === "cost" ? "overview" : selectedRouteView;
   const applicationCostAvailable =
     !singleWorkloadKey &&
     appWorkloads.some((workload) => isOpenCostWorkloadKind(workload.kind));
   const applicationCostSelected =
     selectedRouteView === "cost" && applicationCostAvailable;
+  const requestedDeploys = selectedView === "deploys" || deploysTab;
+  const deploysInWorkloadScope = requestedDeploys && !singleWorkloadKey &&
+    resolveAppWorkloadSelection(appWorkloads.map(workloadKey), selectedWorkloadParam).selected !== null;
   const historyQuery = useApplicationHistory(app.key, appHistoryNamespaces, {
-    enabled: !selectedWorkloadKey,
+    enabled: !selectedWorkloadKey || Boolean(app.sourceRef) || (requestedDeploys && !deploysInWorkloadScope),
   });
+  const readableHistory = historyQuery.isError ? undefined : historyQuery.data;
+  const deliveryRecords = useMemo(() => applicationDeliveryRecords(readableHistory), [readableHistory]);
+  const partialSources = readableHistory?.partialSources;
+  const sourceUnavailable = !readableHistory?.sourceRef && !!partialSources?.length;
+  const deliverySource = sourceUnavailable ? undefined : readableHistory?.sourceRef ?? app.sourceRef;
+  const needsDeploySource = requestedDeploys && !deploysInWorkloadScope && !deliverySource;
+  const waitingForDeploySource = needsDeploySource && !sourceUnavailable && (historyQuery.isPending || historyQuery.isFetching);
+  const clearDeploySelection = deploysInWorkloadScope || (needsDeploySource && !sourceUnavailable && historyQuery.isSuccess && !historyQuery.isFetching);
+  const normalizeSingleWorkload = Boolean(singleWorkloadKey && (selectedWorkloadParam !== singleWorkloadKey || viewParam));
+  const clearCostSelection = !singleWorkloadKey && selectedRouteView === "cost" && !applicationCostAvailable;
   const [retainedHistoryRange, setRetainedHistoryRange] =
     useState<ApplicationHistoryRange>("7d");
   const historyRangeOptions = useMemo(
@@ -355,8 +389,8 @@ function AppDetailRoute({
     [historyMembership, historyTimelineQuery.data, topology],
   );
   const historyItems = useMemo(
-    () => buildApplicationHistoryItems(historyQuery.data, applicationEvents),
-    [applicationEvents, historyQuery.data],
+    () => buildApplicationHistoryItems(readableHistory, applicationEvents),
+    [applicationEvents, readableHistory],
   );
   const sourceInventoryEnabled =
     !selectedWorkloadKey && selectedView === "topology";
@@ -383,41 +417,48 @@ function AppDetailRoute({
     [deploymentTreeQuery.data, helmReleaseQuery.data?.resources],
   );
   useEffect(() => {
-    if (!singleWorkloadKey) return;
-    if (selectedWorkloadParam === singleWorkloadKey && !viewParam) return;
+    // Deploys belongs to the app scope, including its single-workload shell.
+    if (waitingForDeploySource) return;
+    if (clearDeploySelection) {
+      const params = new URLSearchParams(searchParams);
+      if (viewParam === "deploys") params.delete("view");
+      if (params.get("tab") === "deploys") params.delete("tab");
+      if (singleWorkloadKey) params.set("workload", singleWorkloadKey);
+      setSearchParams(params, { replace: true });
+      return;
+    }
+    if (!singleWorkloadKey || !normalizeSingleWorkload) return;
     const params = new URLSearchParams(searchParams);
     params.delete("view");
     params.delete("run");
     params.set("workload", singleWorkloadKey);
-    if (selectedRouteView === "cost") params.set("tab", "cost");
+    if (selectedRouteView === "cost" || selectedRouteView === "deploys") params.set("tab", selectedRouteView);
+    if (selectedRouteView === "history") params.set("tab", "timeline");
     setSearchParams(params, { replace: true });
   }, [
     searchParams,
+    waitingForDeploySource,
+    clearDeploySelection,
+    normalizeSingleWorkload,
     selectedRouteView,
-    selectedWorkloadParam,
     setSearchParams,
     singleWorkloadKey,
     viewParam,
   ]);
   useEffect(() => {
-    if (
-      singleWorkloadKey ||
-      selectedRouteView !== "cost" ||
-      applicationCostAvailable
-    )
-      return;
+    if (waitingForDeploySource || clearDeploySelection || !clearCostSelection) return;
     const params = new URLSearchParams(searchParams);
     params.delete("view");
     setSearchParams(params, { replace: true });
   }, [
-    applicationCostAvailable,
+    clearCostSelection,
+    waitingForDeploySource,
+    clearDeploySelection,
     searchParams,
-    selectedRouteView,
     setSearchParams,
-    singleWorkloadKey,
   ]);
   const selectView = useCallback(
-    (view: ApplicationRouteView) => {
+    (view: ApplicationRouteView, options?: { replace?: boolean }) => {
       const params = new URLSearchParams(searchParams);
       params.delete("tab");
       params.delete("run");
@@ -431,15 +472,15 @@ function AppDetailRoute({
         params.delete("view");
         params.delete("workload");
       } else {
-        params.set("view", view);
+        params.set("view", view === "history" ? "timeline" : view);
         params.delete("workload");
       }
-      setSearchParams(params);
+      setSearchParams(params, { replace: options?.replace });
     },
     [searchParams, setSearchParams, singleWorkloadKey],
   );
   const selectWorkload = useCallback(
-    (key: string | null, options?: { tab?: string }) => {
+    (key: string | null, options?: { tab?: string; replace?: boolean }) => {
       const params = new URLSearchParams(searchParams);
       params.delete("run");
       if (key) {
@@ -454,9 +495,13 @@ function AppDetailRoute({
       } else {
         params.delete("workload");
         params.delete("tab");
-        params.delete("view");
+        if (!options?.replace) {
+          params.delete("view");
+        } else if (!params.get("view") && searchParams.get("tab") === "deploys") {
+          params.set("view", "deploys");
+        }
       }
-      setSearchParams(params);
+      setSearchParams(params, { replace: options?.replace });
     },
     [searchParams, selectedWorkloadKey, setSearchParams, singleWorkloadKey],
   );
@@ -640,8 +685,19 @@ function AppDetailRoute({
     [apps],
   );
 
+  const renderDeploys = deliverySource && (deliveryRecords.length > 0 || requestedDeploys)
+    ? () => <ApplicationDeploys source={deliverySource} records={deliveryRecords} loading={historyQuery.isLoading} unavailable={historyQuery.isError} partialSources={partialSources} onOpenSource={openSource} />
+    : needsDeploySource && (historyQuery.isError || sourceUnavailable)
+      ? () => <AlertBanner className="m-4" variant="warning" title={sourceUnavailable ? "Delivery records are unavailable" : "Delivery records could not be refreshed"} items={partialSources} />
+      : undefined;
+  const normalizeDeploysAlias = appDeploysAlias && !!renderDeploys;
+  useEffect(() => {
+    if (normalizeDeploysAlias) selectView("deploys", { replace: true });
+  }, [normalizeDeploysAlias, selectView]);
+
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      <ArgoSyncDetailsContext.Provider value={ArgoSyncDetails}>
       <ApplicationDetail
         app={app}
         onBack={onBack}
@@ -653,8 +709,9 @@ function AppDetailRoute({
         discoveredEnvs={discoveredEnvs}
         onNavigateToResource={onOpenResource}
         onSelectWorkloadRun={selectWorkloadRun}
-        history={historyQuery.data}
+        history={readableHistory}
         historyLoading={historyQuery.isLoading}
+        historySourceError={historyQuery.isError}
         historyItems={historyItems}
         historyRuntimeLoading={historyTimelineQuery.isLoading}
         historyRuntimeError={historyTimelineQuery.isError}
@@ -672,6 +729,9 @@ function AppDetailRoute({
         onSelectWorkload={selectWorkload}
         selectedView={selectedView}
         onSelectView={selectView}
+        selectionLoading={waitingForDeploySource || clearDeploySelection || clearCostSelection}
+        renderDeploys={renderDeploys}
+        renderWorkloadRevisions={(workload) => <WorkloadRevisionsButton {...workload} />}
         costViewSelected={applicationCostSelected}
         onSelectCostView={() => selectView("cost")}
         renderCostView={
@@ -689,17 +749,24 @@ function AppDetailRoute({
         }
         renderOverviewIssues={() => (
           <AppOverviewIssues
+            key={app.key}
+            application={app}
             issues={appIssues}
             error={issuesQuery.error}
-            hasData={Boolean(issuesQuery.data)}
-            visibility={issuesQuery.data?.visibility}
+            hasData={Boolean(issueData)}
+            visibility={issueData?.visibility}
+            truncated={!!issueData && (issueData.total_matched ?? issueData.issues.length) > issueData.issues.length}
             onOpenResource={onOpenResource}
           />
         )}
         hasOverviewIssues={appIssues.length > 0}
-        renderWorkload={(workload: SelectedAppWorkload) => (
+        renderWorkload={(workload: SelectedAppWorkload, context) => requestedDeploys &&
+          (waitingForDeploySource || clearDeploySelection || normalizeSingleWorkload) ? (
+          <PaneLoader label="Loading workload view…" className="h-full" />
+        ) : (
           <div className="h-full overflow-hidden">
             <WorkloadView
+              {...context}
               kind={kindToPluralWithGroup(workload.kind, workload.group ?? "")}
               group={workload.group}
               namespace={workload.namespace}
@@ -713,6 +780,7 @@ function AppDetailRoute({
           </div>
         )}
       />
+      </ArgoSyncDetailsContext.Provider>
     </div>
   );
 }
@@ -732,28 +800,26 @@ function applicationHistoryRangeOptions(
 }
 
 function AppOverviewIssues({
+  application,
   issues,
   error,
   hasData,
   visibility,
+  truncated,
   onOpenResource,
 }: {
+  application: Pick<AppRow, "key" | "name">;
   issues: Issue[];
   error: unknown;
   hasData: boolean;
   visibility?: IssuesResponse["visibility"];
+  truncated: boolean;
   onOpenResource: (resource: SelectedResource) => void;
 }) {
-  const [openId, setOpenId] = useState<string | null>(null);
-  const sorted = useMemo(
-    () => [...issues].sort(compareAppOverviewIssues),
-    [issues],
-  );
-
   if (error && !hasData) {
     return (
       <AppOverviewIssuesState
-        headline="Operational issues unavailable"
+        headline="Issues unavailable"
         body={
           error instanceof Error
             ? error.message
@@ -763,57 +829,40 @@ function AppOverviewIssues({
     );
   }
 
-  if (error) {
-    return (
-      <section className="space-y-2">
-        <AppOverviewIssuesState
-          headline="Operational issue refresh failed"
-          body="Showing the last successful result for this application."
-        />
-        {sorted.length > 0 && (
-          <AppOverviewIssueRows
-            issues={sorted}
-            openId={openId}
-            setOpenId={setOpenId}
-            onOpenResource={onOpenResource}
-          />
-        )}
-      </section>
-    );
-  }
+  if (!error && !visibility?.impact && !truncated && issues.length === 0) return null;
 
-  if (visibility?.impact) {
-    return (
-      <section className="space-y-2">
-        <AppOverviewIssuesState
-          headline={
-            sorted.length === 0
-              ? "No visible operational issues"
-              : "Operational issue visibility is limited"
-          }
-          body={`${visibility.impact} Results may be incomplete.`}
-        />
-        {sorted.length > 0 && (
-          <AppOverviewIssueRows
-            issues={sorted}
-            openId={openId}
-            setOpenId={setOpenId}
-            onOpenResource={onOpenResource}
-          />
-        )}
-      </section>
-    );
-  }
-
-  if (sorted.length === 0) return null;
+  const navigate = (ref: IssueResourceRef) => {
+    onOpenResource({
+      kind: kindToPluralWithGroup(ref.kind, ref.group ?? ""),
+      namespace: ref.namespace ?? "",
+      name: ref.name,
+      group: ref.group ?? "",
+    });
+  };
 
   return (
-    <AppOverviewIssueRows
-      issues={sorted}
-      openId={openId}
-      setOpenId={setOpenId}
-      onOpenResource={onOpenResource}
-    />
+    <section className="space-y-2">
+      {error ? (
+        <AppOverviewIssuesState
+          headline="Issue refresh failed"
+          body="Showing the last successful result for this application."
+        />
+      ) : visibility?.impact && (
+        <AppOverviewIssuesState
+          headline={issues.length ? "Issue visibility is limited" : "No visible issues"}
+          body={`${visibility.impact} Results may be incomplete.`}
+        />
+      )}
+      {truncated && (
+        <AppOverviewIssuesState
+          headline="Issue results are incomplete"
+          body="Radar reached the issue limit for these namespaces. Some issues for this application may be missing."
+        />
+      )}
+      {issues.length > 0 && (
+        <IssuesView application={application} anyData issues={issues} onResourceClick={navigate} />
+      )}
+    </section>
   );
 }
 
@@ -842,90 +891,25 @@ function AppOverviewIssuesState({
   );
 }
 
-function AppOverviewIssueRows({
-  issues: sorted,
-  openId,
-  setOpenId,
-  onOpenResource,
-}: {
-  issues: Issue[];
-  openId: string | null;
-  setOpenId: (value: string | null) => void;
-  onOpenResource: (resource: SelectedResource) => void;
-}) {
-  const navigate = (ref: IssueResourceRef) => {
-    onOpenResource({
-      kind: kindToPluralWithGroup(ref.kind, ref.group ?? ""),
-      namespace: ref.namespace ?? "",
-      name: ref.name,
-      group: ref.group ?? "",
-    });
-  };
-
-  return (
-    <section className="space-y-2">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-2 text-sm font-semibold text-theme-text-primary">
-          <AlertTriangle
-            className="h-4 w-4 shrink-0 text-theme-text-secondary"
-            aria-hidden
-          />
-          <span>Operational Issues</span>
-          <span className="badge-sm text-[10px] text-theme-text-secondary">
-            {sorted.length}
-          </span>
-        </div>
-        <span className="text-xs text-theme-text-tertiary">
-          Scoped to this application
-        </span>
-      </div>
-      <ol className="flex flex-col gap-1.5">
-        {sorted.slice(0, 4).map((issue) => {
-          const rowKey = `${issue.cluster_id ?? ""}:${issue.id}`;
-          return (
-            <IssueRow
-              key={rowKey}
-              issue={issue}
-              open={openId === rowKey}
-              onToggle={() => setOpenId(openId === rowKey ? null : rowKey)}
-              onResourceClick={navigate}
-            />
-          );
-        })}
-      </ol>
-      {sorted.length > 4 ? (
-        <div className="text-xs text-theme-text-tertiary">
-          Showing 4 of {sorted.length} issues. Open Issues for the full queue.
-        </div>
-      ) : null}
-    </section>
-  );
-}
-
-function compareAppOverviewIssues(a: Issue, b: Issue): number {
-  const severity =
-    ISSUE_SEVERITY_RANK[b.severity] - ISSUE_SEVERITY_RANK[a.severity];
-  if (severity !== 0) return severity;
-  const onset = compareIssueSortAnchors(a, b);
-  if (onset !== 0) return onset;
-  const ns = (a.namespace ?? "").localeCompare(b.namespace ?? "");
-  if (ns !== 0) return ns;
-  const name = a.name.localeCompare(b.name);
-  if (name !== 0) return name;
-  return a.id.localeCompare(b.id);
-}
-
-export function appIssuesForWorkloads(
+export function appIssuesForApplication(
   issues: Issue[],
-  workloads: AppWorkload[],
+  app: Pick<AppRow, "key" | "workloads">,
+  inventory: AppRow[],
+  completeInventory: boolean,
 ): Issue[] {
-  if (issues.length === 0 || workloads.length === 0) return [];
+  if (issues.length === 0) return [];
+  const ownerForIssue = buildIssueAppIndex(inventory, { complete: completeInventory });
+  const workloads = app.workloads;
   const workloadKeys = new Set(workloads.map(workloadIssueKey));
   const out: Issue[] = [];
   const seen = new Set<string>();
   for (const issue of issues) {
-    if (!issueRefs(issue).some((ref) => workloadKeys.has(issueRefKey(ref))))
-      continue;
+    // Diagnostic evidence can show that an issue affects this app even when
+    // the queue cannot attribute ownership to a single application.
+    if (
+      ownerForIssue(issue)?.key !== app.key &&
+      !issueRefs(issue).some((ref) => workloadKeys.has(issueRefKey(ref)))
+    ) continue;
     if (seen.has(issue.id)) continue;
     seen.add(issue.id);
     out.push(issue);

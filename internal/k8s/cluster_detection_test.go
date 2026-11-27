@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -115,8 +116,7 @@ func TestGetClusterPlatformFromMixedCachedNodes(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(core.Stop)
-	previous := resourceCache.Swap(&ResourceCache{ResourceCache: core})
-	t.Cleanup(func() { resourceCache.Store(previous) })
+	t.Cleanup(SwapResourceCacheForTest(&ResourceCache{ResourceCache: core}))
 	for range 32 {
 		if got, err := GetClusterPlatform(context.Background()); err != nil || got != "eks" {
 			t.Fatalf("GetClusterPlatform() = %q, %v; want eks", got, err)
@@ -269,5 +269,36 @@ func TestGetClusterPlatformDoesNotWaitOnSlowNKPLookup(t *testing.T) {
 	_, _ = GetClusterPlatform(context.Background())
 	if n := reads.Load(); n != 2 {
 		t.Fatalf("namespace reads = %d, want 2: a timed-out lookup is not remembered", n)
+	}
+}
+
+func TestInvalidatePlatformCacheRetiresInflightNKPRead(t *testing.T) {
+	entered, release := make(chan struct{}), make(chan struct{})
+	var first atomic.Bool
+	reads := setNKPLookupClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if first.CompareAndSwap(false, true) {
+			close(entered)
+			<-release
+			_ = json.NewEncoder(w).Encode(corev1.Namespace{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Namespace"}})
+			return
+		}
+		http.NotFound(w, r)
+	})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	defer unblock()
+	finished := make(chan bool, 1)
+	go func() { finished <- IsNKP(context.Background()) }()
+	<-entered
+	invalidated := make(chan struct{})
+	go func() { InvalidatePlatformCache(); close(invalidated) }()
+	select {
+	case <-invalidated:
+	case <-time.After(time.Second):
+		t.Fatal("platform invalidation waited for a Kubernetes read")
+	}
+	unblock()
+	if <-finished || IsNKP(context.Background()) || reads.Load() != 2 {
+		t.Fatal("stale namespace lookup survived invalidation")
 	}
 }

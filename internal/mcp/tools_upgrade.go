@@ -107,7 +107,7 @@ type mcpUpgradeAuthorizer struct {
 // boundary.
 func (a mcpUpgradeAuthorizer) Namespaces() []string {
 	if k8s.ForceNamespaceScope {
-		if namespace := k8s.GetNamespaceScopeTarget(); namespace != "" {
+		if namespace := k8s.BoundOrCurrent(a.ctx).NamespaceScopeTarget(); namespace != "" {
 			return filterNamespacesForUser(a.ctx, []string{namespace})
 		}
 		return []string{}
@@ -128,7 +128,7 @@ func (a mcpUpgradeAuthorizer) CanGetSubresource(group, resource, subresource str
 	if user == nil {
 		return upgrade.EvidenceAuthorizationDecision{Allowed: true, Authoritative: true}
 	}
-	client := k8s.GetClient()
+	client := k8s.BoundOrCurrent(a.ctx).Client()
 	if client == nil {
 		return upgrade.EvidenceAuthorizationDecision{}
 	}
@@ -151,7 +151,7 @@ func handleGetUpgradeReadiness(ctx context.Context, req *mcp.CallToolRequest, in
 	if k8s.GetResourceCache() == nil {
 		return nil, nil, errNotConnected()
 	}
-	outcome, err := upgrade.ScanMemoized(ctx, mcpUpgradeAuthorizer{ctx: ctx}, input.Target, input.Refresh)
+	outcome, err := upgrade.ScanMemoized(ctx, func(ctx context.Context) upgrade.EvidenceAuthorizer { return mcpUpgradeAuthorizer{ctx: ctx} }, input.Target, input.Refresh)
 	if err != nil {
 		return nil, nil, mapUpgradeScanError(err)
 	}

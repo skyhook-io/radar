@@ -8,6 +8,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	"github.com/skyhook-io/radar/pkg/configrefs"
 )
 
 func TestIstioObservedServiceDomain(t *testing.T) {
@@ -32,11 +34,11 @@ func TestIstioObservedServiceDomain(t *testing.T) {
 			if domain != tc.domain {
 				t.Fatalf("domain=%q, want %q", domain, tc.domain)
 			}
-			name, namespace := parseIstioHost("api.prod.svc.mesh.internal", "app", domain)
+			name, namespace := configrefs.IstioHostService("api.prod.svc.mesh.internal", "app", domain)
 			if (name == "api" && namespace == "prod") != (domain == "mesh.internal") {
 				t.Fatalf("unexpected custom-domain join %s/%s", namespace, name)
 			}
-			if name, _ := parseIstioHost("api.prod.svc.unobserved.test", "app", domain); name != "" {
+			if name, _ := configrefs.IstioHostService("api.prod.svc.unobserved.test", "app", domain); name != "" {
 				t.Fatal("inferred unobserved domain")
 			}
 		})

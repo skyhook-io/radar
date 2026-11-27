@@ -21,7 +21,8 @@ func UserConfig(user *pkgauth.User) (*rest.Config, error) {
 }
 
 func UserConfigSnapshot(user *pkgauth.User) (*rest.Config, string, error) {
-	base, contextName := GetConfigSnapshot()
+	conn := Current()
+	base, contextName := conn.Config(), TimelineClusterContext(conn.ContextName())
 	if base == nil {
 		return nil, contextName, fmt.Errorf("K8s config not initialized")
 	}
@@ -37,14 +38,8 @@ func UserClient(user *pkgauth.User) (kubernetes.Interface, error) {
 	return kubernetes.NewForConfig(cfg)
 }
 
-func UserClientSafetySnapshot(user *pkgauth.User) (kubernetes.Interface, string, error) {
-	clientMu.RLock()
-	base := k8sConfig
-	binding := contextBinding
-	if base != nil {
-		base = rest.CopyConfig(base)
-	}
-	clientMu.RUnlock()
+func (conn *Connection) UserClientSafetySnapshot(user *pkgauth.User) (kubernetes.Interface, string, error) {
+	base, binding := conn.Config(), conn.ContextBinding()
 	if base == nil {
 		return nil, binding, fmt.Errorf("K8s config not initialized")
 	}

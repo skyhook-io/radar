@@ -21,11 +21,25 @@ func addObservedDependencyEdges(nodes []Node, edges []Edge, refs []declaredDepen
 	if provider == nil || len(refs) == 0 {
 		return nodes, edges, nil
 	}
+	return addIndexedDependencyEdges(nodes, edges, refs, provider, opts, nodeIDsByResource(nodes))
+}
+
+func nodeIDsByResource(nodes []Node) map[string]string {
 	byResource := make(map[string]string, len(nodes))
 	for i := range nodes {
 		for _, key := range nodeResourceKeys(&nodes[i]) {
 			byResource[key] = nodes[i].ID
 		}
+	}
+	return byResource
+}
+
+// addIndexedDependencyEdges is addObservedDependencyEdges over a caller-kept
+// index of the graph's nodes, which it extends with every node it adds, so a
+// caller adding edges in several passes builds the index once.
+func addIndexedDependencyEdges(nodes []Node, edges []Edge, refs []declaredDependency, provider DynamicProvider, opts BuildOptions, byResource map[string]string) ([]Node, []Edge, []string) {
+	if provider == nil || len(refs) == 0 {
+		return nodes, edges, nil
 	}
 	byKind := map[resourceid.GroupKind][]declaredDependency{}
 	for _, ref := range refs {
