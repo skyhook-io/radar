@@ -57,6 +57,7 @@ function OwnerDetail({ owner, teamLabel }: { owner: VulnerabilityWorkloadOwner; 
             <span key={`${s.repo}/${s.path ?? ''}`} className="break-all font-mono">{s.repo}{s.path ? ` (${s.path})` : ''}</span>
           ))}
           {m.tool === 'helm' && <span>Helm records no source repository.</span>}
+          {m.shared && <span>Another Argo CD or Flux object lists it too; this is the one its own metadata names.</span>}
         </>
       )}
       {!m && owner.managerUnknown && <span>Radar couldn't tell what deploys it: the evidence disagrees or couldn't all be read.</span>}
@@ -106,8 +107,9 @@ export function ownerTip(owner: VulnerabilityWorkloadOwner | undefined): string 
   const parts: string[] = []
   const m = owner.manager
   if (m) {
-    const repo = m.sources?.[0]?.repo
-    parts.push(`Deployed by ${managerLabel(m)} ${m.namespace}/${m.name}${m.chart ? `, chart ${m.chart}` : ''}${repo ? `, from ${shortRepo(repo)}` : ''}`)
+    const from = (m.sources ?? []).map((s) => `${shortRepo(s.repo)}${s.path ? ` (${s.path})` : ''}`).join(', ')
+    parts.push(`Deployed by ${managerLabel(m)} ${m.namespace}/${m.name}${m.chart ? `, chart ${m.chart}` : ''}${from ? `, from ${from}` : ''}`)
+    if (m.shared) parts.push('Another Argo CD or Flux object lists it too')
   } else if (owner.managerUnknown) {
     parts.push("Radar couldn't tell what deploys it")
   }

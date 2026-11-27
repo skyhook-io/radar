@@ -48,6 +48,7 @@ func ownerCluster(t *testing.T) *k8s.ResourceCache {
 		ownerDeployment("shop", "api", nil, map[string]string{"argocd.argoproj.io/tracking-id": "shop-api:apps/Deployment:shop/api"}),
 		ownerDeployment("shop", "worker", map[string]string{"kustomize.toolkit.fluxcd.io/name": "infra", "kustomize.toolkit.fluxcd.io/namespace": "flux-system"}, nil),
 		ownerDeployment("other", "plain", nil, nil),
+		ownerDeployment("shop", "both", nil, map[string]string{"argocd.argoproj.io/tracking-id": "shop-api:apps/Deployment:shop/both"}),
 	)
 	k8s.ResetResourceCache()
 	if err := k8s.InitTestResourceCache(client); err != nil {
@@ -60,7 +61,16 @@ func ownerCluster(t *testing.T) *k8s.ResourceCache {
 			"destination": map[string]any{"server": "https://kubernetes.default.svc", "namespace": "shop"},
 			"source":      map[string]any{"repoURL": "https://deploy:s3cret@github.com/acme/deploy.git", "path": "apps/api"},
 		},
-		map[string]any{"resources": []any{map[string]any{"group": "apps", "version": "v1", "kind": "Deployment", "namespace": "shop", "name": "api"}}})
+		map[string]any{"resources": []any{
+			map[string]any{"group": "apps", "version": "v1", "kind": "Deployment", "namespace": "shop", "name": "api"},
+			map[string]any{"group": "apps", "version": "v1", "kind": "Deployment", "namespace": "shop", "name": "both"},
+		}})
+	extra := ownerObject("argoproj.io/v1alpha1", "Application", "argocd", "shop-extra",
+		map[string]any{
+			"destination": map[string]any{"server": "https://kubernetes.default.svc", "namespace": "shop"},
+			"source":      map[string]any{"repoURL": "https://github.com/acme/extra.git", "path": "apps/extra"},
+		},
+		map[string]any{"resources": []any{map[string]any{"group": "apps", "version": "v1", "kind": "Deployment", "namespace": "shop", "name": "both"}}})
 	kustomization := ownerObject("kustomize.toolkit.fluxcd.io/v1", "Kustomization", "flux-system", "infra",
 		map[string]any{"path": "./clusters/prod", "sourceRef": map[string]any{"kind": "GitRepository", "name": "fleet"}},
 		map[string]any{"inventory": map[string]any{"entries": []any{map[string]any{"id": "shop_worker_apps_Deployment", "v": "v1"}}}})
@@ -72,7 +82,7 @@ func ownerCluster(t *testing.T) *k8s.ResourceCache {
 		{Group: "source.toolkit.fluxcd.io", Version: "v1", Resource: "gitrepositories"}:   "GitRepositoryList",
 		{Group: "helm.toolkit.fluxcd.io", Version: "v2", Resource: "helmreleases"}:        "HelmReleaseList",
 	}
-	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), gvrs, app, kustomization, repo)
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), gvrs, app, extra, kustomization, repo)
 	resources := []k8s.APIResource{
 		{Group: "argoproj.io", Version: "v1alpha1", Name: "applications", Kind: "Application", Namespaced: true, IsCRD: true, Verbs: []string{"get", "list", "watch", "delete"}},
 		{Group: "kustomize.toolkit.fluxcd.io", Version: "v1", Name: "kustomizations", Kind: "Kustomization", Namespaced: true, IsCRD: true, Verbs: []string{"get", "list", "watch", "delete"}},
@@ -150,6 +160,22 @@ func TestResolveOwnersNamesManagersReposAndTeams(t *testing.T) {
 	if _, listed := got["plain"]; listed {
 		t.Errorf("an unmanaged workload with no team is listed: %+v", got["plain"])
 	}
+	if api.Manager.Shared {
+		t.Errorf("api is listed by one Application only: %+v", api.Manager)
+	}
+}
+
+// Two Applications list one workload: its tracking id names the lead, and
+// the answer says it is shared rather than calling it the only deployer.
+func TestResolveOwnersSaysAManagerIsShared(t *testing.T) {
+	cache := ownerCluster(t)
+	owners, _, err := resolveOwners(context.Background(), cache, []WorkloadRef{{Kind: "Deployment", Group: "apps", Namespace: "shop", Name: "both"}}, nil, TeamLabel)
+	if err != nil || len(owners) != 1 {
+		t.Fatalf("resolveOwners: %v %+v", err, owners)
+	}
+	if m := owners[0].Manager; m == nil || m.Name != "shop-api" || !m.Shared {
+		t.Errorf("manager = %+v, want shop-api, shared", m)
+	}
 }
 
 // denyKinds may read everything but the named kinds.
@@ -189,7 +215,12 @@ func TestOwnerCells(t *testing.T) {
 		t.Errorf("no owner = %q", got)
 	}
 	o := &WorkloadOwner{Manager: &OwnerManager{Tool: "argocd", Kind: "Application", Namespace: "argocd", Name: "shop", Sources: []OwnerSource{{Repo: "https://a/x", Path: "p"}, {Repo: "https://b/y"}}}, Team: "pay"}
-	if got, want := ownerCells(o, join), []string{"argocd_application", "argocd/shop", "https://a/x; https://b/y", "p", "", "pay"}; !slices.Equal(got, want) {
+	if got, want := ownerCells(o, join), []string{"argocd_application", "argocd/shop", "https://a/x; https://b/y", "p; ", "", "pay"}; !slices.Equal(got, want) {
+		t.Errorf("cells = %q, want %q", got, want)
+	}
+	// A pathless Helm source before a Git one keeps the path in place.
+	o.Manager.Sources = []OwnerSource{{Repo: "https://charts.example.com"}, {Repo: "https://a/x", Path: "apps"}}
+	if got, want := ownerCells(o, join), []string{"argocd_application", "argocd/shop", "https://charts.example.com; https://a/x", "; apps", "", "pay"}; !slices.Equal(got, want) {
 		t.Errorf("cells = %q, want %q", got, want)
 	}
 	if got := ownerCells(&WorkloadOwner{ManagerUnknown: true}, join); got[0] != "unknown" || got[1] != "" {
@@ -206,6 +237,11 @@ func TestSafeRepo(t *testing.T) {
 		"git@github.com:a/b.git":                    "git@github.com:a/b.git",
 		"oci://ghcr.io/a/charts":                    "oci://ghcr.io/a/charts",
 		"ssh://git:pw@github.com/a/b":               "ssh://git@github.com/a/b",
+		"ssh://ghp_token@github.com/a/b":            "ssh://github.com/a/b",
+		"token@github.com:a/b.git":                  "github.com:a/b.git",
+		"git@github.com:a/b.git?private_token=x#y":  "git@github.com:a/b.git",
+		"key:secret@minio.local:9000/bucket":        "minio.local:9000/bucket",
+		"minio.local:9000/bucket":                   "minio.local:9000/bucket",
 	} {
 		if got := safeRepo(in); got != want {
 			t.Errorf("safeRepo(%q) = %q, want %q", in, got, want)

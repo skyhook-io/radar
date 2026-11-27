@@ -62,14 +62,19 @@ type OwnerManager struct {
 	Group     string `json:"group,omitempty"`
 	Namespace string `json:"namespace"`
 	Name      string `json:"name"`
-	// Chart is the chart the release was made from: the workload's
-	// helm.sh/chart label for a Helm release, the chart a Flux HelmRelease
-	// or an Argo CD source names otherwise.
+	// Chart is, for a Helm release, the workload's helm.sh/chart label: the
+	// chart whose template rendered it, which for a subchart's workload is
+	// the subchart, not the release's chart. Otherwise it is the chart a
+	// Flux HelmRelease or an Argo CD source names.
 	Chart string `json:"chart,omitempty"`
 	// Sources are where the manager deploys from, credentials removed.
 	// Empty for a Helm release, which records no source, and when the
 	// caller can't read the manager or its source.
 	Sources []OwnerSource `json:"sources,omitempty"`
+	// Shared: two or more Argo CD or Flux objects list the workload, and
+	// this is the one its own metadata names; it is a lead, not the only
+	// deployer.
+	Shared bool `json:"shared,omitempty"`
 }
 
 // OwnerSource is one repository a manager deploys from, and the path in it
@@ -130,6 +135,9 @@ func resolveOwners(ctx context.Context, cache *k8s.ResourceCache, refs []Workloa
 		// itself keeps its group, which the summary drops for GitOps kinds.
 		if resourcecontext.ManagerSummary(answer) != nil {
 			owner.Manager = r.manager(*answer.Lead, meta.GetLabels())
+			if owner.Manager != nil {
+				owner.Manager.Shared = answer.State == ownership.ManagerShared
+			}
 		}
 		owner.ManagerUnknown = owner.Manager == nil && answer.Subject.Present() && answer.State != ownership.ManagerNone
 		if owner.Manager != nil || owner.ManagerUnknown || owner.Team != "" {
@@ -293,22 +301,25 @@ func fluxSourceURL(src *unstructured.Unstructured) string {
 	return ""
 }
 
-// safeRepo drops credentials, a query and a fragment from a URL. An SSH
-// address keeps its user name (git@), which is never a secret there; over
-// HTTPS a user name can be a token, so it goes. An scp-style address
-// (git@host:org/repo) isn't a URL and holds no secret.
+// safeRepo drops credentials, a query and a fragment from a repository
+// address. Only the conventional git user survives (ssh://git@ and
+// git@host:org/repo), since any other user name can be a token. An address
+// without a scheme (an scp-style one, or a Flux Bucket's endpoint) loses its
+// query, fragment and any other user the same way.
 func safeRepo(repo string) string {
 	if !strings.Contains(repo, "://") {
+		repo, _, _ = strings.Cut(repo, "#")
+		repo, _, _ = strings.Cut(repo, "?")
+		if i := strings.LastIndex(repo, "@"); i >= 0 && repo[:i] != "git" {
+			repo = repo[i+1:]
+		}
 		return repo
 	}
-	if u, err := url.Parse(repo); err == nil && u.Scheme == "ssh" && u.User != nil {
-		name := u.User.Username()
-		safe := prom.SafeAddress(repo)
-		if v, err := url.Parse(safe); err == nil && name != "" {
-			v.User = url.User(name)
+	if u, err := url.Parse(repo); err == nil && u.Scheme == "ssh" && u.User != nil && u.User.Username() == "git" {
+		if v, err := url.Parse(prom.SafeAddress(repo)); err == nil {
+			v.User = url.User("git")
 			return v.String()
 		}
-		return safe
 	}
 	return prom.SafeAddress(repo)
 }
@@ -397,12 +408,17 @@ func ownerCells(o *WorkloadOwner, join func([]string) string) []string {
 	case m != nil:
 		cells[0] = ownerKindCell(m)
 		cells[1] = m.Namespace + "/" + m.Name
+		// Paths line up with repositories, an empty one kept in its place,
+		// so a reader can tell which repository a path is in.
 		var repos, paths []string
+		anyPath := false
 		for _, s := range m.Sources {
 			repos = append(repos, s.Repo)
-			if s.Path != "" {
-				paths = append(paths, s.Path)
-			}
+			paths = append(paths, s.Path)
+			anyPath = anyPath || s.Path != ""
+		}
+		if !anyPath {
+			paths = nil
 		}
 		cells[2], cells[3], cells[4] = join(repos), join(paths), m.Chart
 	case o.ManagerUnknown:

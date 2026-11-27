@@ -203,10 +203,12 @@ export interface VulnerabilityOwnerManager {
   group?: string
   namespace: string
   name: string
-  /** The release's chart (helm.sh/chart for a Helm release). */
+  /** A Helm release's helm.sh/chart label (a subchart's workload names the subchart), or the chart a Flux or Argo CD source names. */
   chart?: string
   /** Empty for a Helm release, which records none, and where the caller can't read the manager or its source. */
   sources?: VulnerabilityOwnerSource[]
+  /** Two or more Argo CD or Flux objects list the workload; this is the one its metadata names. */
+  shared?: boolean
 }
 
 /** What Radar knows of who owns a workload. A workload with nothing known is left out of `owners`. */
