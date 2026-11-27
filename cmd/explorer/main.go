@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"flag"
@@ -11,6 +12,7 @@ import (
 	neturl "net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sort"
 	"strings"
 	"syscall"
@@ -28,8 +30,10 @@ import (
 	"github.com/skyhook-io/radar/internal/reachability"
 	"github.com/skyhook-io/radar/internal/server"
 	versionpkg "github.com/skyhook-io/radar/internal/version"
+	"github.com/skyhook-io/radar/internal/vulnerabilities"
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 	"github.com/skyhook-io/radar/pkg/prom"
+	"github.com/skyhook-io/radar/pkg/vulnintel"
 	"golang.org/x/net/http/httpguts"
 	authv1 "k8s.io/api/authorization/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -204,6 +208,9 @@ func main() {
 	firstPaintBackstop := flag.Duration("first-paint-backstop", k8s.EnvDurationOr("RADAR_FIRST_PAINT_BACKSTOP", 5*time.Minute), "Hard upper bound on the initial critical-cache sync wait before Radar falls through to partial-data render (default: 5m). Env: RADAR_FIRST_PAINT_BACKSTOP")
 	namespaceListTimeout := flag.Duration("namespace-list-timeout", k8s.EnvDurationOr("RADAR_NAMESPACE_LIST_TIMEOUT", 5*time.Second), "Timeout for the cluster-wide namespace LIST used to decide if the user is RBAC-namespace-restricted (default: 5s). Widen to 30s or more on slow control planes — a timeout here is misreported in the UI as 'Limited list — RBAC'. Env: RADAR_NAMESPACE_LIST_TIMEOUT")
 	maxScopeCandidates := flag.Int("max-scope-candidates", k8s.EnvIntOr("RADAR_MAX_SCOPE_CANDIDATES", 20), "Cap on the namespace-fallback probe fanout for users who can list namespaces cluster-wide but not list a specific kind cluster-wide (default: 20). Raise for clusters with more than 20 namespaces to avoid silently marking kinds as denied in dropped namespaces. Env: RADAR_MAX_SCOPE_CANDIDATES")
+	kevFeed := flag.String("kev-feed", cmp.Or(os.Getenv("RADAR_KEV_FEED"), vulnintel.DefaultKEVURL), "Where Checks > Vulnerabilities reads CISA's Known Exploited Vulnerabilities catalog: a URL (a mirror for clusters without internet access; plain http is fine for an internal mirror) or a path to the JSON file, re-read daily; off turns it off. Fetched only once the page or the MCP tool reads vulnerabilities. Env: RADAR_KEV_FEED")
+	epssFeed := flag.String("epss-feed", cmp.Or(os.Getenv("RADAR_EPSS_FEED"), vulnintel.DefaultEPSSURL), "Where Checks > Vulnerabilities reads FIRST's daily EPSS scores (CSV, gzipped or not): a URL (a mirror; plain http is fine for an internal mirror) or a file path, re-read daily; off turns it off. Env: RADAR_EPSS_FEED")
+	noFeedDownloads := flag.Bool("no-vulnerability-feed-downloads", fileCfg.NoVulnerabilityFeedDownloads || envBool("RADAR_DISABLE_VULNERABILITY_FEED_DOWNLOADS"), "Never download the KEV and EPSS feeds: a feed set to a URL is off, and one set to a file path is still read. Env: RADAR_DISABLE_VULNERABILITY_FEED_DOWNLOADS=1")
 	flag.Parse()
 	if *noVersionCheck {
 		versionpkg.SetDisabled(true)
@@ -223,6 +230,12 @@ func main() {
 	if *reachabilityImage != "" {
 		reachability.SetConfiguredImage(*reachabilityImage)
 	}
+
+	feedCache := ""
+	if home, err := os.UserHomeDir(); err == nil {
+		feedCache = filepath.Join(home, ".radar", "feeds")
+	}
+	vulnerabilities.ConfigureIntel(vulnintel.Config{KEVSource: *kevFeed, EPSSSource: *epssFeed, CacheDir: feedCache, NoDownloads: *noFeedDownloads})
 
 	// Cloud-mode: Radar runs inside a customer cluster and connects to Radar Hub.
 	// The ordinary TCP listener is health-only; the full handler is served over
@@ -926,4 +939,13 @@ func canSelfUpgrade(ctx context.Context, client kubernetes.Interface, namespace,
 		}
 	}
 	return true
+}
+
+// envBool reads a boolean environment variable: 1, true, yes or on.
+func envBool(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
 }

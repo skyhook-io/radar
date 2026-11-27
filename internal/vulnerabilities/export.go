@@ -14,6 +14,7 @@ import (
 
 	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceapi"
+	"github.com/skyhook-io/radar/pkg/vulnintel"
 )
 
 // Row statuses in an export: why a row has no findings data, or "ok". Radar
@@ -31,20 +32,25 @@ const (
 
 var exportLead = []string{"cluster", "scanned", "status"}
 
+// intelColumns are a CVE's KEV and EPSS cells: kev is "yes", "no" or
+// "unavailable" (no catalog: never read that as "no"), kev_ransomware
+// CISA's "known" or "unknown", and epss "unavailable" without the scores.
+var intelColumns = []string{"kev", "kev_date_added", "kev_due_date", "kev_ransomware", "epss", "epss_percentile"}
+
 // ExportColumns are each view's CSV header. Radar Cloud maps an agent's
 // columns by these names, so renaming one is a breaking change there.
 var ExportColumns = map[View][]string{
-	ViewImage: slices.Concat(exportLead, []string{"image", "digest", "os", "critical", "high", "medium", "low", "unrated", "with_a_fix", "running_in", "exposed_workloads", "os_end_of_life", "scanner", "scanner_version"}),
-	ViewFix:   slices.Concat(exportLead, []string{"package", "type", "installed", "upgrade_to", "fixed_versions", "critical", "high", "medium", "low", "unrated", "cves", "images", "workloads", "image_names", "running_in", "exposed_workloads"}),
+	ViewImage: slices.Concat(exportLead, []string{"image", "digest", "os", "critical", "high", "medium", "low", "unrated", "with_a_fix", "running_in", "exposed_workloads", "os_end_of_life", "scanner", "scanner_version", "kev_cves"}),
+	ViewFix:   slices.Concat(exportLead, []string{"package", "type", "installed", "upgrade_to", "fixed_versions", "critical", "high", "medium", "low", "unrated", "cves", "images", "workloads", "image_names", "running_in", "exposed_workloads", "kev_cves"}),
 	// published, last_modified and days_since_published are the scanner
 	// database's dates for the CVE, not when it was found here.
-	ViewCVE:      slices.Concat(exportLead, []string{"cve", "title", "severity", "score", "packages", "installed", "fixed_versions", "fix", "images", "workloads", "image_names", "running_in", "link", "exposed_workloads", "published", "last_modified", "days_since_published"}),
-	ViewWorkload: slices.Concat(exportLead, []string{"kind", "namespace", "workload", "critical", "high", "medium", "low", "unrated", "with_a_fix", "containers", "exposed_workloads"}),
+	ViewCVE:      slices.Concat(exportLead, []string{"cve", "title", "severity", "score", "packages", "installed", "fixed_versions", "fix", "images", "workloads", "image_names", "running_in", "link", "exposed_workloads", "published", "last_modified", "days_since_published"}, intelColumns),
+	ViewWorkload: slices.Concat(exportLead, []string{"kind", "namespace", "workload", "critical", "high", "medium", "low", "unrated", "with_a_fix", "containers", "exposed_workloads", "kev_cves"}),
 	// One row per finding, image and workload container, for a compliance
 	// tracker (a POA&M): exposure is "exposed", "unknown", or empty when
 	// Radar sees no route.
 	ViewFindings: slices.Concat(exportLead, []string{"cve", "severity", "score", "title", "package", "package_type", "installed_version", "fixed_version", "fix_target", "fix_available", "image", "digest", "namespace", "workload_kind", "workload", "container", "exposure", "routes", "link",
-		"published", "last_modified", "days_since_published", "package_url", "os", "os_end_of_life", "scanner", "scanner_version"}),
+		"published", "last_modified", "days_since_published", "package_url", "os", "os_end_of_life", "scanner", "scanner_version"}, intelColumns),
 }
 
 // exportExtras is what an export's CSV needs beyond the wire shape: scan
@@ -279,9 +285,10 @@ func WriteCSV(ctx context.Context, resp Response, f Filter, cluster string) ([]b
 		return w.Write(row)
 	}
 	blank := func(n int) []string { return make([]string, n) }
-	// Clean rows follow the screen's clean fold: hidden under a severity or
-	// fix filter.
-	unfiltered := len(f.Severities) == 0 && !f.FixableOnly
+	kevCount, intelCells := intelCellWriters(resp.Intel)
+	// Clean rows follow the screen's clean fold: hidden under a severity,
+	// fix or Known exploited filter.
+	unfiltered := len(f.Severities) == 0 && !f.FixableOnly && !f.KEVOnly
 
 	switch resp.View {
 	case ViewImage:
@@ -289,23 +296,24 @@ func WriteCSV(ctx context.Context, resp Response, f Filter, cluster string) ([]b
 			meta := x.images[img.ID]
 			counts := countCells(img.Counts, img.Fixable)
 			status := StatusOK
+			kev := kevCount(img.KEVCVEs)
 			if img.FindingsUnread {
-				status, counts = StatusNotRead, blank(6)
+				status, counts, kev = StatusNotRead, blank(6), ""
 			}
-			if err := put(meta.scanned, status, slices.Concat([]string{img.Image, meta.digest, meta.os}, counts, []string{join(workloadCells(img.Workloads, true)), exposedCell(img.Exposed, img.Workloads)}, meta.imageTail())...); err != nil {
+			if err := put(meta.scanned, status, slices.Concat([]string{img.Image, meta.digest, meta.os}, counts, []string{join(workloadCells(img.Workloads, true)), exposedCell(img.Exposed, img.Workloads)}, meta.imageTail(), []string{kev})...); err != nil {
 				return nil, err
 			}
 		}
 		if unfiltered {
 			for _, c := range resp.Clean {
 				meta := x.images[c.ID]
-				if err := put(meta.scanned, StatusOK, slices.Concat([]string{c.Image, meta.digest, meta.os}, countCells(Counts{}, Counts{}), []string{join(workloadCells(c.Workloads, true)), exposedCell(c.Exposed, c.Workloads)}, meta.imageTail())...); err != nil {
+				if err := put(meta.scanned, StatusOK, slices.Concat([]string{c.Image, meta.digest, meta.os}, countCells(Counts{}, Counts{}), []string{join(workloadCells(c.Workloads, true)), exposedCell(c.Exposed, c.Workloads)}, meta.imageTail(), []string{kevCount(0)})...); err != nil {
 					return nil, err
 				}
 			}
 		}
 		for _, u := range resp.Unscanned {
-			if err := put(time.Time{}, StatusNotScanned, slices.Concat([]string{u.Image}, blank(8), []string{join(workloadCells(u.Workloads, true)), exposedCell(u.Exposed, u.Workloads)}, blank(3))...); err != nil {
+			if err := put(time.Time{}, StatusNotScanned, slices.Concat([]string{u.Image}, blank(8), []string{join(workloadCells(u.Workloads, true)), exposedCell(u.Exposed, u.Workloads)}, blank(4))...); err != nil {
 				return nil, err
 			}
 		}
@@ -319,7 +327,7 @@ func WriteCSV(ctx context.Context, resp Response, f Filter, cluster string) ([]b
 				continue
 			}
 			meta := x.images[u.id]
-			if err := put(meta.scanned, StatusNotRead, slices.Concat([]string{u.image, meta.digest, meta.os}, blank(6), []string{join(workloadCells(u.workloads, true)), exposedCell(u.exposed, u.workloads)}, meta.imageTail())...); err != nil {
+			if err := put(meta.scanned, StatusNotRead, slices.Concat([]string{u.image, meta.digest, meta.os}, blank(6), []string{join(workloadCells(u.workloads, true)), exposedCell(u.exposed, u.workloads)}, meta.imageTail(), []string{""})...); err != nil {
 				return nil, err
 			}
 		}
@@ -336,7 +344,7 @@ func WriteCSV(ctx context.Context, resp Response, f Filter, cluster string) ([]b
 			if err := put(scanned, StatusOK, slices.Concat(
 				[]string{fx.Package, ecosystemLabel(fx.PackageType), join(fx.From), fx.To, join(fx.FixedVersions)},
 				countCells(fx.Counts, Counts{})[:5],
-				[]string{join(fx.CVEs), strconv.Itoa(fx.Images), strconv.Itoa(fx.Workloads), join(images), join(distinctWorkloadCells(workloads)), exposedCell(fx.Exposed, workloads)},
+				[]string{join(fx.CVEs), strconv.Itoa(fx.Images), strconv.Itoa(fx.Workloads), join(images), join(distinctWorkloadCells(workloads)), exposedCell(fx.Exposed, workloads), kevCount(fx.KEVCVEs)},
 			)...); err != nil {
 				return nil, err
 			}
@@ -367,7 +375,7 @@ func WriteCSV(ctx context.Context, resp Response, f Filter, cluster string) ([]b
 			if err := put(scanned, StatusOK, slices.Concat([]string{
 				c.ID, c.Title, severityLabel(c.Severity), score, join(c.Packages), join(distinct(installed)), join(distinct(fixed)), cveFix(c),
 				strconv.Itoa(c.Images), strconv.Itoa(c.Workloads), join(images), join(distinctWorkloadCells(workloads)), c.Link, exposedCell(c.Exposed, workloads),
-			}, dateCells(cvePublished(c), c.lastModified))...); err != nil {
+			}, dateCells(cvePublished(c), c.lastModified), intelCells(c.KEV, c.EPSS))...); err != nil {
 				return nil, err
 			}
 		}
@@ -375,7 +383,7 @@ func WriteCSV(ctx context.Context, resp Response, f Filter, cluster string) ([]b
 			return nil, err
 		}
 	case ViewFindings:
-		if err := writeFindings(ctx, resp, f, put, join, cols); err != nil {
+		if err := writeFindings(ctx, resp, f, put, join, cols, intelCells); err != nil {
 			return nil, err
 		}
 	case ViewWorkload:
@@ -389,15 +397,16 @@ func WriteCSV(ctx context.Context, resp Response, f Filter, cluster string) ([]b
 		for _, wl := range rows {
 			status, scanned, containers := workloadState(wl, x.images)
 			counts := countCells(wl.Counts, wl.Fixable)
+			kev := kevCount(wl.KEVCVEs)
 			if status == StatusNotScanned || status == StatusNotRead {
-				counts = blank(6)
+				counts, kev = blank(6), ""
 			}
 			ref := WorkloadRef{Kind: wl.Kind, Group: wl.Group, Namespace: wl.Namespace, Name: wl.Name}
 			var exposed []ExposedWorkload
 			if len(wl.Routes) > 0 {
 				exposed = []ExposedWorkload{{WorkloadRef: ref, Routes: wl.Routes}}
 			}
-			if err := put(scanned, status, slices.Concat([]string{wl.Kind, wl.Namespace, wl.Name}, counts, []string{join(containers), exposedCell(exposed, []WorkloadRef{ref})})...); err != nil {
+			if err := put(scanned, status, slices.Concat([]string{wl.Kind, wl.Namespace, wl.Name}, counts, []string{join(containers), exposedCell(exposed, []WorkloadRef{ref}), kev})...); err != nil {
 				return nil, err
 			}
 		}
@@ -454,7 +463,7 @@ func writeImageGaps(put func(time.Time, string, ...string) error, join func([]st
 // containers of that workload, or of exposed ones. Images not scanned and
 // images whose findings weren't read are a row per workload container with
 // the finding cells blank, as the image view writes them.
-func writeFindings(ctx context.Context, resp Response, f Filter, put func(time.Time, string, ...string) error, join func([]string) string, cols []string) error {
+func writeFindings(ctx context.Context, resp Response, f Filter, put func(time.Time, string, ...string) error, join func([]string) string, cols []string, intelCells func(*vulnintel.KEV, *vulnintel.EPSS) []string) error {
 	x := resp.export
 	m := newMatcher(f)
 	// containers are a row's workload containers the filters keep, each
@@ -549,12 +558,14 @@ func writeFindings(ctx context.Context, resp Response, f Filter, put func(time.T
 				fixAvailable = "yes"
 			}
 			dates := dateCells(fd.publishedAt, fd.lastModified)
+			intel := intelCells(fd.KEV, fd.EPSS)
 			for _, c := range kept {
-				if err := put(meta.scanned, StatusOK,
+				if err := put(meta.scanned, StatusOK, slices.Concat([]string{
 					fd.ID, severityLabel(fd.Severity), score, fd.Title, fd.Package, ecosystemLabel(cmp.Or(fd.PackageType, fd.ecosystem)),
 					fd.InstalledVersion, fd.FixedVersion, fd.FixTarget, fixAvailable,
 					img.Image, meta.digest, c.w.Namespace, c.w.Kind, c.w.Name, c.w.Container, c.exposure, c.routes, fd.Link,
-					dates[0], dates[1], dates[2], fd.PackageURL, meta.os, meta.osEOL, meta.scanner.Name, meta.scanner.Version); err != nil {
+					dates[0], dates[1], dates[2], fd.PackageURL, meta.os, meta.osEOL, meta.scanner.Name, meta.scanner.Version,
+				}, intel)...); err != nil {
 					return err
 				}
 			}
@@ -828,4 +839,37 @@ func safeCell(v string) string {
 		v = "'" + v
 	}
 	return strings.ReplaceAll(strings.ReplaceAll(v, "\r\n", "\n"), "\r", "\n")
+}
+
+// intelCellWriters returns the cell writers for KEV and EPSS: a row's count
+// of KEV CVEs, and a CVE's intelColumns. Without a feed its cells read
+// "unavailable", never as "no" or a blank that passes for "not listed".
+func intelCellWriters(intel *Intel) (kevCount func(int) string, cells func(k *vulnintel.KEV, e *vulnintel.EPSS) []string) {
+	kevReady := intel != nil && intel.KEV.State == vulnintel.StateReady
+	epssReady := intel != nil && intel.EPSS.State == vulnintel.StateReady
+	kevCount = func(n int) string {
+		if !kevReady {
+			return "unavailable"
+		}
+		return strconv.Itoa(n)
+	}
+	cells = func(k *vulnintel.KEV, e *vulnintel.EPSS) []string {
+		out := make([]string, len(intelColumns))
+		switch {
+		case !kevReady:
+			out[0] = "unavailable"
+		case k != nil:
+			out[0], out[1], out[2], out[3] = "yes", k.DateAdded, k.DueDate, k.RansomwareUse
+		default:
+			out[0] = "no"
+		}
+		switch {
+		case !epssReady:
+			out[4], out[5] = "unavailable", "unavailable"
+		case e != nil:
+			out[4], out[5] = strconv.FormatFloat(e.Score, 'f', -1, 64), strconv.FormatFloat(e.Percentile, 'f', -1, 64)
+		}
+		return out
+	}
+	return kevCount, cells
 }

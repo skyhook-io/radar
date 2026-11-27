@@ -142,6 +142,9 @@ func (j *rollup) fixes(ctx context.Context, f Filter) ([]Fix, error) {
 		ids := make([]string, 0, len(a.cves))
 		for id, sev := range a.cves {
 			ids = append(ids, id)
+			if j.inKEV(id) {
+				row.KEVCVEs++
+			}
 			bump(&row.Counts, sev)
 			if severityRank(sev) > severityRank(row.Severity) || row.Severity == "" {
 				row.Severity = sev
@@ -166,11 +169,13 @@ func (j *rollup) fixes(ctx context.Context, f Filter) ([]Fix, error) {
 		row.Affected = row.Affected[:min(len(row.Affected), j.lim.affectedPerCVE)]
 		rows = append(rows, row)
 	}
-	// Most severe first, exposed first within each severity (see
-	// exposureTier), then most exposed workloads, then most workloads.
+	// Most severe first; within each severity fixes that clear a KEV CVE,
+	// then exposed first (see exposureTier), then most exposed workloads,
+	// then most workloads.
 	slices.SortFunc(rows, func(x, y Fix) int {
 		return cmp.Or(
 			cmp.Compare(severityRank(y.Severity), severityRank(x.Severity)),
+			compareBool(y.KEVCVEs > 0, x.KEVCVEs > 0),
 			cmp.Compare(exposureTier(y.ExposedTotal > 0, y.ExposureUnknown), exposureTier(x.ExposedTotal > 0, x.ExposureUnknown)),
 			cmp.Compare(y.ExposedTotal, x.ExposedTotal),
 			cmp.Compare(y.Workloads, x.Workloads),

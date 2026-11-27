@@ -21,6 +21,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceapi"
+	"github.com/skyhook-io/radar/pkg/vulnintel"
 )
 
 // ErrNotInstalled: the cluster serves no VulnerabilityReport kind.
@@ -70,6 +71,19 @@ type Request struct {
 	// every namespace. MaxFindings still applies. The Response then carries
 	// what WriteCSV needs.
 	Export bool
+	// Intel is the exploit-intelligence feeds to carry. Nil reads the
+	// process's feeds (IntelSnapshot) once the cluster is known to serve
+	// the report kind, so a cluster without Trivy Operator never starts a
+	// download.
+	Intel *vulnintel.Snapshot
+}
+
+// intelOf is the feeds' state for the wire.
+func intelOf(snap *vulnintel.Snapshot) *Intel {
+	if snap == nil {
+		return nil
+	}
+	return &Intel{KEV: snap.KEVStatus, EPSS: snap.EPSSStatus}
 }
 
 // Served is whether the connected cluster serves the report kind the rollup
@@ -93,6 +107,12 @@ func Read(ctx context.Context, cache *k8s.ResourceCache, req Request) (Response,
 	gvr, ok := discovery.GetGVRWithGroup("VulnerabilityReport", aicontext.TrivyGroup)
 	if !ok {
 		return Response{}, ErrNotInstalled
+	}
+	if req.Intel == nil {
+		req.Intel = IntelSnapshot()
+	}
+	if req.Filter.KEVOnly && (req.Intel == nil || req.Intel.KEV == nil) {
+		return Response{}, ErrKEVUnavailable
 	}
 	dynamic := k8s.GetDynamicResourceCache()
 	if dynamic == nil || cache == nil {
@@ -355,7 +375,7 @@ func Read(ctx context.Context, cache *k8s.ResourceCache, req Request) (Response,
 	exposureGaps = append(exposureGaps, exposure.gaps()...)
 	// Every namespace named, before a list read caps them: a row's exposure
 	// is unknown only where a gap covers its namespace.
-	resp, err := buildWithExposure(ctx, items, targets, req.View, req.Filter, req.Export, &Exposure{Gaps: slices.Clone(exposureGaps)})
+	resp, err := buildWithIntel(ctx, items, targets, req.View, req.Filter, req.Export, &Exposure{Gaps: slices.Clone(exposureGaps)}, req.Intel)
 	if err != nil {
 		return Response{}, err
 	}
@@ -377,6 +397,7 @@ func Read(ctx context.Context, cache *k8s.ResourceCache, req Request) (Response,
 		}
 	}
 	resp.Exposure = &Exposure{Gaps: exposureGaps, Unchecked: routes.unchecked}
+	resp.Intel = intelOf(req.Intel)
 	resp.Coverage.Gaps = append([]resourceapi.Gap{}, gaps...)
 	c := resp.Coverage
 	resp.Coverage.Complete = len(gaps) == 0 && !c.Truncated && c.RowsOmitted == 0 && c.CleanOmitted == 0 && c.UnscannedOmitted == 0
@@ -620,6 +641,7 @@ func empty(req Request, g resourceapi.Gap) Response {
 	}
 	resp, _ := build(context.Background(), nil, nil, req.View, Filter{}, req.Export)
 	resp.Coverage = Coverage{Gaps: []resourceapi.Gap{g}}
+	resp.Intel = intelOf(req.Intel)
 	return resp
 }
 

@@ -389,6 +389,16 @@
         "enabled": { "type": ["boolean", "null"] }
       }
     },
+    "vulnerabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kevFeed": { "type": "string" },
+        "epssFeed": { "type": "string" },
+        "feedDownloads": { "type": "boolean" },
+        "feedVolume": { "type": "object" }
+      }
+    },
     "mcp": {
       "type": "object",
       "additionalProperties": true,

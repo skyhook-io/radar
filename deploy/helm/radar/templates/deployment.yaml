@@ -476,6 +476,20 @@ spec:
               value: {{ ternary "on" "off" $usage | quote }}
             {{- end }}
             {{- end }}
+            {{- with .Values.vulnerabilities }}
+            {{- if .kevFeed }}
+            - name: RADAR_KEV_FEED
+              value: {{ .kevFeed | quote }}
+            {{- end }}
+            {{- if .epssFeed }}
+            - name: RADAR_EPSS_FEED
+              value: {{ .epssFeed | quote }}
+            {{- end }}
+            {{- if eq (toString .feedDownloads) "false" }}
+            - name: RADAR_DISABLE_VULNERABILITY_FEED_DOWNLOADS
+              value: "1"
+            {{- end }}
+            {{- end }}
             {{- with .Values.env }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -525,6 +539,11 @@ spec:
               mountPath: /etc/radar/cloud-ca
               readOnly: true
             {{- end }}
+            {{- if (.Values.vulnerabilities).feedVolume }}
+            - name: vulnerability-feeds
+              mountPath: /etc/radar/vulnerability-feeds
+              readOnly: true
+            {{- end }}
             {{- with .Values.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -533,6 +552,10 @@ spec:
         - name: operator-settings
           configMap:
             name: {{ include "radar.fullname" . }}-operator-settings
+        {{- end }}
+        {{- with (.Values.vulnerabilities).feedVolume }}
+        - name: vulnerability-feeds
+          {{- toYaml . | nindent 10 }}
         {{- end }}
         - name: tmp
           emptyDir: {}

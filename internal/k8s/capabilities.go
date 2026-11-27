@@ -244,12 +244,13 @@ type FeatureCapabilities struct {
 	PodSidecarMarks bool `json:"podSidecarMarks"`
 	// GET /api/kueue/clusterqueues/{name}/workloads and
 	// /api/kueue/localqueues/{namespace}/{name}/workloads
-	KueueQueueWorkloads     bool `json:"kueueQueueWorkloads"`
-	PodFileUpload           bool `json:"podFileUpload"`           // POST /api/pods/{namespace}/{name}/files/upload
-	Vulnerabilities         bool `json:"vulnerabilities"`         // GET /api/vulnerabilities
-	VulnerabilitiesExport   bool `json:"vulnerabilitiesExport"`   // GET /api/vulnerabilities/export
-	RuntimeAdvisoryChecks   bool `json:"runtimeAdvisoryChecks"`   // GET /api/vulnerabilities/java4shell
-	RuntimeAdvisoryProgress bool `json:"runtimeAdvisoryProgress"` // GET /api/vulnerabilities/java4shell/stream
+	KueueQueueWorkloads      bool `json:"kueueQueueWorkloads"`
+	PodFileUpload            bool `json:"podFileUpload"`            // POST /api/pods/{namespace}/{name}/files/upload
+	Vulnerabilities          bool `json:"vulnerabilities"`          // GET /api/vulnerabilities
+	VulnerabilitiesExport    bool `json:"vulnerabilitiesExport"`    // GET /api/vulnerabilities/export
+	RuntimeAdvisoryChecks    bool `json:"runtimeAdvisoryChecks"`    // GET /api/vulnerabilities/java4shell
+	RuntimeAdvisoryProgress  bool `json:"runtimeAdvisoryProgress"`  // GET /api/vulnerabilities/java4shell/stream
+	VulnerabilityFeedRefresh bool `json:"vulnerabilityFeedRefresh"` // POST /api/vulnerabilities/feeds/refresh
 	// GET /api/sealedsecrets/controller
 	SealedSecretsController bool `json:"sealedSecretsController"`
 }

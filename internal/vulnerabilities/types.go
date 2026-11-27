@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/resourceapi"
+	"github.com/skyhook-io/radar/pkg/vulnintel"
 )
 
 // View picks the pivot a response is grouped by.
@@ -92,6 +93,11 @@ type Finding struct {
 	// publishedAt and lastModified are the scanner database's dates for the
 	// CVE (zero when it doesn't say): the CSV's, and CVE.PublishedAt's source.
 	publishedAt, lastModified time.Time
+	// KEV is CISA's Known Exploited Vulnerabilities entry for the ID, and
+	// EPSS FIRST's exploit prediction score. Absent means the feed doesn't
+	// list it only when Response.Intel says that feed is ready.
+	KEV  *vulnintel.KEV  `json:"kev,omitempty"`
+	EPSS *vulnintel.EPSS `json:"epss,omitempty"`
 	// ecosystem is how the package's versions are ordered (ecosystemOf);
 	// two packages share a name only within one ecosystem.
 	ecosystem string
@@ -119,6 +125,8 @@ type Fix struct {
 	// CVEs lists at most MaxCVEsPerFix of CVEsTotal, worst first.
 	CVEs      []string `json:"cves"`
 	CVEsTotal int      `json:"cvesTotal"`
+	// KEVCVEs counts its CVEs in CISA's KEV catalog (see Response.Intel).
+	KEVCVEs int `json:"kevCves,omitempty"`
 	// Images and Workloads count every image and distinct workload that
 	// needs it.
 	Images    int `json:"images"`
@@ -171,6 +179,9 @@ type Image struct {
 	Fixable Counts `json:"fixable"`
 	// Matching is how many findings pass the request's filters.
 	Matching int `json:"matching"`
+	// KEVCVEs counts the distinct CVE IDs among every finding that CISA's
+	// KEV catalog lists (see Response.Intel).
+	KEVCVEs int `json:"kevCves,omitempty"`
 	// FindingsUnread is true when the request's findings budget ran out
 	// before this image: its counts are unknown, not zero.
 	FindingsUnread bool `json:"findingsUnread,omitempty"`
@@ -215,6 +226,9 @@ type CVE struct {
 	PublishedAt *time.Time `json:"publishedAt,omitempty"`
 	// lastModified is the latest of its findings', for the CSV.
 	lastModified time.Time
+	// KEV and EPSS are as on Finding.
+	KEV  *vulnintel.KEV  `json:"kev,omitempty"`
+	EPSS *vulnintel.EPSS `json:"epss,omitempty"`
 	// Images and Workloads count every image and distinct workload with it.
 	Images    int `json:"images"`
 	Workloads int `json:"workloads"`
@@ -254,12 +268,15 @@ type AffectedPackage struct {
 
 // Workload is one running workload and what its containers' images carry.
 type Workload struct {
-	Kind       string              `json:"kind"`
-	Group      string              `json:"group"`
-	Namespace  string              `json:"namespace"`
-	Name       string              `json:"name"`
-	Counts     Counts              `json:"counts"`
-	Fixable    Counts              `json:"fixable"`
+	Kind      string `json:"kind"`
+	Group     string `json:"group"`
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+	Counts    Counts `json:"counts"`
+	Fixable   Counts `json:"fixable"`
+	// KEVCVEs counts the distinct CVE IDs its scanned images carry that
+	// CISA's KEV catalog lists (see Response.Intel).
+	KEVCVEs    int                 `json:"kevCves,omitempty"`
 	Containers []WorkloadContainer `json:"containers"`
 	// Routes are its routes from outside the cluster, at most
 	// MaxRoutesPerWorkload of RoutesTotal in a list read.
@@ -351,6 +368,9 @@ type Summary struct {
 	// have a fixed version in at least one affected image.
 	FixableCriticalHighCVEs     int `json:"fixableCriticalHighCves"`
 	WorkloadsWithCriticalOrHigh int `json:"workloadsWithCriticalOrHigh"`
+	// KEVCVEs counts distinct CVE IDs in scope that CISA's KEV catalog lists;
+	// zero means none only when Response.Intel's KEV is ready.
+	KEVCVEs int `json:"kevCves"`
 	// Workloads counts the workloads in scope: those with a Pod that isn't
 	// finished, and CronJobs that aren't suspended.
 	Workloads int `json:"workloads"`
@@ -413,6 +433,10 @@ type Response struct {
 	// Exposure says where Radar looked for routes from outside the cluster;
 	// set on every answer.
 	Exposure *Exposure `json:"exposure,omitempty"`
+	// Intel is the state of the exploit-intelligence feeds the rows carry.
+	// Unless a feed is ready, a CVE without its entry is not known to be
+	// absent from it: the UI and the CSV say "unavailable".
+	Intel *Intel `json:"intel,omitempty"`
 	// WorkloadRuns is whether Filter.Workload names something that runs in
 	// the answer's scope, so an empty answer can't pass for "no CVEs". Not
 	// on the wire: the UI and agents learn it differently.
@@ -443,6 +467,16 @@ type Filter struct {
 	// as end of life (By workload: the workloads that run one). Unscanned
 	// images stay, as under a severity filter: their OS is unknown.
 	OSEndOfLifeOnly bool
+	// KEVOnly keeps findings whose CVE is in CISA's KEV catalog. A read
+	// without the catalog fails with ErrKEVUnavailable rather than answering
+	// "none".
+	KEVOnly bool
+}
+
+// Intel is the state of each exploit-intelligence feed.
+type Intel struct {
+	KEV  vulnintel.FeedStatus `json:"kev"`
+	EPSS vulnintel.FeedStatus `json:"epss"`
 }
 
 const (

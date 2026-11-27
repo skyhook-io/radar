@@ -86,6 +86,7 @@ export const RADAR_FEATURES = {
   vulnerabilitiesExport: { label: 'Vulnerability CSV downloads', flag: 'vulnerabilitiesExport', flagShippedWithEndpoint: true },
   runtimeAdvisoryChecks: { label: 'Java4Shell checks', flag: 'runtimeAdvisoryChecks', flagShippedWithEndpoint: true },
   runtimeAdvisoryProgress: { label: 'Java4Shell scan progress', flag: 'runtimeAdvisoryProgress', flagShippedWithEndpoint: true },
+  vulnerabilityFeedRefresh: { label: 'Refreshing the KEV and EPSS feeds', flag: 'vulnerabilityFeedRefresh', flagShippedWithEndpoint: true },
 } as const satisfies Record<string, RadarFeatureSpec>
 
 export type RadarFeature = keyof typeof RADAR_FEATURES
