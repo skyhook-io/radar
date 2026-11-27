@@ -208,6 +208,13 @@ func TestResolveOwnersReadsOnlyWhatTheCallerMay(t *testing.T) {
 	if worker := got["worker"]; worker.Manager == nil || worker.Manager.Name != "infra" || len(worker.Manager.Sources) != 0 {
 		t.Errorf("worker manager = %+v, want infra without its source", worker.Manager)
 	}
+	// A caller who can't read the Deployment itself gets unknown, not
+	// "none found".
+	hidden := denyKinds{{Group: "apps", Kind: "Deployment"}}
+	owners, _, err = resolveOwners(context.Background(), cache, ownerRefs[3:], func(*ownership.Catalog) ownership.Access { return hidden }, TeamLabel)
+	if err != nil || len(owners) != 1 || !owners[0].ManagerUnknown || owners[0].Manager != nil {
+		t.Errorf("unreadable workload = %+v, %v; want unknown", owners, err)
+	}
 }
 
 func TestOwnerCells(t *testing.T) {
@@ -244,6 +251,7 @@ func TestSafeRepo(t *testing.T) {
 		"minio.example:9000?token=left@right/b":      "",
 		"user:pa/ss@host:repo":                       "host:repo",
 		"git@git.example.com:teams/platform@ops.git": "git@git.example.com:teams/platform@ops.git",
+		"git@x:token@github.com:a/b.git":             "",
 		"us@er:pass@host:repo":                       "",
 		"key:secret@minio.local:9000/bucket":         "minio.local:9000/bucket",
 		"minio.local:9000/bucket":                    "minio.local:9000/bucket",

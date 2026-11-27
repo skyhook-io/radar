@@ -155,7 +155,9 @@ func resolveOwners(ctx context.Context, cache *k8s.ResourceCache, refs []Workloa
 				owner.Manager.Shared = answer.State == ownership.ManagerShared
 			}
 		}
-		owner.ManagerUnknown = owner.Manager == nil && answer.Subject.Present() && answer.State != ownership.ManagerNone
+		// A workload the caller's access can't settle is unknown too: only a
+		// completed lookup may read as "none found".
+		owner.ManagerUnknown = owner.Manager == nil && answer.State != ownership.ManagerNone
 		if owner.Manager != nil || owner.ManagerUnknown || owner.Team != "" {
 			out = append(out, owner)
 		}
@@ -349,7 +351,12 @@ func safeRepo(repo string) string {
 		if strings.ContainsAny(repo, "?#") {
 			return ""
 		}
-		if strings.HasPrefix(repo, "git@") {
+		if rest, ok := strings.CutPrefix(repo, "git@"); ok {
+			// An @ in the path is kept, but not one followed by another
+			// host's colon: git@x:token@host:repo could hide a credential.
+			if i := strings.Index(rest, "@"); i >= 0 && strings.Contains(rest[i:], ":") {
+				return ""
+			}
 			return repo
 		}
 		switch strings.Count(repo, "@") {
