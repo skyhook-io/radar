@@ -1269,13 +1269,14 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     }
 
     // Traefik route facts join routes, Middlewares, Services, Pods and Secrets,
-    // and a Flux root's outside changes read every member's managedFields; only
+    // and Flux outside changes and field writers read managedFields; only
     // an open view's query refetches.
     if (traefikInvalidationRef.current.timer === null) {
       traefikInvalidationRef.current.timer = window.setTimeout(() => {
         traefikInvalidationRef.current = { timer: null }
         queryClient.invalidateQueries({ queryKey: ['traefik'] })
         queryClient.invalidateQueries({ queryKey: ['gitops-outside-changes'] })
+        queryClient.invalidateQueries({ queryKey: ['gitops-field-writers'] })
       }, 15000)
     }
 
