@@ -59,7 +59,49 @@ export interface VulnerabilityExposure {
   exposureUnknown?: boolean
 }
 
-export interface VulnerabilityFinding {
+/** CISA Known Exploited Vulnerabilities entry. dueDate is the BOD 22-01 federal remediation date. */
+export interface VulnerabilityKEV {
+  dateAdded: string
+  dueDate: string
+  /** "known" when CISA knows of ransomware campaigns using it; "unknown" is CISA's word for not known, not "no". */
+  ransomwareUse: 'known' | 'unknown'
+  requiredAction?: string
+  name?: string
+}
+
+/** FIRST EPSS: probability of exploitation in the next 30 days, and its percentile among scored CVEs. */
+export interface VulnerabilityEPSS {
+  score: number
+  percentile: number
+}
+
+/** One feed's copy. Only `ready` lets a missing entry mean "not listed". */
+export interface VulnerabilityFeedStatus {
+  state: 'ready' | 'loading' | 'unavailable' | 'disabled'
+  origin?: 'public' | 'mirror' | 'file'
+  version?: string
+  count?: number
+  loadedAt?: string
+  /** When Radar last tried to load the feed, whether or not that worked. */
+  checkedAt?: string
+  /** Off because feed downloads are turned off and the feed is a URL; a file would load. */
+  downloadsOff?: boolean
+  stale?: boolean
+  error?: string
+}
+
+export interface VulnerabilityIntel {
+  kev: VulnerabilityFeedStatus
+  epss: VulnerabilityFeedStatus
+}
+
+/** Rows carrying KEV and EPSS. Absent entries mean "not listed" only when the feed is ready. */
+export interface VulnerabilityIntelFields {
+  kev?: VulnerabilityKEV
+  epss?: VulnerabilityEPSS
+}
+
+export interface VulnerabilityFinding extends VulnerabilityIntelFields {
   id: string
   severity: VulnerabilitySeverity
   /** The scanner gave no severity; this is the CVSS rating of score. */
@@ -97,6 +139,8 @@ export interface VulnerableImage extends VulnerabilityExposure {
   matching: number
   /** Past the request's findings budget: counts unknown, not zero. */
   findingsUnread?: boolean
+  /** Distinct CVEs in the image that KEV lists. */
+  kevCves?: number
   workloads: VulnerabilityWorkloadRef[]
   workloadsTotal: number
   findings: VulnerabilityFinding[]
@@ -112,7 +156,7 @@ export interface VulnerabilityCVEImage {
   workloadsTotal: number
 }
 
-export interface VulnerabilityCVE extends VulnerabilityExposure {
+export interface VulnerabilityCVE extends VulnerabilityExposure, VulnerabilityIntelFields {
   id: string
   severity: VulnerabilitySeverity
   score?: number
@@ -141,6 +185,7 @@ export interface VulnerabilityFix extends VulnerabilityExposure {
   counts: VulnerabilityCounts
   cves: string[]
   cvesTotal: number
+  kevCves?: number
   images: number
   workloads: number
   affected: { imageId: string; image: string; installedVersions: string[]; workloads: VulnerabilityWorkloadRef[]; workloadsTotal: number }[]
@@ -164,6 +209,7 @@ export interface VulnerabilityWorkload {
   name: string
   counts: VulnerabilityCounts
   fixable: VulnerabilityCounts
+  kevCves?: number
   containers: VulnerabilityWorkloadContainer[]
   routes?: VulnerabilityRoute[]
   routesTotal?: number
@@ -180,6 +226,8 @@ export interface VulnerabilitySummary {
   imagesOsEndOfLife?: number
   fixableCriticalHighCves: number
   workloadsWithCriticalOrHigh: number
+  /** Distinct CVEs in scope that KEV lists; absent from an older Radar. */
+  kevCves?: number
   workloads: number
   counts: VulnerabilityCounts
   newestScan?: string
@@ -212,6 +260,8 @@ export interface VulnerabilitiesResponse {
     /** Route kinds this cluster serves that Radar doesn't follow (Istio, Traefik IngressRoute, Contour, Knative). */
     unchecked?: { kind: string; group?: string }[]
   }
+  /** The exploit-intelligence feeds; absent from a Radar that predates them, where KEV and EPSS are unknown. */
+  intel?: VulnerabilityIntel
   coverage: {
     complete: boolean
     gaps: VulnerabilityGap[]
@@ -232,6 +282,8 @@ export interface VulnerabilitiesParams {
   exposed?: boolean
   /** Only images whose OS the scanner reports as end of life. */
   osEndOfLife?: boolean
+  /** Only CVEs in CISA's KEV catalog. Send only to a Radar whose answers carry `intel`. */
+  kev?: boolean
   query?: string
   workload?: { kind: string; group?: string; namespace: string; name: string }
 }
@@ -403,6 +455,7 @@ export function vulnerabilitiesPath(p: VulnerabilitiesParams): string {
   if (p.fixableOnly) params.set('fixable', '1')
   if (p.exposed) params.set('exposed', '1')
   if (p.osEndOfLife) params.set('eol', '1')
+  if (p.kev) params.set('kev', '1')
   if (p.query?.trim()) params.set('q', p.query.trim())
   if (p.workload) {
     params.set('workloadKind', p.workload.kind)
@@ -437,6 +490,17 @@ export function vulnerabilitiesCSVFilename(view: VulnerabilityExportView, cluste
   return `vulnerabilities-${view === 'findings' ? 'findings' : `by-${view}`}-${safe}-${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}.csv`
 }
 
+// POST /api/vulnerabilities/feeds/refresh: reload KEV and EPSS now. Radar
+// allows it once per 5 minutes and answers 429 otherwise; the reload runs in
+// the background, so the next read shows it.
+export async function refreshVulnerabilityFeeds(): Promise<void> {
+  const response = await apiFetch(apiUrl('/vulnerabilities/feeds/refresh', getApiBase()), { method: 'POST' })
+  if (!response.ok) {
+    const { body, unknownRoute } = await readErrorResponse(response)
+    throw new ApiError(body.error || httpStatusMessage(response.status, response.statusText), response.status, body, { unknownRoute })
+  }
+}
+
 // GET /api/vulnerabilities. Filters run server-side so the summary always
 // describes the unfiltered scope and every surface (REST, MCP) filters alike.
 export function useVulnerabilities(p: VulnerabilitiesParams, enabled = true) {
@@ -454,7 +518,13 @@ export function useVulnerabilities(p: VulnerabilitiesParams, enabled = true) {
     // The tab's tables can run to megabytes and scans change hourly, so they
     // refresh every five minutes; Home's totals and one workload's rows are
     // small and stay at a minute.
-    refetchInterval: p.view === 'summary' || p.workload ? 60_000 : 300_000,
+    // KEV and EPSS load on the first read, so a loading feed is asked
+    // again in seconds rather than at the next refresh.
+    refetchInterval: (query) => {
+      const intel = query.state.data?.intel
+      if (intel && (intel.kev.state === 'loading' || intel.epss.state === 'loading')) return 3_000
+      return p.view === 'summary' || p.workload ? 60_000 : 300_000
+    },
     refetchIntervalInBackground: false,
     // Keep showing the last answer, dimmed, while the tab's filters or view
     // change (the summary is the same in every view; a caller shows rows

@@ -6,10 +6,13 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useVulnerabilities, type VulnerabilitiesResponse, type VulnerabilityWorkloadRef } from '../../api/vulnerabilities'
 import { VulnerabilitiesView } from './VulnerabilitiesView'
+import { ApiError } from '../../api/client'
 
+// A Radar with the KEV filter unless a test says otherwise.
+const features = vi.hoisted(() => ({ current: { vulnerabilityFeedRefresh: true } as Record<string, boolean> }))
 vi.mock('../../api/client', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../api/client')>(),
-  useCapabilities: () => ({ data: { features: {} } }),
+  useCapabilities: () => ({ data: { features: features.current } }),
   useRadarFeature: () => ({ support: 'unsupported', guard: <T,>(fn: () => T) => fn() }),
 }))
 vi.mock('../../api/apiResources', () => ({ useAPIResources: () => ({ data: [{ group: 'aquasecurity.github.io', name: 'vulnerabilityreports' }] }) }))
@@ -27,12 +30,16 @@ const zero = { critical: 0, high: 0, medium: 0, low: 0, unknown: 0 }
 const ref = (name: string, namespace = 'shop'): VulnerabilityWorkloadRef => ({ kind: 'Deployment', group: 'apps', namespace, name, container: 'app' })
 const route = { via: 'LoadBalancer', namespace: 'shop', name: 'web' }
 
-function response(view: VulnerabilitiesResponse['view'], withExposure: boolean): VulnerabilitiesResponse {
+const kev = { dateAdded: '2023-10-10', dueDate: '2023-10-31', ransomwareUse: 'unknown' as const }
+const readyIntel: NonNullable<VulnerabilitiesResponse['intel']> = { kev: { state: 'ready', count: 1790 }, epss: { state: 'ready', count: 411000 } }
+
+function response(view: VulnerabilitiesResponse['view'], withExposure: boolean, intel?: VulnerabilitiesResponse['intel']): VulnerabilitiesResponse {
   const base: VulnerabilitiesResponse = {
     source: 'trivy',
     view,
     summary: { imagesScanned: 1, imagesClean: 0, imagesUnscanned: 0, imagesWithCritical: 1, fixableCriticalHighCves: 1, workloadsWithCriticalOrHigh: 2, workloads: 3, counts: { ...zero, critical: 1 } },
     coverage: { complete: true, gaps: [], inactiveReports: 0 },
+    ...(intel ? { intel } : {}),
   }
   const exposed = withExposure ? { exposed: [{ kind: 'Deployment', group: 'apps', namespace: 'shop', name: 'web', routes: [route] }], exposedTotal: 1 } : {}
   const image = {
@@ -47,6 +54,10 @@ function response(view: VulnerabilitiesResponse['view'], withExposure: boolean):
     fixes: [{
       package: 'zlib', from: ['1.0'], to: '1.1', severity: 'critical', counts: { ...zero, critical: 1 }, cves: ['CVE-1'], cvesTotal: 1, images: 1, workloads: 2,
       affected: [{ imageId: 'img', image: image.image, installedVersions: ['1.0'], workloads: image.workloads, workloadsTotal: 2 }], ...exposed,
+    }],
+    cves: [{
+      id: 'CVE-2023-44487', severity: 'critical', packages: ['golang.org/x/net'], fixable: true, fixableImages: 1, images: 1, workloads: 2,
+      affected: [], ...(intel ? { kev, epss: { score: 0.94, percentile: 0.998 } } : {}),
     }],
     workloads: [
       { kind: 'Deployment', group: 'apps', namespace: 'shop', name: 'web', counts: { ...zero, critical: 1 }, fixable: zero, containers: [], ...(withExposure ? { routes: [route, { via: 'Ingress', namespace: 'shop', name: 'web' }] } : {}) },
@@ -64,9 +75,9 @@ function Probe() {
 
 const urlParams = () => new URLSearchParams(container.querySelector('[data-testid="location"]')!.textContent ?? '')
 
-function render(path: string, withExposure = true) {
+function render(path: string, withExposure = true, intel?: VulnerabilitiesResponse['intel']) {
   vi.mocked(useVulnerabilities).mockImplementation((p) => ({
-    data: response(p.view, withExposure), isLoading: false, isFetching: false, isPlaceholderData: false, error: null, dataUpdatedAt: 0, refetch: vi.fn(),
+    data: response(p.view, withExposure, intel), isLoading: false, isFetching: false, isPlaceholderData: false, error: null, dataUpdatedAt: 0, refetch: vi.fn(),
   } as unknown as ReturnType<typeof useVulnerabilities>))
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, enabled: false } } })
   act(() => root.render(
@@ -185,4 +196,75 @@ describe('VulnerabilitiesView', () => {
     expect(container.textContent).not.toContain('Upgrading a package')
   })
 
+  it('filters to known exploited CVEs and marks them with the catalog dates', () => {
+    render('/checks/vulnerabilities?by=cve', true, readyIntel)
+    expect(lastParams().kev).toBe(false)
+    act(() => button('Known exploited')!.click())
+    expect(urlParams().get('kev')).toBe('1')
+    expect(lastParams().kev).toBe(true)
+    const badge = container.querySelector('[aria-label^="Known exploited."]')
+    expect(badge?.getAttribute('aria-label')).toContain('Federal due date')
+    expect(badge?.getAttribute('aria-label')).toContain('Ransomware use: not known')
+    // EPSS is an optional column, off until turned on in Columns.
+    expect(container.textContent).not.toContain('94%')
+  })
+
+  it('shows EPSS on By CVE once its column is turned on', () => {
+    localStorage.setItem('radar-vulnerability-columns', JSON.stringify(['cve.epss']))
+    try {
+      render('/checks/vulnerabilities?by=cve', true, readyIntel)
+      expect(container.textContent).toContain('EPSS')
+      expect(container.textContent).toContain('94%')
+    } finally {
+      localStorage.removeItem('radar-vulnerability-columns')
+    }
+  })
+
+  it('shows a calm no-data chip, not a filter that would read as none, when Radar has no catalog', () => {
+    render('/checks/vulnerabilities?by=cve', true, { kev: { state: 'unavailable', origin: 'public', error: 'couldn\'t reach the feed' }, epss: { state: 'unavailable', origin: 'public' } })
+    expect(button('Known exploited')).toBeUndefined()
+    const chip = container.querySelector('[aria-label^="Known exploited:"]')
+    expect(chip?.textContent).toContain('no data')
+    expect(chip?.getAttribute('aria-label')).toContain('vulnerabilities.kevFeed')
+    expect(chip?.getAttribute('href')).toContain('#known-exploited-cves-and-epss')
+    // Nothing on the page reads as a failure, and there is no EPSS to show.
+    expect(container.textContent).not.toContain('unavailable')
+    expect(container.textContent).not.toContain('EPSS')
+  })
+
+  it('drops a shared Known exploited filter that Radar refuses without the catalog', () => {
+    const unavailable = { kev: { state: 'loading' as const }, epss: { state: 'loading' as const } }
+    vi.mocked(useVulnerabilities).mockImplementation((p) => (p.kev
+      ? { data: undefined, isLoading: false, isFetching: false, isPlaceholderData: false, error: new ApiError('KEV data unavailable', 503, { error_code: 'kev_unavailable' }), dataUpdatedAt: 0, refetch: vi.fn() }
+      : { data: response(p.view, true, unavailable), isLoading: false, isFetching: false, isPlaceholderData: false, error: null, dataUpdatedAt: 0, refetch: vi.fn() }
+    ) as unknown as ReturnType<typeof useVulnerabilities>)
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, enabled: false } } })
+    act(() => root.render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter initialEntries={['/checks/vulnerabilities?by=cve&kev=1']}>
+          <VulnerabilitiesView namespaces={[]} onNavigateToResource={vi.fn()} />
+          <Probe />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    ))
+    expect(urlParams().get('kev')).toBeNull()
+    expect(lastParams().kev).toBe(false)
+    expect(container.textContent).toContain('Loading KEV data')
+  })
+
+  it('leaves out the KEV chip and EPSS column for a Radar without the feeds', () => {
+    localStorage.setItem('radar-vulnerability-columns', JSON.stringify(['cve.epss']))
+    features.current = {}
+    try {
+      render('/checks/vulnerabilities?by=cve&kev=1')
+    } finally {
+      features.current = { vulnerabilityFeedRefresh: true }
+      localStorage.removeItem('radar-vulnerability-columns')
+    }
+    // A shared link's kev=1 isn't sent to a Radar that would ignore it.
+    expect(lastParams().kev).toBe(false)
+    expect(button('Known exploited')).toBeUndefined()
+    expect(container.textContent).not.toContain('EPSS')
+    expect(container.textContent).not.toContain('KEV')
+  })
 })

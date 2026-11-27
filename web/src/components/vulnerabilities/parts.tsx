@@ -1,14 +1,18 @@
 import { clsx } from 'clsx'
-import { Globe } from 'lucide-react'
+import { Flame, Globe } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { WithTooltip } from '../ui/Tooltip'
-import { CertaintyGlyph, gapReasonText, VULN_SEVERITY_BADGE, VULN_SEVERITY_BAR, VULN_SEVERITY_TEXT, type Certainty } from '@skyhook-io/k8s-ui'
+import { Badge, CertaintyGlyph, gapReasonText, VULN_SEVERITY_BADGE, VULN_SEVERITY_BAR, VULN_SEVERITY_TEXT, type Certainty } from '@skyhook-io/k8s-ui'
 import { SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-colors'
 import type {
   ExposedWorkload,
   VulnerabilitiesResponse,
   VulnerabilityCounts,
+  VulnerabilityEPSS,
+  VulnerabilityFeedStatus,
   VulnerabilityGap,
+  VulnerabilityIntel,
+  VulnerabilityKEV,
   VulnerabilityRoute,
   VulnerabilitySeverity,
   VulnerabilityWorkloadRef,
@@ -482,4 +486,160 @@ export function uncheckedRoutesSentence(unchecked: { kind: string; group?: strin
   if (!unchecked || unchecked.length === 0) return null
   const names = [...new Set(unchecked.map((k) => UNCHECKED_NAMES[`${k.group ?? ''}/${k.kind}`] ?? pluralKind(k.kind)))]
   return `This cluster has ${listWords(names)}, which Radar doesn't follow yet, so workloads they route to aren't marked.`
+}
+
+// CISA's Known Exploited Vulnerabilities catalog and FIRST's EPSS, as the
+// page and the CSV name them.
+export const KEV = {
+  icon: Flame as LucideIcon,
+  chip: 'Known exploited',
+  badge: 'KEV',
+  chipTip: "Only CVEs in CISA's Known Exploited Vulnerabilities catalog (KEV): exploited in the wild. US federal agencies must fix these by the catalog's due date (BOD 22-01).",
+  noData: 'no data',
+  loading: 'Loading KEV data',
+}
+
+/** A feed's copy is usable: entries missing from it are not listed. */
+export function feedReady(feed?: VulnerabilityFeedStatus): boolean {
+  return feed?.state === 'ready'
+}
+
+function dateLabel(iso: string): string {
+  const d = new Date(`${iso}T00:00:00Z`)
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC' })
+}
+
+export function kevTip(kev: VulnerabilityKEV): string {
+  return [
+    "In CISA's Known Exploited Vulnerabilities catalog.",
+    `Added ${dateLabel(kev.dateAdded)}.`,
+    `Federal due date ${dateLabel(kev.dueDate)}.`,
+    kev.ransomwareUse === 'known' ? 'Known to be used in ransomware campaigns.' : 'Ransomware use: not known.',
+    kev.requiredAction ? `Required action: ${kev.requiredAction}` : '',
+  ].filter(Boolean).join(' ')
+}
+
+/** The KEV mark on a CVE; absence gets none, and the page says when the catalog is missing. */
+export function KevBadge({ kev }: { kev?: VulnerabilityKEV }) {
+  if (!kev) return null
+  return (
+    <WithTooltip tip={kevTip(kev)}>
+      <span className="inline-flex shrink-0" tabIndex={0} aria-label={`Known exploited. ${kevTip(kev)}`}>
+        <Badge severity="error" size="sm">{KEV.badge}{kev.ransomwareUse === 'known' ? ' · ransomware' : ''}</Badge>
+      </span>
+    </WithTooltip>
+  )
+}
+
+/** How many of a row's CVEs KEV lists, as a mark beside its counts. */
+export function KevCount({ count, what = 'of these CVEs' }: { count?: number; what?: string }) {
+  if (!count) return null
+  const tip = `${count} ${what} ${count === 1 ? 'is' : 'are'} in CISA's Known Exploited Vulnerabilities catalog.`
+  return (
+    <WithTooltip tip={tip}>
+      <span className="inline-flex shrink-0" tabIndex={0} aria-label={tip}>
+        <Badge severity="error" size="sm">{count} {KEV.badge}</Badge>
+      </span>
+    </WithTooltip>
+  )
+}
+
+function ordinal(n: number): string {
+  const v = n % 100
+  const suffix = v >= 11 && v <= 13 ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] ?? 'th'
+  return `${n}${suffix}`
+}
+
+/** EPSS as a percent with its percentile; "?" when the scores couldn't be loaded. */
+export function EpssValue({ epss, feed }: { epss?: VulnerabilityEPSS; feed?: VulnerabilityFeedStatus }) {
+  if (!feedReady(feed)) {
+    return <WithTooltip tip={feedNote('EPSS', feed) ?? undefined}><span className="text-theme-text-tertiary" tabIndex={0}>?</span></WithTooltip>
+  }
+  if (!epss) return <WithTooltip tip="FIRST scores CVE IDs only, and not this one."><span className="text-theme-text-tertiary" tabIndex={0}>—</span></WithTooltip>
+  const pct = epss.score * 100
+  const label = pct >= 10 ? `${pct.toFixed(0)}%` : pct >= 1 ? `${pct.toFixed(1)}%` : `${pct.toFixed(2)}%`
+  const percentile = ordinal(Math.min(99, Math.floor(epss.percentile * 100)))
+  const tip = `EPSS by FIRST: a ${label} chance of exploitation activity in the next 30 days, scored at or above ${Math.floor(epss.percentile * 100)}% of CVEs.`
+  return (
+    <WithTooltip tip={tip}>
+      <span className="flex flex-col items-end tabular-nums" tabIndex={0} aria-label={tip}>
+        <span className="text-theme-text-primary">{label}</span>
+        <span className="text-[11px] text-theme-text-tertiary">{percentile} pct</span>
+      </span>
+    </WithTooltip>
+  )
+}
+
+/** What a feed that isn't ready means for the page, or null when it is ready or turned off. */
+export function feedNote(name: 'KEV' | 'EPSS', feed?: VulnerabilityFeedStatus): string | null {
+  const flag = name === 'KEV' ? '--kev-feed' : '--epss-feed'
+  const what = name === 'KEV' ? "CISA's Known Exploited Vulnerabilities catalog" : "FIRST's EPSS scores"
+  if (!feed) return null
+  switch (feed.state) {
+    case 'ready':
+      return feed.stale ? `${name} data may be out of date: Radar couldn't refresh ${what}${feed.error ? ` (${feed.error})` : ''}.` : null
+    case 'loading':
+      return `Radar is loading ${what}.`
+    default:
+      return noFeedNote(name, flag, what, feed)
+  }
+}
+
+// Without a feed the page is complete without it, so the note says what the
+// feed would add and exactly what to set, not that something failed. A mirror
+// or file the operator set up that can't be read does say why, so they can
+// fix it.
+function noFeedNote(name: 'KEV' | 'EPSS', flag: string, what: string, feed: VulnerabilityFeedStatus): string {
+  const adds = name === 'KEV' ? 'mark the CVEs that are known to be exploited' : 'show how likely each CVE is to be exploited'
+  const setting = `${name === 'KEV' ? 'vulnerabilities.kevFeed' : 'vulnerabilities.epssFeed'} (Helm) or ${flag}`
+  if (feed.state === 'disabled' && feed.downloadsOff) return `Feed downloads are turned off on this Radar. To ${adds}, put a copy of ${what} in a file and set ${setting} to its path.`
+  if (feed.state === 'disabled') return `${name} is turned off on this Radar. To ${adds}, set ${setting} to the public URL, an https mirror or a file.`
+  if (feed.origin === 'mirror' || feed.origin === 'file') {
+    return `Radar couldn't read ${what} from its configured ${feed.origin}${feed.error ? ` (${feed.error})` : ''}. Check ${setting}.`
+  }
+  // The public server answered, so this Radar does reach it: a passing
+  // failure, which Radar retries hourly, not a network without internet.
+  if (feed.error?.includes('answered HTTP')) return `Radar couldn't download ${what} just now (${feed.error}). It tries again within the hour.`
+  return `This Radar can't reach the internet to download ${what}. To ${adds}, set ${setting} to an https mirror inside your network, or a file.`
+}
+
+/** The docs section on providing the feeds, which the no-data chip links to. */
+export const FEEDS_DOCS_URL = 'https://github.com/skyhook-io/radar/blob/main/docs/integrations.md#known-exploited-cves-and-epss'
+
+/**
+ * Which copy of the feeds Radar holds and when it last checked, for the
+ * Known exploited chip's tooltip: "CISA catalog 2026.11.20, checked 3m ago.
+ * EPSS scores from 2026-11-22." A stale copy says why it is stale.
+ */
+export function feedStatusText(intel: VulnerabilityIntel, age: (iso: string) => string): string {
+  const parts: string[] = []
+  const kev = intel.kev
+  if (kev.state === 'ready') {
+    const checked = kev.checkedAt ?? kev.loadedAt
+    parts.push(`CISA catalog ${kev.version ?? 'loaded'}${checked ? `, checked ${age(checked)}` : ''}.`)
+    if (kev.stale) parts.push(`Out of date: Radar couldn't refresh it${kev.error ? ` (${kev.error})` : ''}.`)
+  }
+  const epss = intel.epss
+  if (epss.state === 'ready' && epss.version) parts.push(`EPSS scores from ${epss.version}.`)
+  return parts.join(' ')
+}
+
+/** Refreshing could change what Radar holds: a feed loads, or comes from a mirror or file someone may have fixed. Not for feeds that are off, or that the public download can't reach. */
+export function refreshCanHelp(intel: VulnerabilityIntel): boolean {
+  return [intel.kev, intel.epss].some((f) => f.state === 'ready' || f.state === 'loading' || (f.state === 'unavailable' && (f.origin === 'mirror' || f.origin === 'file')))
+}
+
+/**
+ * The page's notes about the feeds, for the coverage line: loading, and a
+ * copy that couldn't be refreshed. A feed this Radar doesn't have gets no
+ * note here; the Known exploited chip says so calmly, and EPSS is simply
+ * not offered.
+ */
+export function intelNotes(intel?: VulnerabilityIntel): { label: string; tip: string; warn: boolean }[] {
+  if (!intel) return []
+  const out: { label: string; tip: string; warn: boolean }[] = []
+  if (intel.kev.state === 'loading') out.push({ label: KEV.loading, tip: feedNote('KEV', intel.kev) ?? '', warn: false })
+  if (intel.kev.state === 'ready' && intel.kev.stale) out.push({ label: 'KEV data may be out of date', tip: feedNote('KEV', intel.kev) ?? '', warn: true })
+  if (intel.epss.state === 'ready' && intel.epss.stale) out.push({ label: 'EPSS data may be out of date', tip: feedNote('EPSS', intel.epss) ?? '', warn: true })
+  return out
 }
