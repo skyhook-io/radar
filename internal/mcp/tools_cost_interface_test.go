@@ -64,11 +64,11 @@ func TestCostInterfaceThroughMCP(t *testing.T) {
 	if err := opencost.Configure(opencost.ManagerConfig{Source: opencost.SourcePrometheus}); err != nil {
 		t.Fatal(err)
 	}
-	prometheuspkg.Initialize(nil, nil, "test")
+	prometheuspkg.Initialize(nil, nil, "test", nil)
 	prometheuspkg.SetManualURL(source.URL)
 	t.Cleanup(func() {
 		prometheuspkg.Reset()
-		prometheuspkg.Initialize(nil, nil, "")
+		prometheuspkg.Initialize(nil, nil, "", nil)
 		_ = opencost.Configure(original)
 	})
 	t.Cleanup(opencost.SetScopeResolverForTesting(unlabeledCostScope))
@@ -304,11 +304,11 @@ func TestGetCostCarriesTheClusterScopeReason(t *testing.T) {
 	if err := opencost.Configure(opencost.ManagerConfig{Source: opencost.SourcePrometheus}); err != nil {
 		t.Fatal(err)
 	}
-	prometheuspkg.Initialize(nil, nil, "test")
+	prometheuspkg.Initialize(nil, nil, "test", nil)
 	prometheuspkg.SetManualURL(source.URL)
 	t.Cleanup(func() {
 		prometheuspkg.Reset()
-		prometheuspkg.Initialize(nil, nil, "")
+		prometheuspkg.Initialize(nil, nil, "", nil)
 		_ = opencost.Configure(original)
 	})
 	session := connectTestServer(t)

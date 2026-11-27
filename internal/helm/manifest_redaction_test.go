@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/skyhook-io/radar/internal/k8s"
 )
 
 const redactionManifestRev1 = `---
@@ -111,8 +113,8 @@ func TestRedactSecretManifestsBlanksUnparseableSecret(t *testing.T) {
 // Regression pin: the structured resource_diff already masks Secret values,
 // so get_helm_release include=resource_diff needs no extra redaction.
 func TestResourceDiffMasksSecretValues(t *testing.T) {
-	left, _ := parseManifestResourceObjects(redactionManifestRev1, "default")
-	right, _ := parseManifestResourceObjects(redactionManifestRev2, "default")
+	left, _ := parseManifestResourceObjects(k8s.Current(), redactionManifestRev1, "default")
+	right, _ := parseManifestResourceObjects(k8s.Current(), redactionManifestRev2, "default")
 	_, _, common := diffResourceRefs(resourceRefsFromRendered(left), resourceRefsFromRendered(right))
 	modified, _ := diffRenderedResourceObjects(common, left, right)
 

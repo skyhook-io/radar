@@ -127,7 +127,7 @@ func Authenticate(cfg Config) func(http.Handler) http.Handler {
 					}
 
 					if cloudProxyMode && pkgauth.UserTokenMode() {
-						user, ok := userTokenIdentity(w, r, cfg, username, groups)
+						user, ok := userTokenIdentity(w, r, cfg, username, cloud.FilterOwnerAccess(groups, false))
 						if !ok {
 							return
 						}
@@ -144,6 +144,7 @@ func Authenticate(cfg Config) func(http.Handler) http.Handler {
 						return
 					}
 
+					groups = cloud.FilterOwnerAccess(groups, cloudProxyMode)
 					user := &User{Username: username, Groups: groups}
 					logAcceptedForwardedIdentity(user)
 					if !cloudProxyMode {

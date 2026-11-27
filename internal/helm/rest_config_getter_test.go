@@ -1,12 +1,12 @@
 package helm
 
 import (
-	pkgauth "github.com/skyhook-io/radar/pkg/auth"
-	"strings"
 	"testing"
 	"time"
 
-	"k8s.io/cli-runtime/pkg/genericclioptions"
+	"github.com/skyhook-io/radar/internal/k8s"
+	pkgauth "github.com/skyhook-io/radar/pkg/auth"
+
 	"k8s.io/client-go/rest"
 )
 
@@ -111,73 +111,26 @@ func TestRESTConfigGetter_DiscoveryAndMapper_NoDeadlock(t *testing.T) {
 	}
 }
 
-// TestBuildRESTClientGetter exercises the strategy picker that decides
-// when to use the captured rest.Config vs a kubeconfig-backed
-// ConfigFlags. This is the actual decision the PR ships — the leaf
-// getter tests above are necessary but not sufficient.
-func TestBuildRESTClientGetter(t *testing.T) {
-	cases := []struct {
-		name       string
-		params     restClientGetterParams
-		wantType   string // "configFlags" | "restConfigGetter" | ""
-		wantErr    bool
-		wantErrSub string
-	}{
-		{
-			name: "kubeconfig set: use ConfigFlags (dominant OSS laptop case)",
-			params: restClientGetterParams{
-				kubeconfig: "/home/user/.kube/config",
-				restConfig: &rest.Config{Host: "https://example"},
-				namespace:  "default",
-			},
-			wantType: "configFlags",
-		},
-		{
-			name: "kubeconfig empty + rest.Config available: use restConfigGetter (in-cluster / multi-source)",
-			params: restClientGetterParams{
-				kubeconfig: "",
-				restConfig: &rest.Config{Host: "https://kubernetes.default.svc"},
-				namespace:  "kube-system",
-			},
-			wantType: "restConfigGetter",
-		},
-		{
-			name: "kubeconfig empty + no rest.Config: error",
-			params: restClientGetterParams{
-				kubeconfig: "",
-				restConfig: nil,
-			},
-			wantErr:    true,
-			wantErrSub: "no kubeconfig path and no resolved rest.Config",
-		},
+func TestActionConfigUsesCapturedRESTConfig(t *testing.T) {
+	for _, host := range []string{"https://example", "https://kubernetes.default.svc"} {
+		previous := k8s.SetTestConfig(&rest.Config{Host: host})
+		client := &Client{conn: k8s.Current()}
+		k8s.SetTestConfig(previous)
+		cfg, err := client.getActionConfig("kube-system")
+		if err != nil {
+			t.Fatal(err)
+		}
+		resolved, err := cfg.RESTClientGetter.ToRESTConfig()
+		if err != nil || resolved.Host != host {
+			t.Fatalf("config = %v, %v; want %s", resolved, err, host)
+		}
+		ns, _, err := cfg.RESTClientGetter.(*restConfigGetter).ToRawKubeConfigLoader().Namespace()
+		if err != nil || ns != "kube-system" {
+			t.Fatalf("namespace = %s, %v", ns, err)
+		}
 	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got, err := buildRESTClientGetter(tc.params)
-			if tc.wantErr {
-				if err == nil {
-					t.Fatalf("want error, got %T", got)
-				}
-				if tc.wantErrSub != "" && !strings.Contains(err.Error(), tc.wantErrSub) {
-					t.Errorf("error %q missing substring %q", err.Error(), tc.wantErrSub)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			switch tc.wantType {
-			case "configFlags":
-				if _, ok := got.(*genericclioptions.ConfigFlags); !ok {
-					t.Errorf("got %T, want *genericclioptions.ConfigFlags", got)
-				}
-			case "restConfigGetter":
-				if _, ok := got.(*restConfigGetter); !ok {
-					t.Errorf("got %T, want *restConfigGetter", got)
-				}
-			}
-		})
+	if _, err := (&Client{}).getActionConfig("default"); err == nil {
+		t.Fatal("expected missing config error")
 	}
 }
 
@@ -196,18 +149,14 @@ func TestRESTConfigGetter_ToRESTConfig_UserTokenMode(t *testing.T) {
 	}
 }
 
-func TestBuildRESTClientGetter_UserTokenModeIgnoresKubeconfigFlags(t *testing.T) {
+func TestActionConfigUsesCallerToken(t *testing.T) {
 	pkgauth.SetCredentialMode(pkgauth.CredentialsUserToken)
 	t.Cleanup(func() { pkgauth.SetCredentialMode(pkgauth.CredentialsImpersonate) })
-	got, err := buildRESTClientGetter(restClientGetterParams{
-		kubeconfig: "/home/user/.kube/config",
-		restConfig: &rest.Config{Host: "https://example"},
-		namespace:  "default",
-		user:       &pkgauth.User{Username: "oidc:alice", Token: "alice-token"},
-	})
+	action, err := NewStandaloneClient(&rest.Config{Host: "https://example"}).getActionConfigForUser("default", &pkgauth.User{Username: "oidc:alice", Token: "alice-token"})
 	if err != nil {
 		t.Fatal(err)
 	}
+	got := action.RESTClientGetter
 	cfg, err := got.ToRESTConfig()
 	if err != nil {
 		t.Fatal(err)

@@ -1,5 +1,5 @@
 import { formatBytes } from '@skyhook-io/k8s-ui/utils/format'
-import type { AggregatedFlow, TrafficFlow, TrafficWarningKind } from '../../types'
+import type { AggregatedFlow, TrafficFlow, TrafficPortSource, TrafficWarningKind } from '../../types'
 import type { TrafficEndpointPair, TrafficEndpointRef, TrafficMatch } from '../../api/traffic'
 import type { TrafficGraphSelection } from './TrafficGraph'
 
@@ -416,6 +416,33 @@ export function mergedEdgePort(a: number, b: number): number {
 }
 
 /**
+ * The port as text, or null when there is none to show. A port taken from the
+ * destination's Services is declared, not observed, so it always says so.
+ */
+export function portLabel(port: number, portSource?: TrafficPortSource): string | null {
+  if (portSource === 'serviceMultiple') return 'multiple (from Service)'
+  if (port <= 0) return null
+  return portSource === 'service' ? `${port} (from Service)` : String(port)
+}
+
+/** mergedEdgePort, keeping the shown port's marking with it. An observed port
+ *  outranks the same number taken from a Service. */
+export function mergeEdgePortInto(
+  into: { port: number; portSource?: TrafficPortSource },
+  from: { port: number; portSource?: TrafficPortSource },
+): void {
+  const port = mergedEdgePort(into.port, from.port)
+  if (port === 0) {
+    if (from.portSource) into.portSource = from.portSource
+  } else if (port !== into.port) {
+    into.portSource = from.portSource
+  } else if (port === from.port && !from.portSource) {
+    into.portSource = undefined
+  }
+  into.port = port
+}
+
+/**
  * Whether an edge carries a port: its own, or one of the edges merged into it.
  * A merged edge shows one of its ports, so a selection made on another must
  * still find it.
@@ -475,11 +502,11 @@ export function groupAddonFlows(flows: GraphFlow[], isAddon: (name: string, name
           connections: 0, bytesSent: 0, bytesRecv: 0, flowCount: 0, lastSeen: flow.lastSeen,
           source: { name: 'addon-internet', namespace: '', kind: 'AddonInternet' },
           destination: { name: 'addon-group-target', namespace: '', kind: 'AddonGroupTarget' },
-          protocol: flow.protocol, port: flow.port, l7Protocol: flow.l7Protocol,
+          protocol: flow.protocol, port: flow.port, portSource: flow.portSource, l7Protocol: flow.l7Protocol,
           rawPairs: [],
         }
       }
-      internet.port = mergedEdgePort(internet.port, flow.port)
+      mergeEdgePortInto(internet, flow)
       if (internet.protocol !== flow.protocol) internet.protocol = 'mixed'
       if (internet.l7Protocol !== flow.l7Protocol) internet.l7Protocol = 'mixed'
       mergeFlowVolume(internet, flow)
@@ -492,11 +519,11 @@ export function groupAddonFlows(flows: GraphFlow[], isAddon: (name: string, name
           connections: 0, bytesSent: 0, bytesRecv: 0, flowCount: 0, lastSeen: flow.lastSeen,
           source: { name: 'addon-group-source', namespace: '', kind: 'AddonGroupSource' },
           destination: { name: 'kubernetes', namespace: 'default', kind: 'Service' },
-          protocol: flow.protocol, port: flow.port, l7Protocol: flow.l7Protocol,
+          protocol: flow.protocol, port: flow.port, portSource: flow.portSource, l7Protocol: flow.l7Protocol,
           rawPairs: [],
         }
       }
-      kubernetes.port = mergedEdgePort(kubernetes.port, flow.port)
+      mergeEdgePortInto(kubernetes, flow)
       if (kubernetes.protocol !== flow.protocol) kubernetes.protocol = 'mixed'
       if (kubernetes.l7Protocol !== flow.l7Protocol) kubernetes.l7Protocol = 'mixed'
       mergeFlowVolume(kubernetes, flow)

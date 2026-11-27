@@ -25,6 +25,7 @@ import (
 	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/internal/traffic"
+	bp "github.com/skyhook-io/radar/pkg/audit"
 	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/netpol"
@@ -497,6 +498,7 @@ func (s *Server) handleDashboardHelm(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
 	}
+	r = r.WithContext(k8s.CaptureConnection(r.Context()))
 	namespaces, ok, checked, unread := s.resolveHelmStorageScope(r)
 	if !ok {
 		s.writeJSON(w, DashboardHelmSummary{})
@@ -1256,7 +1258,8 @@ func (s *Server) getDashboardTrafficSummary() *DashboardTrafficSummary {
 // can't list Secrets there; checked is false when a permission check behind
 // that went unanswered.
 func (s *Server) getDashboardHelmSummary(r *http.Request, namespaces []string, checked bool, unread ...string) DashboardHelmSummary {
-	helmClient := helm.GetClient()
+	r = r.WithContext(k8s.CaptureConnection(r.Context()))
+	helmClient := helm.GetClient(r.Context())
 	if helmClient == nil {
 		return DashboardHelmSummary{
 			Releases:  []DashboardHelmRelease{},
@@ -1568,6 +1571,9 @@ type DashboardNetworkPolicyCoverage struct {
 	CoveredWorkloads         int `json:"coveredWorkloads"`
 	CoveredWorkloadsIfStaged int `json:"coveredWorkloadsIfStaged"`
 	TotalWorkloads           int `json:"totalWorkloads"`
+	// Workloads left out of TotalWorkloads, so the card can say what it skipped.
+	IgnoredNamespaceWorkloads int `json:"ignoredNamespaceWorkloads,omitempty"`
+	HostNetworkWorkloads      int `json:"hostNetworkWorkloads,omitempty"`
 }
 
 type npSelector struct {
@@ -1789,8 +1795,24 @@ func (s *Server) getDashboardNetworkPolicyCoverage(r *http.Request, cache *k8s.R
 		}
 	}
 
+	// Workloads in the audit's ignored namespaces are left out of the total,
+	// the same as the audit findings leave them out. So are hostNetwork
+	// workloads: their pods use the node's network, and whether a network
+	// policy applies there depends on the network plugin.
+	ignoredNamespace := bp.IgnoredNamespaceMatcher(getAuditConfig().IgnoredNamespaces)
 	workloads := make([]dashboardPolicyWorkload, 0)
-	addWorkload := func(kind, ns, name string, templateLabels map[string]string, serviceAccount string) {
+	ignoredNamespaceWorkloads, hostNetworkWorkloads := 0, 0
+	addWorkload := func(kind, ns, name string, template *corev1.PodTemplateSpec) {
+		if ignoredNamespace(ns) {
+			ignoredNamespaceWorkloads++
+			return
+		}
+		if template.Spec.HostNetwork {
+			hostNetworkWorkloads++
+			return
+		}
+		templateLabels := template.Labels
+		serviceAccount := template.Spec.ServiceAccountName
 		if serviceAccount == "" {
 			serviceAccount = "default"
 		}
@@ -1806,13 +1828,13 @@ func (s *Server) getDashboardNetworkPolicyCoverage(r *http.Request, cache *k8s.R
 		if allNamespaces {
 			deps, _ := depLister.List(labels.Everything())
 			for _, d := range deps {
-				addWorkload("Deployment", d.Namespace, d.Name, d.Spec.Template.Labels, d.Spec.Template.Spec.ServiceAccountName)
+				addWorkload("Deployment", d.Namespace, d.Name, &d.Spec.Template)
 			}
 		} else {
 			for _, ns := range namespaces {
 				deps, _ := depLister.Deployments(ns).List(labels.Everything())
 				for _, d := range deps {
-					addWorkload("Deployment", d.Namespace, d.Name, d.Spec.Template.Labels, d.Spec.Template.Spec.ServiceAccountName)
+					addWorkload("Deployment", d.Namespace, d.Name, &d.Spec.Template)
 				}
 			}
 		}
@@ -1822,13 +1844,13 @@ func (s *Server) getDashboardNetworkPolicyCoverage(r *http.Request, cache *k8s.R
 		if allNamespaces {
 			stss, _ := stsLister.List(labels.Everything())
 			for _, s := range stss {
-				addWorkload("StatefulSet", s.Namespace, s.Name, s.Spec.Template.Labels, s.Spec.Template.Spec.ServiceAccountName)
+				addWorkload("StatefulSet", s.Namespace, s.Name, &s.Spec.Template)
 			}
 		} else {
 			for _, ns := range namespaces {
 				stss, _ := stsLister.StatefulSets(ns).List(labels.Everything())
 				for _, s := range stss {
-					addWorkload("StatefulSet", s.Namespace, s.Name, s.Spec.Template.Labels, s.Spec.Template.Spec.ServiceAccountName)
+					addWorkload("StatefulSet", s.Namespace, s.Name, &s.Spec.Template)
 				}
 			}
 		}
@@ -1838,13 +1860,13 @@ func (s *Server) getDashboardNetworkPolicyCoverage(r *http.Request, cache *k8s.R
 		if allNamespaces {
 			dss, _ := dsLister.List(labels.Everything())
 			for _, d := range dss {
-				addWorkload("DaemonSet", d.Namespace, d.Name, d.Spec.Template.Labels, d.Spec.Template.Spec.ServiceAccountName)
+				addWorkload("DaemonSet", d.Namespace, d.Name, &d.Spec.Template)
 			}
 		} else {
 			for _, ns := range namespaces {
 				dss, _ := dsLister.DaemonSets(ns).List(labels.Everything())
 				for _, d := range dss {
-					addWorkload("DaemonSet", d.Namespace, d.Name, d.Spec.Template.Labels, d.Spec.Template.Spec.ServiceAccountName)
+					addWorkload("DaemonSet", d.Namespace, d.Name, &d.Spec.Template)
 				}
 			}
 		}
@@ -1931,11 +1953,13 @@ func (s *Server) getDashboardNetworkPolicyCoverage(r *http.Request, cache *k8s.R
 	}
 
 	return &DashboardNetworkPolicyCoverage{
-		TotalPolicies:            len(allNPs) + len(calicoPolicies),
-		StagedPolicies:           stagedPolicies,
-		CoveredWorkloads:         len(covered),
-		CoveredWorkloadsIfStaged: len(coveredIfStaged),
-		TotalWorkloads:           len(workloads),
+		TotalPolicies:             len(allNPs) + len(calicoPolicies),
+		StagedPolicies:            stagedPolicies,
+		CoveredWorkloads:          len(covered),
+		CoveredWorkloadsIfStaged:  len(coveredIfStaged),
+		TotalWorkloads:            len(workloads),
+		IgnoredNamespaceWorkloads: ignoredNamespaceWorkloads,
+		HostNetworkWorkloads:      hostNetworkWorkloads,
 	}
 }
 

@@ -12,7 +12,6 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
 
 	"github.com/skyhook-io/radar/internal/errorlog"
 	"github.com/skyhook-io/radar/internal/portforward"
@@ -22,7 +21,6 @@ import (
 // Manager handles traffic source detection and management
 type Manager struct {
 	k8sClient    kubernetes.Interface
-	k8sConfig    *rest.Config
 	sources      map[string]TrafficSource
 	activeSource TrafficSource
 	clusterInfo  *ClusterInfo
@@ -40,7 +38,6 @@ type Manager struct {
 var (
 	manager  *Manager
 	initOnce sync.Once
-	initErr  error
 
 	// metricsConfigMu guards the configured-metrics globals below. Originally
 	// these were written only at startup (no concurrent readers), but the live
@@ -134,21 +131,25 @@ func metricsConfig() (string, map[string]string) {
 
 // Initialize sets up the traffic manager with the given K8s client
 func Initialize(client kubernetes.Interface) error {
-	return InitializeWithConfig(client, nil, "")
+	InitializeWithPortForwards(client, nil, "")
+	return nil
 }
 
-// InitializeWithConfig sets up the traffic manager with K8s client, config, and context name
-func InitializeWithConfig(client kubernetes.Interface, config *rest.Config, contextName string) error {
+// InitializeWithPortForwards takes the client, tunnel manager, and context name
+// from the same connection. A nil manager disables automatic tunnels for traffic.
+func InitializeWithPortForwards(client kubernetes.Interface, forwards *portforward.Manager, contextName string) {
 	initOnce.Do(func() {
 		manager = &Manager{
 			k8sClient:   client,
-			k8sConfig:   config,
 			sources:     make(map[string]TrafficSource),
 			contextName: contextName,
 		}
 		// Register available sources
-		manager.sources["hubble"] = NewHubbleSource(client)
+		hubble := NewHubbleSource(client)
+		hubble.forwards = forwards
+		manager.sources["hubble"] = hubble
 		caretta := NewCarettaSource(client)
+		caretta.forwards = forwards
 		metricsURL, metricsHeaders := metricsConfig()
 		if metricsURL != "" {
 			caretta.metricsURL = metricsURL
@@ -158,13 +159,7 @@ func InitializeWithConfig(client kubernetes.Interface, config *rest.Config, cont
 		manager.sources["caretta"] = caretta
 		manager.sources["istio"] = NewIstioSource(client)
 		manager.sources["beyla"] = NewBeylaSource(client)
-
-		// Set K8s clients for port-forward functionality
-		if config != nil {
-			portforward.SetK8sClients(client, config)
-		}
 	})
-	return initErr
 }
 
 // GetManager returns the global traffic manager
@@ -686,16 +681,9 @@ func (m *Manager) Close() error {
 
 // Reset cleans up for context switching
 func Reset() {
-	// Stop any active metrics port-forward first
-	portforward.Stop(portforward.OwnerTraffic)
-
 	if manager != nil {
 		manager.Close()
 	}
-	// Stop again after Close: an in-flight Connect (Close blocks on the source
-	// mutex until it finishes) may have published a forward for the old cluster
-	// after the first Stop.
-	portforward.Stop(portforward.OwnerTraffic)
 	manager = nil
 	initOnce = sync.Once{}
 }
@@ -706,10 +694,9 @@ func Reinitialize(client kubernetes.Interface) error {
 	return Initialize(client)
 }
 
-// ReinitializeWithConfig reinitializes with full config after context switch
-func ReinitializeWithConfig(client kubernetes.Interface, config *rest.Config, contextName string) error {
+func ReinitializeWithPortForwards(client kubernetes.Interface, forwards *portforward.Manager, contextName string) {
 	Reset()
-	return InitializeWithConfig(client, config, contextName)
+	InitializeWithPortForwards(client, forwards, contextName)
 }
 
 // Connect establishes connection to the active traffic source
@@ -751,10 +738,8 @@ type ConnectionReporter interface {
 	ConnectionInfo() *portforward.ConnectionInfo
 }
 
-// GetConnectionInfo returns live traffic connection status, as reported by the
-// active source when it can (see ConnectionReporter). The registry fallback
-// deliberately does NOT report another owner's forward: a Prometheus forward
-// for the same context means Prometheus is connected, not traffic.
+// GetConnectionInfo reports the active source's data path, including direct
+// connections and forwards borrowed from the Prometheus client.
 func (m *Manager) GetConnectionInfo() *portforward.ConnectionInfo {
 	m.mu.RLock()
 	source := m.activeSource
@@ -767,7 +752,7 @@ func (m *Manager) GetConnectionInfo() *portforward.ConnectionInfo {
 	if reporter, ok := source.(ConnectionReporter); ok {
 		return reporter.ConnectionInfo()
 	}
-	return portforward.GetConnectionInfo(portforward.OwnerTraffic)
+	return &portforward.ConnectionInfo{}
 }
 
 // SetContextName updates the current context name

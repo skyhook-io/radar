@@ -1,6 +1,6 @@
 import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef } from 'react'
 import { flushSync } from 'react-dom'
-import { isRightsizingScanPath } from './utils/page-links'
+import { isRightsizingScanPath, useClearLinkedIssue } from './utils/page-links'
 import { startViewTransitionSafe } from '@skyhook-io/k8s-ui/utils/view-transition'
 import { englishPlural } from '@skyhook-io/k8s-ui/utils/pluralize'
 import { useQueryClient } from '@tanstack/react-query'
@@ -367,6 +367,7 @@ interface AppProps {
 function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterLoadStateChange }: AppProps) {
   useLayoutEffect(() => () => resetNavigationMap(), [])
   const navigate = useNavigate()
+  const clearLinkedIssue = useClearLinkedIssue()
   const location = useLocation()
   const navigationType = useNavigationType()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -1163,6 +1164,9 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   }>({ changedKinds: new Set(), changedObjects: new Set(), structuralKinds: new Set(), environmentNamespaces: new Set(), environmentPods: new Map(), secretsChanged: false, timer: null })
   const cnpgInvalidationPendingRef = useRef(false)
   const veleroInvalidationPendingRef = useRef(false)
+  // Traefik route facts scan every visible IngressRoute per request, so an open
+  // drawer refreshes at most once per batch of this length.
+  const traefikInvalidationRef = useRef<{ timer: number | null }>({ timer: null })
   const slowInvalidationRef = useRef<{
     updatedKinds: Set<string>    // update-only churn → throttled list + dashboard
     gitopsRowsChanged: boolean   // Argo/Flux row and source kinds → GitOps table rows
@@ -1264,6 +1268,17 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       }, 3000)
     }
 
+    // Traefik route facts join routes, Middlewares, Services, Pods and Secrets,
+    // and a Flux root's outside changes read every member's managedFields; only
+    // an open view's query refetches.
+    if (traefikInvalidationRef.current.timer === null) {
+      traefikInvalidationRef.current.timer = window.setTimeout(() => {
+        traefikInvalidationRef.current = { timer: null }
+        queryClient.invalidateQueries({ queryKey: ['traefik'] })
+        queryClient.invalidateQueries({ queryKey: ['gitops-outside-changes'] })
+      }, 15000)
+    }
+
     // SLOW tier — throttle expensive status churn. Workload membership changes
     // also pass through here so the Applications refetch lands after its cache TTL.
     if ((!structural || applicationWorkload || gitops.rows || gitops.counts) && slow.timer === null) {
@@ -1291,6 +1306,8 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     if (fastInvalidationRef.current.timer !== null) clearTimeout(fastInvalidationRef.current.timer)
     if (slowInvalidationRef.current.timer !== null) clearTimeout(slowInvalidationRef.current.timer)
     if (timelineInvalidationRef.current.timer !== null) clearTimeout(timelineInvalidationRef.current.timer)
+    if (traefikInvalidationRef.current.timer !== null) clearTimeout(traefikInvalidationRef.current.timer)
+    traefikInvalidationRef.current = { timer: null }
     fastInvalidationRef.current = { changedKinds: new Set(), changedObjects: new Set(), structuralKinds: new Set(), environmentNamespaces: new Set(), environmentPods: new Map(), secretsChanged: false, timer: null }
     slowInvalidationRef.current = { updatedKinds: new Set(), gitopsRowsChanged: false, gitopsCountsChanged: false, timer: null }
     timelineInvalidationRef.current = { timer: null }
@@ -1923,7 +1940,9 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         scroll sideways at desktop width instead (see PHONE_READY_VIEWS). */}
     <div
       className={`relative flex bg-theme-base ${navCustomization.embedded ? 'h-full min-h-0' : 'h-screen'}`}
-      style={{ minWidth: (isMobile ? 360 : 800) + (showNavRail ? (navRailEffectivePinned ? 176 : 56) : 0) }}
+      style={{ minWidth: isMobile && mainView === 'issues'
+        ? 0 // Issue rows adapt to the space beside the rail, even on a 360px phone.
+        : (isMobile ? 360 : 800) + (showNavRail ? (navRailEffectivePinned ? 176 : 56) : 0) }}
     >
       {showNavRail && (
         <PrimaryNavRail
@@ -1964,6 +1983,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
                 variant="segment"
                 disabled={namespaceFilter.disabled}
                 disabledTooltip={namespaceFilter.tooltip}
+                onApply={mainView === 'issues' ? clearLinkedIssue : undefined}
               />
             </ScopePill>
             {/* Connection status — a fixed-size dot (state in the tooltip), an
@@ -2037,7 +2057,11 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
               navigate({ pathname: `/resources/${kind}`, search: params.toString() })
             }}
             onSwitchContext={commandSwitch.requestSwitch}
-            onSetNamespaces={(ns) => { setNamespaces(ns); setActiveNamespace.mutate({ namespaces: ns }) }}
+            onSetNamespaces={(ns) => {
+              if (mainView === 'issues') clearLinkedIssue()
+              setNamespaces(ns)
+              setActiveNamespace.mutate({ namespaces: ns })
+            }}
             onToggleTheme={toggleTheme}
             onShowDiagnostics={() => setShowDiagnostics(true)}
             onShowWhatsNew={whatsNewStatus.available ? openWhatsNew : undefined}
@@ -2221,6 +2245,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
             topology={topology}
             fallbackClusterLoadState={showHomeClusterLoadFallback ? clusterLoadState : undefined}
             onNavigateToView={setMainView}
+            onNavigateToIssue={takeover.issues ? undefined : (id) => setMainView('issues', { issue: id })}
             onNavigateToHelmRelease={navCustomization.embedded ? undefined : navigateToHelmRelease}
             onNavigateToManagerPath={navCustomization.embedded || takeover.gitops ? undefined : navigateToPath}
             // Upgrade impact lives under /checks, which a Cloud host takes

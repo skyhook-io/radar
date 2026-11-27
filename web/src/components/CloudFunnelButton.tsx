@@ -525,15 +525,22 @@ function ModalFooter({
   // evidence it could not verify). A GitOps install with a link goes to the
   // wizard's Argo/Flux tab, which generates a values patch for the repo rather
   // than an imperative command the controller would revert.
+  const nkp = self?.platform === 'nkp'
   const cliOnly = (gitops || ambiguous) && !self?.wizardUrl
   // Until classification resolves we cannot know which lane applies, and a
   // fast click would escape to signup before we could route this install.
   const selfPending = selfLoading === true
   return (
     <div className="shrink-0 px-8 py-6 bg-theme-base border-t border-theme-border">
-      {self && self.ownership !== 'unknown' && (
+      {self && (self.ownership !== 'unknown' || nkp) && (
         <div className="mb-3.5 card-inner p-3 text-[12px] leading-relaxed text-theme-text-secondary">
-          {ambiguous ? (
+          {nkp ? (
+            <>
+              NKP manages this Radar, so a change made to it directly would be undone. Radar Cloud gives you
+              settings to paste into the Radar app&apos;s configuration in NKP. They apply to every cluster in the
+              workspace.
+            </>
+          ) : ambiguous ? (
             <>
               Radar found conflicting management metadata on this install, so it can't say whether a Helm
               upgrade or a repository change is the right move. Run{' '}
@@ -628,7 +635,7 @@ function ModalFooter({
             onClick={(e) => { if (selfPending) e.preventDefault() }}
             className={`px-5 py-2 rounded-[10px] bg-emerald-500 hover:bg-emerald-400 text-emerald-950 text-[13.5px] font-bold shadow-[0_0_22px_rgba(16,185,129,0.35)] hover:shadow-[0_0_30px_rgba(16,185,129,0.5)] hover:-translate-y-px transition-all ${selfPending ? 'opacity-60 pointer-events-none' : ''}`}
           >
-            {lane === 'driver' ? 'Continue in Radar Cloud' : self?.ownership === 'helm' || gitops ? 'Connect this cluster' : 'Try Cloud free'}
+            {lane === 'driver' ? 'Continue in Radar Cloud' : nkp ? 'Connect your NKP workspace' : self?.ownership === 'helm' || gitops ? 'Connect this cluster' : 'Try Cloud free'}
           </a>
         )}
         {/* Self-Managed is a paid product with its own trial, so it gets a real

@@ -46,6 +46,7 @@ interface HomeViewProps {
   namespaces: string[]
   topology: Topology | null
   onNavigateToView: (view: ExtendedMainView, params?: Record<string, string>) => void
+  onNavigateToIssue?: (id: string) => void
   onNavigateToResourceKind: (kind: string, group?: string, filters?: Record<string, string[]>) => void
   onNavigateToResource: (resource: SelectedResource) => void
   fallbackClusterLoadState?: ClusterLoadState
@@ -62,7 +63,7 @@ interface HomeViewProps {
   onNavigateToManagerPath?: (path: string) => void
 }
 
-export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNavigateToView, onNavigateToResourceKind, onNavigateToResource, onNavigateToCerts, onNavigateToUpgradeImpact, onNavigateToHelmRelease, onNavigateToManagerPath }: HomeViewProps) {
+export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNavigateToView, onNavigateToIssue, onNavigateToResourceKind, onNavigateToResource, onNavigateToCerts, onNavigateToUpgradeImpact, onNavigateToHelmRelease, onNavigateToManagerPath }: HomeViewProps) {
   // The card itself decides whether the cluster has a capacity story
   // (available, softened-denied, or karpenterless-with-managers/groups) and
   // returns null otherwise — the outer gate only excludes states with nothing
@@ -290,6 +291,7 @@ export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNav
             error={issuesError}
             totalReturned={issues.length}
             onNavigateToIssues={() => onNavigateToView('issues')}
+            onNavigateToIssue={onNavigateToIssue}
             onResourceClick={onNavigateToResource}
           />
         </div>
@@ -343,6 +345,7 @@ interface ProblemsPanelProps {
   error: unknown
   totalReturned: number
   onNavigateToIssues: () => void
+  onNavigateToIssue?: (id: string) => void
   onResourceClick: (resource: SelectedResource) => void
 }
 
@@ -358,6 +361,7 @@ export function ProblemsPanel({
   error,
   totalReturned,
   onNavigateToIssues,
+  onNavigateToIssue,
   onResourceClick,
 }: ProblemsPanelProps) {
   const unchecked = uncheckedLines.length > 0
@@ -475,6 +479,10 @@ export function ProblemsPanel({
                         className="w-full flex items-center gap-2 px-3 py-1.5 group-hover:bg-theme-hover group-has-[:focus-visible]:bg-theme-hover transition-colors text-left"
                         onClick={() => {
                           recordUsageEvent({ type: 'ui', name: 'issue_action:open' })
+                          if (onNavigateToIssue) {
+                            onNavigateToIssue(issue.id)
+                            return
+                          }
                           onResourceClick({
                             kind: ref.kind,
                             namespace: ref.namespace ?? '',

@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/portforward"
+
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -403,7 +405,8 @@ func TestOnForwardLost(t *testing.T) {
 
 	c, _ := newRediscoveryClient(t)
 	c.baseURL = "http://localhost:4000"
-	c.onForwardLost("traffic", "http://localhost:5000")
+	c.forward = &portforward.Handle{}
+	c.onForwardLost(&portforward.Handle{})
 	if c.baseURL == "" {
 		t.Fatal("loss of an unrelated forward dropped the connection")
 	}
@@ -411,7 +414,7 @@ func TestOnForwardLost(t *testing.T) {
 		t.Fatalf("unrelated forward loss ran discovery: %v", got)
 	}
 
-	c.onForwardLost("prometheus", "http://localhost:4000")
+	c.onForwardLost(c.forward)
 	if c.baseURL != "" {
 		t.Fatal("connection served by the lost forward was kept")
 	}

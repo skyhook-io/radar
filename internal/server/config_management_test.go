@@ -216,8 +216,8 @@ func TestOperatorConfigReadPrivacy(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("USERPROFILE", t.TempDir())
 	t.Setenv("RADAR_CLOUD_MODE", "false")
-	prometheuspkg.Initialize(nil, nil, "test")
-	t.Cleanup(func() { prometheuspkg.Initialize(nil, nil, "") })
+	prometheuspkg.Initialize(nil, nil, "test", nil)
+	t.Cleanup(func() { prometheuspkg.Initialize(nil, nil, "", nil) })
 	prometheuspkg.Configure("https://private-machine-user:private-machine-password@metrics.example/prom?token=private-machine-token", nil)
 	cfg := config.Config{Kubeconfig: "/private-machine-path", KubeconfigDirs: []string{"/private-machine-directory"}, TimelineDBPath: "/private-machine-db", AIHistoryDBPath: "/private-machine-ai", AIConsent: map[string]string{"private-machine-consent": "v1"}, PrometheusHeadersFromEnv: map[string]string{"Authorization": "PRIVATE_MACHINE_ENV"}, ArgoCDToken: "private-machine-token", KubecostAPIKey: "private-machine-key", Port: 9280}
 	if err := config.Save(cfg); err != nil {

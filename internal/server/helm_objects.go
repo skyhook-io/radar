@@ -15,18 +15,20 @@ import (
 // cluster-scoped ones. The namespace picker narrows rows, not the read: a
 // release's cluster-scoped objects and those in other namespaces still count.
 func (s *Server) helmObjectScope(r *http.Request) *helm.ObjectScope {
-	provider := search.NewCacheProvider()
+	conn := k8s.BoundOrCurrent(r.Context())
+	provider := search.NewCacheProviderFor(conn)
 	if provider == nil {
 		return nil
 	}
 	ceiling, checkFailed := s.getUserNamespacesWithStatus(r, nil)
 	var pin *string
 	if k8s.ForceNamespaceScope {
-		target := k8s.GetNamespaceScopeTarget()
+		target := conn.NamespaceScopeTarget()
 		pin = &target
 	}
 	kindRBAC := s.computeSearchKindRBAC(r)
 	access := search.ScanAccess{
+		Discovery:            conn.Discovery(),
 		Selection:            search.SelectNamespaces(provider, search.Query{}, readscope.NamespaceAccess{Namespaces: ceiling, Checked: !checkFailed}, pin),
 		NamespaceCheckFailed: checkFailed,
 		TypedKindAccess:      kindRBAC,
@@ -35,5 +37,5 @@ func (s *Server) helmObjectScope(r *http.Request) *helm.ObjectScope {
 		},
 		DynamicKindAccess: s.searchKindAccess(r, kindRBAC),
 	}
-	return &helm.ObjectScope{Provider: provider, Access: access, Requested: helm.RequestedNamespaces(parseNamespaces(r.URL.Query()), pin)}
+	return &helm.ObjectScope{Pin: pin, Provider: provider, Access: access, Requested: helm.RequestedNamespaces(parseNamespaces(r.URL.Query()), pin)}
 }

@@ -51,7 +51,7 @@ func TestGetChangesRefusesUntilConnected(t *testing.T) {
 // Radar sets up its Helm client once the cluster has connected. Before then,
 // the Helm tools must not answer "no releases found".
 func TestHelmToolsWhileConnecting(t *testing.T) {
-	helm.ResetClient()
+	helm.ResetTestClient()
 	prev := k8s.GetConnectionStatus()
 	t.Cleanup(func() { k8s.SetConnectionStatus(prev) })
 

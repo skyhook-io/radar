@@ -69,6 +69,12 @@ type unlistableKindProvider interface {
 	UnlistableKinds() []k8score.APIResource
 }
 
+// shortNamedKindProvider is a Provider that can name the discovered APIs that
+// declare kubectl short names, so kind: can accept them.
+type shortNamedKindProvider interface {
+	ShortNamedKinds() []k8score.APIResource
+}
+
 // readableWithin narrows a kind's list scope (nil: every namespace) to the
 // namespaces readable now; with no readable namespaces it is empty.
 func readableWithin(listNs, readable []string) []string {

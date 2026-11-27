@@ -629,12 +629,13 @@ func buildLocalInstallClients(kubeconfig, contextName string) (localInstallClien
 	if err := helm.InitializeWithRESTConfig(clients.RESTConfig); err != nil {
 		return localInstallClients{}, fmt.Errorf("helm init: %w", err)
 	}
+	driver := helm.GetClient(context.Background())
 	return localInstallClients{
 		Kubernetes: clients.Kubernetes,
 		Dynamic:    clients.Dynamic,
 		Discovery:  clients.Discovery,
-		Helm:       helm.GetClient(),
-		Releases:   helm.GetClient(),
+		Helm:       driver,
+		Releases:   driver,
 	}, nil
 }
 

@@ -422,6 +422,16 @@ export interface RendererOverrides {
     data: any
     onNavigate?: (ref: ResourceRef) => void
   }>
+  /** Host-injected: adds the request path of each rule (GET /api/traefik/routes). */
+  TraefikIngressRouteRenderer?: React.ComponentType<{
+    data: any
+    onNavigate?: (ref: ResourceRef) => void
+  }>
+  /** Host-injected: adds which IngressRoutes use the Middleware. */
+  TraefikMiddlewareRenderer?: React.ComponentType<{
+    data: any
+    onNavigate?: (ref: ResourceRef) => void
+  }>
   /** Host-injected: wires the HelmChart drawer's "Open Helm release" link. */
   K3sHelmChartRenderer?: React.ComponentType<{
     data: any
@@ -535,6 +545,9 @@ export interface RendererOverrides {
 }
 
 // Known resource types with specific renderers (module-level to avoid re-allocation)
+// Traefik plurals; other CRDs also name plurals like middlewares, so each is gated on Traefik's groups.
+const TRAEFIK_PLURALS = ['ingressroutes', 'ingressroutetcps', 'ingressrouteudps', 'middlewares', 'middlewaretcps', 'traefikservices', 'serverstransports', 'serverstransporttcps', 'tlsoptions']
+
 const KNOWN_KINDS = new Set([
   'customresourcedefinitions',
   'kafkaconnectors', 'kafkas', 'kafkanodepools',
@@ -811,6 +824,7 @@ export function ResourceRendererDispatch({
   // API group can publish either plural without inheriting CAPI presentation.
   const isFluxKind = ['gitrepositories', 'ocirepositories', 'helmrepositories', 'kustomizations', 'helmreleases', 'alerts'].includes(kind)
   const isFluxResource = getGitOpsTool(kind, apiVersionToGroup(data?.apiVersion)) === 'flux'
+  const isTraefikResource = isApiGroup(data?.apiVersion, 'traefik.io') || isApiGroup(data?.apiVersion, 'traefik.containo.us')
   const isFluxOperatorKind = FLUX_OPERATOR_PLURALS.includes(kind)
   const isFluxOperatorResource = isFluxOperatorKind && isApiGroup(data?.apiVersion, FLUX_OPERATOR_GROUP)
   const isGroupGatedKind =
@@ -820,6 +834,7 @@ export function ResourceRendererDispatch({
     ['ipaddresspools', 'l2advertisements', 'bgpadvertisements', 'bgppeers', 'configurationstates'].includes(kind) ||
     ['opentelemetrycollectors', 'instrumentations'].includes(kind) ||
     ['canaries', 'metrictemplates'].includes(kind) ||
+    TRAEFIK_PLURALS.includes(kind) ||
     ['helmcharts', 'helmchartconfigs'].includes(kind) ||
     kind === 'plans' ||
     kind === 'secretproviderclasses' ||
@@ -853,6 +868,7 @@ export function ResourceRendererDispatch({
     (kind === 'configurationstates' && isMetalLBConfigurationState(data)) ||
     (['opentelemetrycollectors', 'instrumentations'].includes(kind) && isApiGroup(data?.apiVersion, 'opentelemetry.io')) ||
     (['canaries', 'metrictemplates'].includes(kind) && isApiGroup(data?.apiVersion, 'flagger.app')) ||
+    (TRAEFIK_PLURALS.includes(kind) && isTraefikResource) ||
     (['helmcharts', 'helmchartconfigs'].includes(kind) && isApiGroup(data?.apiVersion, K3S_HELM_GROUP)) ||
     (kind === 'plans' && isApiGroup(data?.apiVersion, UPGRADE_PLAN_GROUP)) ||
     (kind === 'secretproviderclasses' && isApiGroup(data?.apiVersion, SECRETS_STORE_GROUP)) ||
@@ -942,6 +958,8 @@ export function ResourceRendererDispatch({
   const CNPGObjectStoreComp = rendererOverrides?.CNPGObjectStoreRenderer ?? CNPGObjectStoreRenderer
   const VeleroBSLComp = rendererOverrides?.VeleroBSLRenderer ?? VeleroBSLRenderer
   const SecretProviderClassComp = rendererOverrides?.SecretProviderClassRenderer ?? SecretProviderClassRenderer
+  const TraefikIngressRouteComp = rendererOverrides?.TraefikIngressRouteRenderer ?? TraefikIngressRouteRenderer
+  const TraefikMiddlewareComp = rendererOverrides?.TraefikMiddlewareRenderer ?? TraefikMiddlewareRenderer
   const K3sHelmChartComp = rendererOverrides?.K3sHelmChartRenderer ?? K3sHelmChartRenderer
   const UpgradePlanComp = rendererOverrides?.UpgradePlanRenderer ?? UpgradePlanRenderer
   const VeleroBackupComp = rendererOverrides?.VeleroBackupRenderer ?? VeleroBackupRenderer
@@ -1207,11 +1225,13 @@ export function ResourceRendererDispatch({
         {kind === 'parallels' && <ParallelRenderer data={data} onNavigate={onNavigate} />}
 
         {/* Traefik */}
-        {(kind === 'ingressroutes' || kind === 'ingressroutetcps' || kind === 'ingressrouteudps') && <TraefikIngressRouteRenderer data={data} onNavigate={onNavigate} />}
-        {(kind === 'middlewares' || kind === 'middlewaretcps') && <TraefikMiddlewareRenderer data={data} onNavigate={onNavigate} />}
-        {kind === 'traefikservices' && <TraefikServiceRenderer data={data} onNavigate={onNavigate} />}
-        {(kind === 'serverstransports' || kind === 'serverstransporttcps') && <TraefikServersTransportRenderer data={data} onNavigate={onNavigate} />}
-        {kind === 'tlsoptions' && <TraefikTLSOptionRenderer data={data} />}
+        {kind === 'ingressroutes' && isTraefikResource && <TraefikIngressRouteComp data={data} onNavigate={onNavigate} />}
+        {(kind === 'ingressroutetcps' || kind === 'ingressrouteudps') && isTraefikResource && <TraefikIngressRouteRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'middlewares' && isTraefikResource && <TraefikMiddlewareComp data={data} onNavigate={onNavigate} />}
+        {kind === 'middlewaretcps' && isTraefikResource && <TraefikMiddlewareRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'traefikservices' && isTraefikResource && <TraefikServiceRenderer data={data} onNavigate={onNavigate} />}
+        {(kind === 'serverstransports' || kind === 'serverstransporttcps') && isTraefikResource && <TraefikServersTransportRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'tlsoptions' && isTraefikResource && <TraefikTLSOptionRenderer data={data} />}
 
         {/* Contour */}
         {kind === 'httpproxies' && <ContourHTTPProxyRenderer data={data} onNavigate={onNavigate} />}
