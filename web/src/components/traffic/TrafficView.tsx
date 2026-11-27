@@ -475,6 +475,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
   const connectMutation = useTrafficConnect()
   const setSourceMutation = useSetTrafficSource()
   const hasAutoConnectedRef = useRef(false)
+  const canAutoReconnectRef = useRef(false)
 
   // Track cluster context to reset state on cluster change
   const { data: clusterInfo } = useClusterInfo()
@@ -488,6 +489,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
       setWizardState('detecting')
       setConnectionError(null)
       hasAutoConnectedRef.current = false
+      canAutoReconnectRef.current = false
       queryClient.invalidateQueries({ queryKey: ['traffic-sources'] })
       queryClient.invalidateQueries({ queryKey: ['traffic-flows'] })
       queryClient.invalidateQueries({ queryKey: ['traffic-connection'] })
@@ -503,6 +505,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
 
   const {
     data: flowsData,
+    error: flowsError,
     isFetching: flowsFetching,
     dataUpdatedAt: flowsUpdatedAt,
     refetch: refetchFlowsRaw,
@@ -1208,15 +1211,15 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
 
   // Shared connection handler — used by auto-connect and retry buttons.
   // Deliberately does NOT reset hasAutoConnectedRef on failure: that ref gates
-  // the auto-connect effect, and re-arming it would re-fire auto-connect on
-  // every failed attempt (unbounded loop). Retries come from the explicit
-  // Retry button, which calls handleConnect directly.
+  // the initial auto-connect effect, which would otherwise run again on every
+  // failed attempt. Recovery from source loss has its own guard.
   //
   // The page opens on a detection that may be a couple of minutes old, so the
   // source it names may since have gone. A retry detects again first, which
   // also picks another available source, and the first failed connect gets
   // one such retry on its own.
   const handleConnect = useCallback((redetect: boolean, automatic = false) => {
+    canAutoReconnectRef.current = false
     setIsConnecting(true)
     setConnectionError(null)
     queryClient.removeQueries({ queryKey: ['traffic-flows'] })
@@ -1238,6 +1241,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
               fail(data.error)
               return
             }
+            canAutoReconnectRef.current = data.connected
             setIsConnecting(false)
           },
           onError: (error) => fail(error.message),
@@ -1266,6 +1270,14 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
       handleConnect(false, true)
     }
   }, [wizardState, isConnecting, handleConnect])
+
+  // A settings save can replace the traffic manager while this view is open.
+  useEffect(() => {
+    if (wizardState === 'ready' && !isConnecting && !connectionError && !flowsFetching &&
+        canAutoReconnectRef.current && flowsError?.message === 'no traffic source available') {
+      handleConnect(true, true)
+    }
+  }, [wizardState, isConnecting, connectionError, flowsFetching, flowsError, handleConnect])
 
   // Show wizard if no traffic source detected
   if (wizardState !== 'ready') {
@@ -1356,11 +1368,13 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
               setIsConnecting(true)
               setConnectionError(null)
               hasAutoConnectedRef.current = true
+              canAutoReconnectRef.current = false
               setSourceMutation.mutate(name, {
                 onSuccess: () => {
                   queryClient.invalidateQueries({ queryKey: ['traffic-sources'] })
                   connectMutation.mutate(undefined, {
                     onSuccess: (data) => {
+                      canAutoReconnectRef.current = data.connected
                       setIsConnecting(false)
                       if (!data.connected && data.error) setConnectionError(data.error)
                       queryClient.invalidateQueries({ queryKey: ['traffic-flows'] })
