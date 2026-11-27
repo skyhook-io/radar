@@ -508,6 +508,8 @@ export interface VulnerabilityReachability {
   maxProbes: number
   routes?: VulnerabilityReachabilityRoute[]
   checkedAt?: string
+  /** Set by the page, not the server: how many routes the workload has, of which the check named `routes`. */
+  routesTotal?: number
 }
 
 function reachabilityPath(w: VulnerabilityWorkloadRef): string {

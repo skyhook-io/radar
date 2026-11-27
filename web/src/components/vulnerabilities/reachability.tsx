@@ -95,6 +95,9 @@ export const REACHABILITY = {
   notRun: 'not checked',
   scope: (namespace: string) =>
     `A probe Pod in ${namespace} called the Service behind each route it checked. This proves the Service answers inside the cluster. The load balancer, node port, Ingress controller and access from the internet were not tested.`,
+  /** Under a run where probes ran but none got an answer. */
+  scopeNoAnswer: (namespace: string) =>
+    `A probe Pod in ${namespace} called the Service behind each route it checked. Real clients can differ (a NetworkPolicy by source, mesh mTLS). The load balancer, node port, Ingress controller and access from the internet were not tested.`,
   /** Under a run where no probe Pod ran. */
   nothingRan: 'No probe Pod ran, so nothing was tested.',
 }
@@ -112,7 +115,10 @@ function allChecks(r: VulnerabilityReachability): VulnerabilityReachabilityCheck
 
 /** What a finished run tested, or that it tested nothing. */
 export function scopeOf(r: VulnerabilityReachability): string {
-  return allChecks(r).some((c) => c.outcome && c.outcome !== 'not_run') ? REACHABILITY.scope(r.namespace) : REACHABILITY.nothingRan
+  const checks = allChecks(r)
+  if (checks.some((c) => c.outcome === 'answered' || c.outcome === 'degraded')) return REACHABILITY.scope(r.namespace)
+  if (checks.some((c) => c.outcome === 'no_answer')) return REACHABILITY.scopeNoAnswer(r.namespace)
+  return REACHABILITY.nothingRan
 }
 
 /** One line for a whole run, for a cell or a workload link. */
@@ -120,7 +126,8 @@ export function reachabilitySummary(r: VulnerabilityReachability): { text: strin
   const base = checksSummary(r)
   // A route Radar couldn't probe (a TCPRoute, no Service port behind it)
   // keeps an all-clear from reading as the whole workload.
-  const untested = (r.routes ?? []).filter((route) => route.checks.length === 0).length
+  const returned = r.routes ?? []
+  const untested = returned.filter((route) => route.checks.length === 0).length + Math.max(0, (r.routesTotal ?? returned.length) - returned.length)
   if (untested === 0 || base.outcome === 'not_run') return base
   return { text: `${base.text}, ${untested} route${untested === 1 ? '' : 's'} not checked`, outcome: base.outcome === 'answered' ? 'degraded' : base.outcome }
 }
@@ -199,11 +206,14 @@ export function ReachabilityCheck({ workload, routes, routesTotal }: {
   const run = useCallback(async (clusterKey: string | undefined) => {
     setEntry(key, { state: 'running' })
     try {
-      setEntry(key, { state: 'done', result: await runVulnerabilityReachability(workload, routes, clusterKey) })
+      const result = await runVulnerabilityReachability(workload, routes, clusterKey)
+      // The routes this check left out (past the ones the page lists) stay
+      // with the result, so its summary never reads as the whole workload.
+      setEntry(key, { state: 'done', result: { ...result, routesTotal: Math.max(routesTotal ?? routes.length, routes.length) } })
     } catch (e) {
       setEntry(key, { state: 'failed', error: e instanceof Error ? e.message : String(e) })
     }
-  }, [key, workload, routes])
+  }, [key, workload, routes, routesTotal])
 
   const start = useCallback(async () => {
     if (inClusterConsentGiven(cap?.clusterKey)) return run(cap?.clusterKey)

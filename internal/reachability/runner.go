@@ -481,15 +481,15 @@ func podCreationRefused(ctx context.Context, client kubernetes.Interface, namesp
 }
 
 // policyDenial is whether a pod creation refusal is a policy's verdict on
-// the pod (an admission webhook or ValidatingAdmissionPolicy denying it,
-// Pod Security, another forbidden), not a limit or an outage a retry may
-// get past.
+// the pod: an admission webhook or ValidatingAdmissionPolicy denying it, or
+// Pod Security. Anything else (a quota, a webhook that couldn't be called, a
+// namespace being deleted) is left for the Job controller's retry.
 func policyDenial(msg string) bool {
 	lower := strings.ToLower(msg)
 	if strings.Contains(lower, "exceeded quota") || strings.Contains(lower, "failed calling webhook") {
 		return false
 	}
-	return strings.Contains(lower, "denied") || strings.Contains(lower, "violates podsecurity") || strings.Contains(lower, "is forbidden")
+	return strings.Contains(lower, "denied") || strings.Contains(lower, "violates podsecurity")
 }
 
 func eventTime(e *corev1.Event) time.Time {

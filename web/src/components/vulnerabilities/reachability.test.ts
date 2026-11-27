@@ -35,9 +35,15 @@ describe('reachabilitySummary', () => {
     expect(reachabilitySummary(r).text).toBe('Reachability not checked')
   })
 
-  it('says nothing was tested when no probe ran', () => {
+  it('counts the routes the check left out', () => {
+    expect(reachabilitySummary({ ...run('answered'), routesTotal: 4 })).toEqual({ text: 'Answers inside the cluster, 3 routes not checked', outcome: 'degraded' })
+  })
+
+  it('claims an answer in its scope line only when one came', () => {
     expect(scopeOf(run('not_run'))).toBe(REACHABILITY.nothingRan)
-    expect(scopeOf(run('no_answer'))).toBe(REACHABILITY.scope('prio'))
+    expect(scopeOf(run('no_answer'))).toBe(REACHABILITY.scopeNoAnswer('prio'))
+    expect(scopeOf(run('no_answer'))).not.toContain('proves')
+    expect(scopeOf(run('degraded', 'no_answer'))).toBe(REACHABILITY.scope('prio'))
   })
 
   it('says what was not tested, without dashes', () => {

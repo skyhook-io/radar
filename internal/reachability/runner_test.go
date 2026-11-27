@@ -620,11 +620,12 @@ func TestLongQuotaRefusalIsNotFinal(t *testing.T) {
 
 func TestPolicyDenial(t *testing.T) {
 	for msg, want := range map[string]bool{
-		`pods "p" is forbidden: ValidatingAdmissionPolicy 'x' with binding 'y' denied request: no`: true,
-		`admission webhook "validate.kyverno.svc-fail" denied the request: policy require-labels`:  true,
-		`pods "p" is forbidden: violates PodSecurity "restricted:latest": seccompProfile`:          true,
-		`pods "p" is forbidden: exceeded quota: compute, requested: cpu=50m`:                       false,
-		`Internal error occurred: failed calling webhook "x": context deadline exceeded`:           false,
+		`pods "p" is forbidden: ValidatingAdmissionPolicy 'x' with binding 'y' denied request: no`:             true,
+		`admission webhook "validate.kyverno.svc-fail" denied the request: policy require-labels`:              true,
+		`pods "p" is forbidden: violates PodSecurity "restricted:latest": seccompProfile`:                      true,
+		`pods "p" is forbidden: exceeded quota: compute, requested: cpu=50m`:                                   false,
+		`Internal error occurred: failed calling webhook "x": context deadline exceeded`:                       false,
+		`pods "p" is forbidden: unable to create new content in namespace shop because it is being terminated`: false,
 	} {
 		if got := policyDenial(msg); got != want {
 			t.Errorf("%q: %v, want %v", msg, got, want)
