@@ -494,6 +494,10 @@ func (s *Server) handleTrafficFlowsStream(w http.ResponseWriter, r *http.Request
 
 	flowCh, err := manager.StreamFlows(ctx, opts)
 	if err != nil {
+		if portforward.IsMemberClosed(r.Context(), err) {
+			s.writeError(w, http.StatusServiceUnavailable, "Traffic connection closed. Retry the request")
+			return
+		}
 		log.Printf("[traffic] Error starting flow stream: %v", err)
 		s.writeError(w, http.StatusServiceUnavailable, err.Error())
 		return

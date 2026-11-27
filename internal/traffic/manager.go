@@ -34,7 +34,9 @@ type Manager struct {
 	contextName    string // current K8s context name
 	mu             sync.RWMutex
 
-	preferredSource string
+	// Saves copy the source preference without waiting for detection's probes.
+	sourcePreferenceMu sync.Mutex
+	preferredSource    string
 
 	// The last detection, for callers that only ask whether traffic is
 	// available. A context switch builds a new Manager, so it never outlives
@@ -547,11 +549,16 @@ func (m *Manager) StreamFlows(ctx context.Context, opts FlowOptions) (<-chan Flo
 	source := m.activeSource
 	m.mu.RUnlock()
 
+	ctx, release := portforward.WithLifetime(ctx, m.lifetime)
+	if err := ctx.Err(); err != nil {
+		release()
+		return nil, err
+	}
 	if source == nil {
+		release()
 		return nil, fmt.Errorf("no traffic source available")
 	}
 
-	ctx, release := portforward.WithLifetime(ctx, m.lifetime)
 	flows, err := source.StreamFlows(ctx, opts)
 	if err != nil {
 		release()
@@ -595,12 +602,14 @@ func (m *Manager) reconcileActiveSource(available []TrafficSource) {
 			}
 		}
 		log.Printf("[traffic] Active source %s is no longer available", m.activeSource.Name())
-		m.activeSource = nil
-		m.sourceSnapshot.Store("")
 	}
+	m.sourcePreferenceMu.Lock()
+	defer m.sourcePreferenceMu.Unlock()
 	preferred := m.preferredSource
 	m.preferredSource = ""
 	if len(available) == 0 {
+		m.activeSource = nil
+		m.sourceSnapshot.Store("")
 		return
 	}
 	m.activeSource = available[0]
@@ -614,9 +623,21 @@ func (m *Manager) reconcileActiveSource(available []TrafficSource) {
 }
 
 func (m *Manager) PreferSource(name string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.sourcePreferenceMu.Lock()
+	defer m.sourcePreferenceMu.Unlock()
 	m.preferredSource = name
+}
+
+func (m *Manager) SourcePreference() string {
+	if m == nil {
+		return ""
+	}
+	m.sourcePreferenceMu.Lock()
+	defer m.sourcePreferenceMu.Unlock()
+	if active := m.SourceSnapshot(); active != "" {
+		return active
+	}
+	return m.preferredSource
 }
 
 // SetActiveSource sets the active traffic source by name
@@ -629,6 +650,8 @@ func (m *Manager) SetActiveSource(name string) error {
 		return fmt.Errorf("unknown traffic source: %s", name)
 	}
 
+	m.sourcePreferenceMu.Lock()
+	defer m.sourcePreferenceMu.Unlock()
 	m.activeSource = source
 	m.preferredSource = ""
 	m.sourceSnapshot.Store(source.Name())

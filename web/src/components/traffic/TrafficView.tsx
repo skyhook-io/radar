@@ -1271,7 +1271,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
           if (attemptId !== connectAttemptRef.current) return
           setIsConnecting(false)
           if (isCancelledError(error)) {
-            if (automatic && redetect) reconnectStateRef.current = 'armed'
+            reconnectStateRef.current = 'armed'
           } else {
             setConnectionError(error.message)
           }

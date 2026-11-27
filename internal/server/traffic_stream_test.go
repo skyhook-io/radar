@@ -4,12 +4,31 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/skyhook-io/radar/internal/connectionruntime"
 	"github.com/skyhook-io/radar/internal/k8s"
 )
+
+func TestTrafficStreamRejectsClosedMemberBeforeStartingSSE(t *testing.T) {
+	s := serverWithTestIntegrations(t, connectionruntime.Settings{})
+	manager := currentTestIntegrations().Traffic
+	if err := manager.SetActiveSource("caretta"); err != nil {
+		t.Fatal(err)
+	}
+	_ = manager.Close()
+
+	w := httptest.NewRecorder()
+	s.handleTrafficFlowsStream(w, httptest.NewRequest(http.MethodGet, "/api/traffic/flows/stream", nil))
+	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "Traffic connection closed. Retry the request") {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if w.Flushed || w.Header().Get("Content-Type") == "text/event-stream" {
+		t.Fatal("closed member started an SSE response")
+	}
+}
 
 func TestTrafficStreamBoundsWritesAndReleasesOnRetirement(t *testing.T) {
 	s := serverWithTestIntegrations(t, connectionruntime.Settings{})

@@ -129,7 +129,7 @@ func build(conn *k8s.Connection, settings Settings, previous *Set, rebuild []con
 			}
 		}
 		s.Traffic = traffic.NewConnectionManager(conn, s.Metrics, settings.BeylaSelector)
-		s.Traffic.PreferSource(previous.Traffic.SourceSnapshot())
+		s.Traffic.PreferSource(previous.Traffic.SourcePreference())
 	}
 	if previous.ArgoCD == nil || slices.Contains(rebuild, config.IntegrationArgoCD) || settings.ArgoCD != old.ArgoCD ||
 		settings.ArgoTokenBinding != old.ArgoTokenBinding || settings.ArgoTokenContext != old.ArgoTokenContext ||

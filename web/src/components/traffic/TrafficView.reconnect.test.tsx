@@ -35,6 +35,7 @@ it.each([
   'success',
   'failure',
   'cancelled detection',
+  'cancelled manual Retry',
   'status stays disconnected',
   'initial status stays disconnected',
   'flows lose source without Settings invalidation',
@@ -47,6 +48,8 @@ it.each([
   const connectionFailure = 'Could not connect to Hubble'
   const notConnected = 'Not connected to Hubble Relay. Call Connect() first or use the Traffic view to establish connection.'
   const source = scenario === 'Beyla unavailable until Metrics repair' ? 'beyla' : 'hubble'
+  const manualRetry = scenario === 'cancelled manual Retry'
+  const cancelledDetection = manualRetry ? 2 : scenario === 'cancelled detection' ? 1 : 0
   let connected = false
   let sourceAvailable = true
   let freshDetections = 0
@@ -60,7 +63,7 @@ it.each([
     const { pathname, search } = new URL(url, window.location.origin)
     switch (pathname) {
       case '/api/traffic/sources':
-        if (!search && ++freshDetections === 1 && scenario === 'cancelled detection') {
+        if (!search && ++freshDetections === cancelledDetection) {
           return new Promise<Response>((_, reject) => {
             init!.signal!.addEventListener('abort', () => reject(init!.signal!.reason), { once: true })
           })
@@ -74,11 +77,11 @@ it.each([
         if (!connected) disconnectedStatusReads++
         return Response.json({ connected: connected &&
           scenario !== 'initial status stays disconnected' &&
-          !(scenario === 'status stays disconnected' && connectOrigins.length > 1) })
+          !((scenario === 'status stays disconnected' || manualRetry) && connectOrigins.length > 1) })
       case '/api/traffic/connect':
         expect(init?.method).toBe('POST')
         connectOrigins.push(new Headers(init?.headers).get('X-Radar-Request-Origin'))
-        if (connectOrigins.length > 1 && scenario === 'failure') {
+        if ((connectOrigins.length > 1 && scenario === 'failure') || (connectOrigins.length === 2 && manualRetry)) {
           return Response.json({ connected: false, error: connectionFailure })
         }
         if (!sourceAvailable) {
@@ -154,7 +157,7 @@ it.each([
     }
     await vi.waitFor(async () => {
       await settle()
-      if (scenario === 'failure') {
+      if (scenario === 'failure' || manualRetry) {
         expect(container.textContent).toContain(connectionFailure)
         expect(container.textContent).toContain('Retry Connection')
       } else if (scenario === 'status stays disconnected') {
@@ -163,6 +166,26 @@ it.each([
         expect(queryClient.getQueryData(['traffic-connection'])).toEqual({ connected: true })
       }
     })
+    if (manualRetry) {
+      const retry = Array.from(container.querySelectorAll('button')).find(button => button.textContent?.trim() === 'Retry Connection')
+      expect(retry).toBeDefined()
+      await act(async () => retry!.click())
+      await vi.waitFor(() => expect(freshDetections).toBe(2))
+      expect(connectOrigins).toEqual(['auto', 'auto'])
+
+      await act(async () => invalidateIntegrationQueries(queryClient, ['metrics']))
+      await vi.waitFor(async () => {
+        await settle()
+        expect(connectOrigins).toEqual(['auto', 'auto', 'auto'])
+        expect(queryClient.getQueryData(['traffic-connection'])).toEqual({ connected: false })
+        expect(queryClient.getQueryState(['traffic-connection'])?.fetchStatus).toBe('idle')
+      })
+      await act(async () => invalidateIntegrationQueries(queryClient, ['metrics']))
+      await settle()
+      expect(connectOrigins).toEqual(['auto', 'auto', 'auto'])
+      expect(freshDetections).toBe(3)
+      return
+    }
     if (scenario === 'flows lose source without Settings invalidation') {
       expect(disconnectedStatusReads - statusReadsBeforeLoss).toBe(1)
     } else {

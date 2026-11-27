@@ -191,18 +191,22 @@ func TestMetricsEditPreservesAvailableTrafficSource(t *testing.T) {
 				t.Fatal(err)
 			}
 			conn := k8s.Current()
-			edit := runtime.PrepareShared(conn, runtime.Snapshot(), func(settings *Settings) {
-				settings.Metrics.URL = metrics.URL + tc.path
-			})
-			if err := edit.Commit(func() error { return nil }); err != nil {
-				t.Fatal(err)
-			}
-			next := SetFor(conn).Traffic
-			if next == old.Traffic || next.SourceSnapshot() != "" {
-				t.Fatal("replacement must detect before reporting an active source")
+			next := old.Traffic
+			for _, path := range []string{"/first-edit", tc.path} {
+				edit := runtime.PrepareShared(conn, runtime.Snapshot(), func(settings *Settings) {
+					settings.Metrics.URL = metrics.URL + path
+				})
+				if err := edit.Commit(func() error { return nil }); err != nil {
+					t.Fatal(err)
+				}
+				replacement := SetFor(conn).Traffic
+				if replacement == next || replacement.SourceSnapshot() != "" {
+					t.Fatal("replacement must detect before reporting an active source")
+				}
+				next = replacement
 			}
 			if sources, err := next.DetectSources(t.Context()); err != nil || sources.Active != tc.want {
-				t.Fatalf("detection after edit = %+v, %v, want active %q", sources, err, tc.want)
+				t.Fatalf("detection after two edits = %+v, %v, want active %q", sources, err, tc.want)
 			}
 			installTestBuild(t, restConfig)
 			fresh := admitRuntime(t, runtime).Traffic

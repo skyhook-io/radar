@@ -720,11 +720,11 @@ func (h Routes) handleRawQuery(w http.ResponseWriter, r *http.Request) {
 	queryType := r.URL.Query().Get("type")
 	if queryType == "instant" {
 		result, err := client.Query(r.Context(), query)
+		if client.Closed() || portforward.IsMemberClosed(r.Context(), err) {
+			client.writeChartFailure(w, r.Context(), err)
+			return
+		}
 		if err != nil {
-			if portforward.IsMemberClosed(r.Context(), err) {
-				writeError(w, http.StatusServiceUnavailable, ConnectionClosedMessage)
-				return
-			}
 			if msg, ok := QueryRefusal(err); ok {
 				writeError(w, http.StatusBadRequest, msg)
 				return
@@ -743,11 +743,11 @@ func (h Routes) handleRawQuery(w http.ResponseWriter, r *http.Request) {
 	start, end, step := parseTimeRange(rangeStr)
 
 	result, err := client.QueryRange(r.Context(), query, start, end, step)
+	if client.Closed() || portforward.IsMemberClosed(r.Context(), err) {
+		client.writeChartFailure(w, r.Context(), err)
+		return
+	}
 	if err != nil {
-		if portforward.IsMemberClosed(r.Context(), err) {
-			writeError(w, http.StatusServiceUnavailable, ConnectionClosedMessage)
-			return
-		}
 		if msg, ok := QueryRefusal(err); ok {
 			writeError(w, http.StatusBadRequest, msg)
 			return
