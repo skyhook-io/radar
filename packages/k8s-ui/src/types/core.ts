@@ -1749,6 +1749,9 @@ export interface TrafficFlow {
   /** The conversation's initiator could not be established, so source and
    *  destination are ordered arbitrarily rather than describing a caller. */
   directionUnknown?: boolean
+  /** Node-to-node UDP, likely CNI overlay carrying pod traffic already on the
+   *  map. A guess unless the source reports the overlay port. */
+  likelyOverlay?: boolean
   /** 5xx responses per second. How a rate-based source reports failures: it
    *  measures a rate rather than observing individual responses, so it has a
    *  status code for no single flow. */
@@ -1800,6 +1803,9 @@ export interface AggregatedFlow {
   /** The conversation's initiator could not be established, so the endpoints are
    *  ordered arbitrarily and the edge is drawn without an arrowhead. */
   directionUnknown?: boolean
+  /** Node-to-node UDP, likely CNI overlay carrying pod traffic already on the
+   *  map. A guess unless the source reports the overlay port. */
+  likelyOverlay?: boolean
   l7Protocol?: string // HTTP, gRPC, DNS
   requestCount?: number
   errorCount?: number

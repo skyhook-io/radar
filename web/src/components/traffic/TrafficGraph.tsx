@@ -64,8 +64,9 @@ export interface TrafficGraphSelection {
   sourceId?: string
   destId?: string
   port?: number
-  // The graph draws traffic of unknown direction as its own edge.
+  // The graph draws traffic of unknown direction, and likely overlay, as its own edge.
   directionUnknown?: boolean
+  likelyOverlay?: boolean
 }
 
 interface TrafficGraphProps {
@@ -1153,7 +1154,8 @@ function isFocusable(id: string, data: TrafficNodeData | undefined): boolean {
 // one would silently replace the other. Only unoriented edges are suffixed, so
 // every id a source that always orients its flows produces is unchanged.
 function trafficEdgeId(sourceId: string, destId: string, flow: AggregatedFlow): string {
-  return `${sourceId}->${destId}:${flow.port}${flow.directionUnknown ? ':unoriented' : ''}`
+  // The server keeps likely-overlay traffic apart from the rest between the same nodes.
+  return `${sourceId}->${destId}:${flow.port}${flow.directionUnknown ? ':unoriented' : ''}${flow.likelyOverlay ? ':overlay' : ''}`
 }
 
 export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups = false, serviceCategories, addonMode = 'show', trafficSource = '', selection: viewSelection, onSelectionChange, onFocus, focusedId, onLayoutUnavailable, windowSeconds, onDownloadBlob }: TrafficGraphProps) {
@@ -1748,7 +1750,8 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
     }
     const between = layoutedEdges.filter(e =>
       e.source === viewSelection.sourceId && e.target === viewSelection.destId &&
-      !!flowByEdgeId.get(e.id)?.directionUnknown === !!viewSelection.directionUnknown)
+      !!flowByEdgeId.get(e.id)?.directionUnknown === !!viewSelection.directionUnknown &&
+      !!flowByEdgeId.get(e.id)?.likelyOverlay === !!viewSelection.likelyOverlay)
     const [edge] = edgesOnPort(between, e => flowByEdgeId.get(e.id), viewSelection.port)
     setSelection(edge ? edgeSelection(edge, flowByEdgeId.get(edge.id)) : null)
   }, [viewSelection, layoutedNodes, layoutedEdges, flowByEdgeId])
@@ -1777,7 +1780,7 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
   const onEdgeClick: EdgeMouseHandler<Edge> = useCallback((_event, edge) => {
     const flow = flowByEdgeId.get(edge.id)
     setSelection(edgeSelection(edge, flow))
-    onSelectionChange?.({ type: 'edge', sourceId: edge.source, destId: edge.target, port: flow?.port, directionUnknown: !!flow?.directionUnknown })
+    onSelectionChange?.({ type: 'edge', sourceId: edge.source, destId: edge.target, port: flow?.port, directionUnknown: !!flow?.directionUnknown, ...(flow?.likelyOverlay && { likelyOverlay: true }) })
   }, [flowByEdgeId, onSelectionChange])
 
   const onPaneClick = useCallback(() => {

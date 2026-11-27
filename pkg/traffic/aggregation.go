@@ -56,10 +56,12 @@ func AggregateFlows(flows []Flow) []AggregatedFlow {
 		// would otherwise land in a single aggregate, and any single answer about
 		// its direction is wrong for half of what it contains. Sources that always
 		// orient their flows contribute a constant here and are unaffected.
-		key := fmt.Sprintf("%s/%s|%s/%s|%d|%t",
+		// Likely-overlay traffic is its own edge for the same reason: merged into
+		// the other traffic between two nodes, it could not be hidden on its own.
+		key := fmt.Sprintf("%s/%s|%s/%s|%d|%t|%t",
 			f.Source.Namespace, f.Source.Name,
 			f.Destination.Namespace, f.Destination.Name,
-			f.Port, f.DirectionUnknown)
+			f.Port, f.DirectionUnknown, f.LikelyOverlay)
 
 		acc, ok := accumulators[key]
 		if !ok {
@@ -73,6 +75,7 @@ func AggregateFlows(flows []Flow) []AggregatedFlow {
 					PortSource:       f.PortSource,
 					LastSeen:         f.LastSeen,
 					DirectionUnknown: f.DirectionUnknown,
+					LikelyOverlay:    f.LikelyOverlay,
 				},
 				statusCount: make(map[string]int64),
 				pathStats:   make(map[string]*pathAcc),

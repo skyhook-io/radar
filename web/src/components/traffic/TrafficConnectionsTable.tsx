@@ -40,6 +40,7 @@ function rowSelection(flow: AggregatedFlow): TrafficGraphSelection {
     destId: graphEndpointId(flow.destination),
     port: flow.port,
     directionUnknown: !!flow.directionUnknown,
+    ...(flow.likelyOverlay && { likelyOverlay: true }),
   }
 }
 
@@ -47,7 +48,7 @@ function selectedRows(rows: GraphFlow[], selection: TrafficGraphSelection | null
   if (selection?.type !== 'edge' || selection.port === undefined) return new Set()
   const between = rows.filter(flow =>
     graphEndpointId(flow.source) === selection.sourceId && graphEndpointId(flow.destination) === selection.destId &&
-    !!flow.directionUnknown === !!selection.directionUnknown)
+    !!flow.directionUnknown === !!selection.directionUnknown && !!flow.likelyOverlay === !!selection.likelyOverlay)
   return new Set(edgesOnPort(between, f => f, selection.port))
 }
 
@@ -106,7 +107,7 @@ export function TrafficConnectionsTable({ flows, isRateBased, selection, onSelec
       <Virtuoso
         className="flex-1"
         data={rows}
-        computeItemKey={(_, flow) => `${graphEndpointId(flow.source)}->${graphEndpointId(flow.destination)}:${flow.port}${flow.directionUnknown ? ':u' : ''}`}
+        computeItemKey={(_, flow) => `${graphEndpointId(flow.source)}->${graphEndpointId(flow.destination)}:${flow.port}${flow.directionUnknown ? ':u' : ''}${flow.likelyOverlay ? ':v' : ''}`}
         itemContent={(_, flow) => {
           const sel = rowSelection(flow)
           const isSelected = selected.has(flow)
