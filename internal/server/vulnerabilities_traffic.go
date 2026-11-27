@@ -138,20 +138,29 @@ func (m *vulnTrafficMemo) get(ctx context.Context, mgr *traffic.Manager, active 
 	stale := m.standing()
 	m.mu.Unlock()
 
+	// The source can switch while a fetch runs, before any read resets the
+	// memo: an answer from another source than the active one isn't given.
+	current := func(ev *vulnerabilities.TrafficEvidence) *vulnerabilities.TrafficEvidence {
+		if name, idle := active(); ev != nil && idle && name != ev.Source {
+			return nil
+		}
+		return ev
+	}
 	timer := time.NewTimer(wait)
 	defer timer.Stop()
 	select {
 	case <-done:
 		m.mu.Lock()
-		defer m.mu.Unlock()
+		ev := m.standing()
 		if m.gen != gen {
-			return nil
+			ev = nil
 		}
-		return m.standing()
+		m.mu.Unlock()
+		return current(ev)
 	case <-timer.C:
-		return stale
+		return current(stale)
 	case <-ctx.Done():
-		return stale
+		return current(stale)
 	}
 }
 

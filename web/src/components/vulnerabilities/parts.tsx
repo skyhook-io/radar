@@ -216,10 +216,18 @@ function trafficWindowPhrase(t: VulnerabilityTraffic, source: string): string {
 export function trafficSentence(t: VulnerabilityTraffic): string {
   const source = TRAFFIC_SOURCES[t.source] ?? t.source
   const window = trafficWindowPhrase(t, source)
+  const read = readAt(t)
   if (t.fromOutside) {
-    return `Live Traffic (${source}) saw connections to it from outside the cluster ${window}. A client whose address a node rewrote (SNAT) reads as that node and isn't counted.`
+    return `Live Traffic (${source}) saw connections to it from outside the cluster ${window}. A client whose address a node rewrote (SNAT) reads as that node and isn't counted.${read}`
   }
-  return `Live Traffic (${source}) saw connections to it ${window}. ${source} can't tell callers outside the cluster from nodes, so this counts callers inside the cluster too. Connections from nodes, such as health checks, aren't counted.`
+  return `Live Traffic (${source}) saw connections to it ${window}. ${source} can't tell callers outside the cluster from nodes, so this counts callers inside the cluster too. Connections from nodes, such as health checks, aren't counted.${read}`
+}
+
+/** " Read at 10:42 PM." when the answer says when the source was read: the window ends there, not when the page is looked at. */
+function readAt(t: VulnerabilityTraffic): string {
+  if (!t.observedAt) return ''
+  const d = new Date(t.observedAt)
+  return Number.isNaN(d.getTime()) ? '' : ` Read at ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.`
 }
 
 /**
@@ -232,7 +240,7 @@ export const TRAFFIC_FILTER = {
   chipTip(t: VulnerabilityTraffic): string {
     const what = t.fromOutside ? 'receive connections from outside the cluster' : 'receive connections'
     const source = TRAFFIC_SOURCES[t.source] ?? t.source
-    return `Only rows affecting a workload Live Traffic (${source}) saw ${what} ${trafficWindowPhrase(t, source)}. A workload it didn't see may still be reachable.`
+    return `Only rows affecting a workload Live Traffic (${source}) saw ${what} ${trafficWindowPhrase(t, source)}. A workload it didn't see may still be reachable.${readAt(t)}`
   },
   /** A link set the filter, but no traffic source answered this read. */
   unanswered: {

@@ -30,6 +30,9 @@ type Traffic struct {
 	// node's Hubble flow buffer, or the newest flows past a fetch's budget),
 	// so it may reach back less far than WindowSeconds.
 	HistoryLimited bool `json:"historyLimited,omitempty"`
+	// ObservedAt is when the source was read; the window ends there, which
+	// can be minutes before the page shows it.
+	ObservedAt string `json:"observedAt,omitempty"`
 	// Workloads are the answer's workloads it saw, each once without a
 	// container, at most MaxRows of WorkloadsTotal in a list read.
 	Workloads      []WorkloadRef `json:"workloads"`
@@ -43,6 +46,8 @@ type TrafficEvidence struct {
 	FromOutside    bool
 	Window         time.Duration
 	HistoryLimited bool
+	// At is when the source was read.
+	At time.Time
 	// seen holds, by namespace/name, the lower-cased kinds seen receiving;
 	// "" when the source named no kind (metrics sources name a workload
 	// only).
@@ -84,7 +89,7 @@ var trafficFromOutsideSources = map[string]bool{"hubble": true}
 // source that can't tell them from outside callers; nil reads as none.
 func NewTrafficEvidence(source string, window time.Duration, historyLimited bool, flows []pkgtraffic.Flow, isNode func(pkgtraffic.Endpoint) bool) *TrafficEvidence {
 	e := &TrafficEvidence{
-		Source: source, FromOutside: trafficFromOutsideSources[source], Window: window, HistoryLimited: historyLimited,
+		Source: source, FromOutside: trafficFromOutsideSources[source], Window: window, HistoryLimited: historyLimited, At: time.Now(),
 		seen: map[string]map[string]bool{},
 	}
 	for _, f := range flows {
@@ -252,7 +257,7 @@ func (ix *trafficIndex) answer(targets []target, n int, exposed func(WorkloadRef
 	}
 	t := &Traffic{
 		Source: ix.ev.Source, FromOutside: ix.ev.FromOutside, WindowSeconds: int(ix.ev.Window / time.Second),
-		HistoryLimited: ix.ev.HistoryLimited, Workloads: []WorkloadRef{},
+		HistoryLimited: ix.ev.HistoryLimited, ObservedAt: ix.ev.At.UTC().Format(time.RFC3339), Workloads: []WorkloadRef{},
 	}
 	done := map[WorkloadRef]bool{}
 	for _, tg := range targets {

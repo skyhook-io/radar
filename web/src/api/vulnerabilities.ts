@@ -184,6 +184,8 @@ export interface VulnerabilityTraffic {
   windowSeconds: number
   /** The source keeps a bounded history, so it may reach back less far than the window. */
   historyLimited?: boolean
+  /** When the source was read; the window ends there. */
+  observedAt?: string
   workloads: VulnerabilityWorkloadRef[]
   workloadsTotal: number
 }

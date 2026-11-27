@@ -40,6 +40,11 @@ describe('Traffic on the Exposed mark', () => {
     expect(trafficSentence(caretta)).toContain("can't tell callers outside the cluster from nodes")
   })
 
+  it('says when the source was read', () => {
+    expect(trafficSentence({ ...caretta, observedAt: '2026-11-26T22:42:00Z' })).toMatch(/ Read at .+\.$/)
+    expect(trafficSentence(caretta)).not.toContain('Read at')
+  })
+
   it('adds to the Exposed tooltip, and leaves it alone when nothing was seen', () => {
     expect(exposedTip('Exposed via LoadBalancer shop/web', caretta)).toMatch(/^Exposed via LoadBalancer shop\/web\. Live Traffic \(Caretta\) saw/)
     expect(exposedTip('Exposed via LoadBalancer shop/web', undefined)).toBe('Exposed via LoadBalancer shop/web')

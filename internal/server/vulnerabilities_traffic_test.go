@@ -50,14 +50,15 @@ func TestVulnerabilityTrafficMemo(t *testing.T) {
 func TestVulnerabilityTrafficMemoSourceSwitch(t *testing.T) {
 	var memo vulnTrafficMemo
 	mgr := &traffic.Manager{}
-	source := "hubble"
-	active := func() (string, bool) { return source, true }
-	settled := func() string { return source }
+	var source atomic.Value
+	source.Store("hubble")
+	active := func() (string, bool) { return source.Load().(string), true }
+	settled := func() string { return source.Load().(string) }
 	hubble := vulnerabilities.NewTrafficEvidence("hubble", time.Minute, true, nil, nil)
 	if got := memo.get(context.Background(), mgr, active, settled, vulnTrafficWait, func(context.Context) (*vulnerabilities.TrafficEvidence, bool) { return hubble, true }); got != hubble {
 		t.Fatalf("got %v", got)
 	}
-	source = "caretta"
+	source.Store("caretta")
 	release := make(chan struct{})
 	late := func(context.Context) (*vulnerabilities.TrafficEvidence, bool) { <-release; return hubble, true }
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
@@ -68,9 +69,30 @@ func TestVulnerabilityTrafficMemoSourceSwitch(t *testing.T) {
 	close(release)
 	time.Sleep(20 * time.Millisecond)
 	memo.mu.Lock()
-	defer memo.mu.Unlock()
 	if memo.ev != nil {
 		t.Fatalf("the old source's late answer was published: %v", memo.ev)
+	}
+	memo.mu.Unlock()
+
+	// A switch while a refresh runs, before any read resets the memo: the
+	// standing answer of the old source isn't given.
+	var fresh vulnTrafficMemo
+	source.Store("hubble")
+	fresh.get(context.Background(), mgr, active, settled, vulnTrafficWait, func(context.Context) (*vulnerabilities.TrafficEvidence, bool) { return hubble, true })
+	fresh.mu.Lock()
+	fresh.tried = fresh.tried.Add(-vulnTrafficFresh)
+	fresh.mu.Unlock()
+	hold := make(chan struct{})
+	defer close(hold)
+	switching := func(context.Context) (*vulnerabilities.TrafficEvidence, bool) {
+		source.Store("caretta")
+		<-hold
+		return nil, false
+	}
+	short, cancelShort := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancelShort()
+	if got := fresh.get(short, mgr, active, settled, vulnTrafficWait, switching); got != nil {
+		t.Fatalf("the old source's standing answer after a switch: %v", got)
 	}
 }
 
