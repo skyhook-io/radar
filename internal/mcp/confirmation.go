@@ -19,6 +19,14 @@ import (
 
 type confirmationContextKey struct{}
 
+type confirmationMismatch struct {
+	contextChanged bool
+}
+
+func (*confirmationMismatch) Error() string {
+	return "confirm caller or context mismatch; run dry_run=true as the current caller in the intended cluster and review the new preview"
+}
+
 const maxConfirmationBytes = 8192
 
 var confirmationKey = sync.OnceValues(func() ([]byte, error) {
@@ -35,12 +43,14 @@ type mutationConfirmation struct {
 	Expires      int64  `json:"expires"`
 	// Nonce keeps two previews of the same state apart for single-use tokens.
 	Nonce string `json:"nonce,omitempty"`
+
+	payloadHash [sha256.Size]byte
 }
 
 func confirmationBinding(ctx context.Context, action, target string) mutationConfirmation {
-	contextName, captured := ctx.Value(confirmationContextKey{}).(string)
+	cluster, captured := ctx.Value(confirmationContextKey{}).(string)
 	if !captured {
-		contextName = k8s.ActiveClusterContext()
+		cluster = k8s.ActiveClusterContext()
 	}
 	caller := struct {
 		Username string
@@ -55,7 +65,7 @@ func confirmationBinding(ctx context.Context, action, target string) mutationCon
 	}
 	raw, _ := json.Marshal(caller)
 	digest := sha256.Sum256(raw)
-	return mutationConfirmation{Action: action, Context: contextName, CallerDigest: base64.RawURLEncoding.EncodeToString(digest[:]), Target: target}
+	return mutationConfirmation{Action: action, Context: cluster, CallerDigest: base64.RawURLEncoding.EncodeToString(digest[:]), Target: target}
 }
 
 func issueMutationConfirmation(ctx context.Context, action, target string) (string, error) {
@@ -83,48 +93,49 @@ func issueMutationConfirmation(ctx context.Context, action, target string) (stri
 	return token, nil
 }
 
-func verifyMutationConfirmation(ctx context.Context, action, token string) (string, error) {
+func verifyMutationConfirmation(ctx context.Context, action, token string) (*mutationConfirmation, error) {
 	malformed := fmt.Errorf("confirm is malformed or invalid; run dry_run=true again and review the new preview")
 	if len(token) > maxConfirmationBytes {
-		return "", malformed
+		return nil, malformed
 	}
 	parts := strings.Split(token, ".")
 	if len(parts) != 2 {
-		return "", malformed
+		return nil, malformed
 	}
 	raw, err := base64.RawURLEncoding.DecodeString(parts[0])
 	if err != nil {
-		return "", malformed
+		return nil, malformed
 	}
 	signature, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
-		return "", malformed
+		return nil, malformed
 	}
 	key, err := confirmationKey()
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	mac := hmac.New(sha256.New, key)
 	mac.Write(raw)
 	if !hmac.Equal(signature, mac.Sum(nil)) {
 		// The signing key lives for one process, so a restart lands here too.
-		return "", fmt.Errorf("confirm is invalid, or Radar restarted since the preview; run dry_run=true again and review the new preview")
+		return nil, fmt.Errorf("confirm is invalid, or Radar restarted since the preview; run dry_run=true again and review the new preview")
 	}
 	var binding mutationConfirmation
 	if json.Unmarshal(raw, &binding) != nil || binding.Action == "" || binding.CallerDigest == "" || binding.Target == "" || binding.Expires == 0 {
-		return "", malformed
+		return nil, malformed
 	}
 	if binding.Expires <= time.Now().Unix() {
-		return "", fmt.Errorf("confirm expired; run dry_run=true again and review the new preview")
+		return nil, fmt.Errorf("confirm expired; run dry_run=true again and review the new preview")
 	}
 	expected := confirmationBinding(ctx, action, "")
 	if binding.Context != expected.Context || binding.CallerDigest != expected.CallerDigest {
-		return "", fmt.Errorf("confirm caller or context mismatch; run dry_run=true as the current caller in the intended cluster and review the new preview")
+		return nil, &confirmationMismatch{contextChanged: binding.Context != expected.Context && binding.CallerDigest == expected.CallerDigest && binding.Action == action}
 	}
 	if binding.Action != action {
-		return "", malformed
+		return nil, malformed
 	}
-	return binding.Target, nil
+	binding.payloadHash = sha256.Sum256(raw)
+	return &binding, nil
 }
 
 var usedConfirmations = struct {
@@ -132,29 +143,26 @@ var usedConfirmations = struct {
 	expires map[[sha256.Size]byte]time.Time
 }{expires: map[[sha256.Size]byte]time.Time{}}
 
-// consumeMutationConfirmation marks a verified token used and reports whether
-// this was its first use, so a repeated confirm (a retry after a client
-// timeout, say) can't start the action twice in this Radar process. It keys
-// on the signed payload, not the token text, so a re-encoded copy counts as
-// the same token. Entries outlive any token's 5-minute validity.
-func consumeMutationConfirmation(token string) bool {
-	payload, _, _ := strings.Cut(token, ".")
-	raw, err := base64.RawURLEncoding.DecodeString(payload)
-	if err != nil {
-		return false
-	}
-	key := sha256.Sum256(raw)
-	now := time.Now()
+// Helm can still report the release as deployed while its first uninstall
+// hook runs. Consume the signed payload once, even if a retry re-encodes it.
+func (binding *mutationConfirmation) consumeForUninstall(ctx context.Context) error {
 	usedConfirmations.Lock()
 	defer usedConfirmations.Unlock()
+	now := time.Now()
 	for k, expires := range usedConfirmations.expires {
 		if now.After(expires) {
 			delete(usedConfirmations.expires, k)
 		}
 	}
-	if _, used := usedConfirmations.expires[key]; used {
-		return false
+	if binding.Expires <= time.Now().Unix() {
+		return fmt.Errorf("uninstall confirmation rejected; omit confirm and review a fresh preview")
 	}
-	usedConfirmations.expires[key] = now.Add(6 * time.Minute)
-	return true
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if _, used := usedConfirmations.expires[binding.payloadHash]; used {
+		return fmt.Errorf("this confirmation was already used; an uninstall may still be running, so inspect get_helm_release, then omit confirm for a fresh preview if needed")
+	}
+	usedConfirmations.expires[binding.payloadHash] = now.Add(6 * time.Minute)
+	return nil
 }

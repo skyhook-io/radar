@@ -389,7 +389,7 @@ func servedAPIResources(resources []APIResource) []*metav1.APIResourceList {
 			byGV[gv] = list
 			lists = append(lists, list)
 		}
-		list.APIResources = append(list.APIResources, metav1.APIResource{Name: r.Name, Kind: r.Kind, Namespaced: r.Namespaced, Verbs: r.Verbs})
+		list.APIResources = append(list.APIResources, metav1.APIResource{Name: r.Name, Kind: r.Kind, Namespaced: r.Namespaced, Verbs: r.Verbs, ShortNames: r.ShortNames})
 	}
 	return lists
 }

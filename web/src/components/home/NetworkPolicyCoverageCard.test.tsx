@@ -78,4 +78,41 @@ describe("NetworkPolicyCoverageCard", () => {
     expect(html).not.toContain("if staged");
     expect(html).not.toContain("repeating-linear-gradient");
   });
+
+  it("says which workloads the totals leave out", () => {
+    const html = render(
+      <NetworkPolicyCoverageCard
+        data={{
+          totalPolicies: 1,
+          coveredWorkloads: 1,
+          totalWorkloads: 3,
+          ignoredNamespaceWorkloads: 6,
+          hostNetworkWorkloads: 1,
+        }}
+        onNavigate={() => {}}
+      />,
+    );
+    expect(html).toContain("7 not counted");
+
+    const none = render(
+      <NetworkPolicyCoverageCard
+        data={{ totalPolicies: 1, coveredWorkloads: 1, totalWorkloads: 3 }}
+        onNavigate={() => {}}
+      />,
+    );
+    expect(none).not.toContain("not counted");
+  });
+
+  it("does not show 0% coverage when no workloads are counted", () => {
+    const html = render(
+      <NetworkPolicyCoverageCard
+        data={{ totalPolicies: 2, coveredWorkloads: 0, totalWorkloads: 0, ignoredNamespaceWorkloads: 3 }}
+        onNavigate={() => {}}
+      />,
+    );
+    expect(html).toContain("No workloads counted");
+    expect(html).toContain("3 not counted");
+    expect(html).not.toContain("0%");
+    expect(html).not.toContain("text-red-500");
+  });
 });

@@ -683,6 +683,9 @@ export interface DashboardNetworkPolicyCoverage {
   coveredWorkloads: number;
   coveredWorkloadsIfStaged?: number;
   totalWorkloads: number;
+  // Workloads left out of totalWorkloads.
+  ignoredNamespaceWorkloads?: number;
+  hostNetworkWorkloads?: number;
 }
 
 export interface DashboardGitOpsControllers {
@@ -2617,6 +2620,9 @@ export interface CloudConnectSelf {
     namespace?: string
     name: string
   }
+  // 'nkp' when Nutanix NKP manages this install: wizardUrl then opens Radar
+  // Cloud's NKP steps. Older Radar omits it.
+  platform?: 'nkp'
   wizardUrl?: string
 }
 
@@ -2879,6 +2885,12 @@ export function useTopology(
   });
 }
 
+interface ApplicationsResponse {
+  applications: AppRow[];
+  /** Absent when Radar could not establish inventory coverage. */
+  access?: { restricted: boolean };
+}
+
 export function useApplications(
   namespaces: string[],
   options?: { enabled?: boolean },
@@ -2889,11 +2901,11 @@ export function useApplications(
 
   const enabled = options?.enabled !== false;
   const { guard, gatedKey } = useRadarFeature("applications");
-  return useQuery<{ applications: AppRow[] }>({
+  return useQuery<ApplicationsResponse>({
     queryKey: ["applications", namespaces, ...gatedKey],
     queryFn: () =>
       guard(() =>
-        fetchJSON<{ applications: AppRow[] }>(
+        fetchJSON<ApplicationsResponse>(
           `/applications${queryString ? `?${queryString}` : ""}`,
         ),
       ),

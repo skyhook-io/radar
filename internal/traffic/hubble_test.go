@@ -8,11 +8,16 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math/big"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -25,8 +30,14 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/rest"
+	ktesting "k8s.io/client-go/testing"
+	"k8s.io/streaming/pkg/httpstream"
+	"k8s.io/streaming/pkg/httpstream/spdy"
 
 	"github.com/skyhook-io/radar/internal/portforward"
 )
@@ -89,7 +100,7 @@ func TestConnectDirectPlaintext(t *testing.T) {
 	if info.LocalPort != 0 {
 		t.Errorf("LocalPort = %d, want 0 (no port-forward in direct mode)", info.LocalPort)
 	}
-	if pf := portforward.GetConnectionInfo(portforward.OwnerTraffic); pf.Connected {
+	if pf := h.forward.Info(); pf.Connected {
 		t.Error("direct connect must not involve the port-forward registry")
 	}
 
@@ -163,6 +174,59 @@ func TestConnectBothLanesFailReportsBoth(t *testing.T) {
 		if !strings.Contains(info.Error, want) {
 			t.Errorf("error %q missing %q", info.Error, want)
 		}
+	}
+}
+
+func TestHubbleClosedForwardManagerSkipsDirectDial(t *testing.T) {
+	for _, closeDuringStart := range []bool{false, true} {
+		name := "already closed"
+		if closeDuringStart {
+			name = "closed during Start"
+		}
+		t.Run(name, func(t *testing.T) {
+			listener, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer listener.Close()
+			port := listener.Addr().(*net.TCPAddr).Port
+			client := fake.NewSimpleClientset(relayService(port, intstr.FromInt(4245)))
+			manager := portforward.NewManager(client, &rest.Config{}, "ctx")
+			defer manager.Close()
+			if closeDuringStart {
+				client.PrependReactor("get", "services", func(ktesting.Action) (bool, runtime.Object, error) {
+					manager.Close()
+					return true, nil, portforward.ErrClosed
+				})
+			} else {
+				manager.Close()
+			}
+
+			h := NewHubbleSource(client)
+			defer h.Close()
+			h.forwards = manager
+			h.servicePort, h.relayPort = port, 4245
+			h.clusterIP, h.probedAddr = "127.0.0.1", listener.Addr().String()
+
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+			defer cancel()
+			info, err := h.Connect(ctx, "ctx")
+			if !manager.Closed() {
+				t.Fatal("manager never closed during Start")
+			}
+			listener.SetDeadline(time.Now().Add(100 * time.Millisecond))
+			conn, acceptErr := listener.AcceptTCP()
+			if acceptErr == nil {
+				conn.Close()
+				t.Fatal("Connect dialed the old relay after the forward manager closed")
+			}
+			if timeout, ok := acceptErr.(net.Error); !ok || !timeout.Timeout() {
+				t.Fatal(acceptErr)
+			}
+			if ctx.Err() != nil || err != nil || info == nil || info.Connected || !strings.Contains(info.Error, portforward.ErrClosed.Error()) {
+				t.Fatalf("Connect did not promptly report the closed manager: info=%+v err=%v context=%v", info, err, ctx.Err())
+			}
+		})
 	}
 }
 
@@ -397,6 +461,7 @@ func TestCarettaConnectionInfoModes(t *testing.T) {
 	}
 
 	deadForward := &CarettaSource{
+		forward:          &portforward.Handle{},
 		prometheusAddr:   "http://localhost:54321",
 		metricsNamespace: "caretta",
 		metricsService:   "caretta-vm",
@@ -596,6 +661,101 @@ func TestConnectRelayWithSlowStatusStillConnects(t *testing.T) {
 	}
 	if len(resp.Flows) != 1 {
 		t.Fatalf("GetFlows returned %d flows, want the 1 the Relay sent", len(resp.Flows))
+	}
+}
+
+func TestHubbleCancelledRecheckKeepsForward(t *testing.T) {
+	entered := make(chan struct{})
+	var blockCheck atomic.Bool
+	relay := startRelayServer(t, nil, slowStatusRelayWithHealth(healthpb.HealthCheckResponse_SERVING),
+		grpc.UnaryInterceptor(func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+			if info.FullMethod == healthpb.Health_Check_FullMethodName && blockCheck.CompareAndSwap(true, false) {
+				close(entered)
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}
+			return handler(ctx, req)
+		}))
+	svc := relayService(reserveClosedPort(t), intstr.FromInt(4245))
+	svc.TypeMeta = metav1.TypeMeta{Kind: "Service", APIVersion: "v1"}
+	svc.Spec.Selector = map[string]string{"app": "hubble-relay"}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v1/namespaces/kube-system/services/hubble-relay", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(svc)
+	})
+	mux.HandleFunc("GET /api/v1/namespaces/kube-system/pods", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"kind":"PodList","apiVersion":"v1","items":[{"metadata":{"name":"relay"},"status":{"phase":"Running"}}]}`)
+	})
+	mux.HandleFunc("POST /api/v1/namespaces/kube-system/pods/relay/portforward", func(w http.ResponseWriter, r *http.Request) {
+		if _, err := httpstream.Handshake(r, w, []string{"portforward.k8s.io"}); err != nil {
+			return
+		}
+		conn := spdy.NewResponseUpgrader().UpgradeResponse(w, r, func(stream httpstream.Stream, replied <-chan struct{}) error {
+			if stream.Headers().Get(corev1.StreamType) == corev1.StreamTypeData {
+				go func() {
+					<-replied
+					defer stream.Close()
+					backend, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", relay), time.Second)
+					if err != nil {
+						return
+					}
+					defer backend.Close()
+					go func() {
+						io.Copy(backend, stream)
+						backend.Close()
+					}()
+					io.Copy(stream, backend)
+				}()
+			}
+			return nil
+		})
+		if conn != nil {
+			<-conn.CloseChan()
+		}
+	})
+	api := httptest.NewServer(mux)
+	defer api.Close()
+	cfg := &rest.Config{Host: api.URL}
+	client := kubernetes.NewForConfigOrDie(cfg)
+	h := NewHubbleSource(client)
+	h.forwards = portforward.NewManager(client, cfg, "ctx")
+	defer h.forwards.Close()
+	defer h.Close()
+	info, err := h.Connect(t.Context(), "ctx")
+	if err != nil || !info.Connected || !h.forward.Alive() {
+		t.Fatalf("initial forwarded Connect = %+v, %v", info, err)
+	}
+	original, grpcConn := h.forward, h.grpcConn
+
+	blockCheck.Store(true)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		_, _ = h.Connect(ctx, "ctx")
+	}()
+	select {
+	case <-entered:
+	case <-finished:
+		t.Fatal("Connect returned before rechecking the relay")
+	case <-time.After(5 * time.Second):
+		t.Fatal("recheck did not reach the relay health service")
+	}
+	cancel()
+	<-finished
+	if !original.Alive() || h.forward != original || h.grpcConn != grpcConn {
+		t.Fatal("cancelled recheck closed the original relay binding")
+	}
+	info = h.ConnectionInfo()
+	if !info.Connected || info.LocalPort != original.Info().LocalPort {
+		t.Fatalf("original tunnel no longer reported as connected: %+v", info)
+	}
+	response, err := h.GetFlows(t.Context(), FlowOptions{})
+	if err != nil || len(response.Flows) != 1 || response.Warning != "" {
+		t.Fatalf("flow read through the original tunnel = %+v, %v", response, err)
 	}
 }
 

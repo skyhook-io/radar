@@ -1,0 +1,122 @@
+import { ArrowRight } from 'lucide-react'
+import { Section } from '../../ui/drawer-components'
+import { Badge } from '../../ui/Badge'
+import { RefLink } from '../../ui/RefLink'
+import { FactValue, type Fact } from '../../facts/facts'
+import { CertaintyGlyph } from '../../facts/certainty'
+import type { ResourceRef } from '../../../types/core'
+import type { TraefikBackendFact, TraefikRouteFacts, TraefikTLSFact } from '../traefik-route-facts'
+
+const CANT_TELL = "Radar can't confirm this reference"
+const EXPIRING_WITHIN = 14 * 864e5
+const DAY = 864e5
+
+function Arrow() {
+  return <ArrowRight className="h-3 w-3 shrink-0 text-theme-text-tertiary" aria-hidden />
+}
+
+function Presence({ exists }: { exists: boolean | null }) {
+  if (exists === false) return <Badge severity="error" size="sm">missing</Badge>
+  if (exists === null) return <CertaintyGlyph certainty="unknown" title={CANT_TELL} />
+  return null
+}
+
+function podsFact(s: TraefikBackendFact): Fact {
+  if (s.readyPods == null || s.totalPods == null) return { text: 'pods unknown', tone: 'unknown' }
+  const tone = s.totalPods > 0 && s.readyPods === s.totalPods ? 'healthy' : s.readyPods === 0 ? 'unhealthy' : 'degraded'
+  return { text: `${s.readyPods} of ${s.totalPods} pods ready`, tone }
+}
+
+// tlsLine words a route's TLS: the certificate's expiry only when it was
+// read. Severity uses the exact time left, as the server's cert problems do;
+// the day count is only for display.
+export function tlsLine(tls: TraefikTLSFact, now = Date.now()): { text: string; severity?: 'warning' | 'error' } {
+  switch (tls.mode) {
+    // entryPoints.<name>.http.tls in Traefik's static config applies to every
+    // router on that entry point, and Radar doesn't read it.
+    case 'none': return { text: 'No TLS declared on this route; its entry point may still add it' }
+    case 'resolver': return { text: `Certificate requested from ACME resolver ${tls.resolver}` }
+    case 'default': return { text: 'TLS, no Secret named: Traefik picks the certificate from its TLS store by SNI' }
+    case 'secret': break
+  }
+  const secret = `Secret ${tls.secret}`
+  switch (tls.certificate) {
+    case 'read': {
+      if (!tls.notAfter) return { text: `${secret}: certificate read, no expiry` }
+      const left = new Date(tls.notAfter).getTime() - now
+      if (left < 0) {
+        const ago = Math.floor(-left / DAY)
+        return { text: `${secret}: certificate expired ${ago === 0 ? 'today' : `${ago}d ago`}`, severity: 'error' }
+      }
+      return { text: `${secret}: certificate expires in ${Math.floor(left / DAY)}d`, severity: left <= EXPIRING_WITHIN ? 'warning' : undefined }
+    }
+    case 'denied': return { text: `${secret}: no access to Secrets in this namespace` }
+    case 'notFound': return { text: `${secret}: not found; Traefik serves another certificate from its TLS store`, severity: 'warning' }
+    case 'notTLS': return { text: `${secret}: no TLS certificate in it` }
+    case 'loading': return { text: `${secret}: Secrets are still loading` }
+    case 'notCollected': return { text: `${secret}: Radar does not collect Secrets in this namespace` }
+    case 'failed': return { text: `${secret}: Radar could not load Secrets` }
+    // Older Radar sends notLoaded for all three.
+    case 'notLoaded': return { text: `${secret}: not loaded yet` }
+  }
+}
+
+export function TraefikRequestPath({ facts, middlewareUse, middlewareUsePartial, onNavigate }: { facts: TraefikRouteFacts[]; middlewareUse?: Record<string, number>; middlewareUsePartial?: boolean; onNavigate?: (ref: ResourceRef) => void }) {
+  const group = facts[0]?.ref.group || 'traefik.io'
+  const tls = facts[0] ? tlsLine(facts[0].tls) : null
+  return (
+    <Section title="Request path" defaultExpanded={true}>
+      <div className="space-y-3">
+        {facts.map((row) => (
+          <div key={row.rule} className="flex flex-wrap items-center gap-1.5 text-xs">
+            {row.parents?.length ? row.parents.map((p) => (
+              <span key={`${p.namespace}/${p.name}`} className="inline-flex items-center gap-1 text-theme-text-tertiary">
+                after
+                <RefLink refTo={{ kind: 'ingressroutes', group: p.group || group, namespace: p.namespace, name: p.name }} onNavigate={onNavigate}>{p.name}</RefLink>
+              </span>
+            )) : (row.entryPoints?.length ? row.entryPoints : ['default entry points']).map((ep) => (
+              <Badge key={ep} severity="neutral" size="sm">{ep}</Badge>
+            ))}
+            <Arrow />
+            <code className="rounded bg-theme-elevated px-1 py-0.5 font-mono text-theme-text-primary break-all">{row.match}</code>
+            {row.middlewares.map((m) => {
+              const shared = middlewareUse?.[`${m.namespace}/${m.name}`]
+              return (
+                <span key={`${m.namespace}/${m.name}`} className="inline-flex items-center gap-1">
+                  <Arrow />
+                  <RefLink refTo={{ kind: 'middlewares', group, namespace: m.namespace, name: m.name }} onNavigate={onNavigate}>{m.name}</RefLink>
+                  <Presence exists={m.exists} />
+                  {m.missingTarget && <Badge severity="error" size="sm">references missing {m.missingTarget}</Badge>}
+                  {shared && shared > 1 && (
+                    <span className="inline-flex items-center gap-1 text-theme-text-tertiary">
+                      used by {middlewareUsePartial && <CertaintyGlyph certainty="lower_bound" title="At least this many; other routes may be in namespaces you can't see" />}{shared} routes
+                    </span>
+                  )}
+                </span>
+              )
+            })}
+            {row.services.length > 0 && <Arrow />}
+            {row.services.map((s, i) => (
+              <span key={`${s.kind}/${s.namespace}/${s.name}`} className="inline-flex items-center gap-1">
+                {i > 0 && <span className="text-theme-text-tertiary" title="Traefik load-balances across these services (weighted round robin)">/</span>}
+                <RefLink refTo={s.kind === 'TraefikService' ? { kind: 'traefikservices', group, namespace: s.namespace, name: s.name } : { kind: 'services', namespace: s.namespace, name: s.name }} onNavigate={onNavigate}>
+                  {s.name}{s.port ? `:${s.port}` : ''}
+                </RefLink>
+                <Presence exists={s.exists} />
+                {s.portMissing && <Badge severity="error" size="sm">no port {s.port} on this Service</Badge>}
+                {s.kind === 'Service' && <FactValue fact={podsFact(s)} />}
+              </span>
+            ))}
+          </div>
+        ))}
+        {tls && (
+          <div className="text-xs text-theme-text-secondary">
+            {tls.severity ? <Badge severity={tls.severity} size="sm">{tls.text}</Badge> : tls.text}
+          </div>
+        )}
+        {/* Radar doesn't read Traefik's static configuration. */}
+        {facts.length > 0 && <div className="text-xs text-theme-text-tertiary">Middlewares an entry point adds in Traefik's static configuration aren't shown.</div>}
+      </div>
+    </Section>
+  )
+}

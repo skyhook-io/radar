@@ -125,6 +125,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
+          # Exercise pkg with the Go version Radar Hub uses.
           go-version: '1.26'
           cache: false
 
@@ -177,7 +178,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version: '1.26'
+          go-version: '1.27'
           cache: false
 
       - name: Restore Go caches
@@ -226,7 +227,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version: '1.26'
+          go-version: '1.27'
           cache: false
 
       - name: Restore Go caches
@@ -264,7 +265,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version: '1.26'
+          go-version: '1.27'
           cache: false
 
       - name: Restore Go caches
@@ -293,7 +294,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version: '1.26'
+          go-version: '1.27'
           cache: false
 
       - name: Restore Go caches
@@ -357,7 +358,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
-          go-version: '1.26'
+          go-version: '1.27'
           cache: false
       - name: Restore Go caches
         uses: ./.github/actions/go-cache-restore

@@ -5,6 +5,7 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -349,9 +350,6 @@ func New(cfg Config) *Server {
 	// for mcpPermCache.
 	k8s.OnContextSwitch(func(_ string) {
 		s.finalizePostContextSwitch()
-		// Alongside the subsystem resets in PerformContextSwitch (prometheus,
-		// traffic, helm): the Argo CD connection references the previous
-		// cluster's endpoint/port-forward.
 		argocd.Reset()
 		vulnerabilities.ResetParseCache()
 	})
@@ -361,11 +359,8 @@ func New(cfg Config) *Server {
 		if runs := s.aiRunManager(); runs != nil {
 			runs.OnContextSwitch()
 		}
-		// Runtime auth-loss demotion fires ONLY this callback (quiesce in
-		// place, no switch follows), and Argo CD's private port-forward lives
-		// outside the session manager — without this it survives the
-		// demotion's teardown indefinitely. Reset is idempotent, so the
-		// second call from OnContextSwitch on a real switch is harmless.
+		// Auth-loss demotion only fires the before-switch callbacks. Clear
+		// Argo CD's cached client and invalidate pending probes here as well.
 		argocd.Reset()
 	})
 
@@ -582,7 +577,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/heap", pprof.Handler("heap").ServeHTTP)
 			r.Get("/mutex", pprof.Handler("mutex").ServeHTTP)
 			r.Get("/threadcreate", pprof.Handler("threadcreate").ServeHTTP)
-			r.Get("/goroutineleak", pprof.Handler("goroutineleak").ServeHTTP) // requires GOEXPERIMENT=goroutineleakprofile at build time
+			r.Get("/goroutineleak", pprof.Handler("goroutineleak").ServeHTTP)
 		})
 	}
 
@@ -647,6 +642,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/dashboard/helm", s.handleDashboardHelm)
 			r.Get("/cluster-info", s.handleClusterInfo)
 			r.Get("/capabilities", s.handleCapabilities)
+			r.Get("/cloud/owner-access/review", s.handleOwnerAccessReview)
 			r.Get("/capacity", s.handleCapacityOverview)
 			r.Get("/capacity/pools", s.handleCapacityPools)
 			r.Get("/capacity/pools/{name}", s.handleCapacityPool)
@@ -748,6 +744,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Delete("/resources/{kind}/{namespace}/{name}", s.bindWrite(s.handleDeleteResource))
 			r.Get("/secrets/certificate-expiry", s.handleSecretCertExpiry)
 			r.Get("/sealedsecrets/controller", s.handleSealedSecretsController)
+			r.Get("/traefik/routes", s.handleTraefikRoutes)
 			// The serving controller's public sealing certificate, from its fixed
 			// /v1/cert.pem; gated on get services/proxy for that Service and port name.
 			r.Get("/sealedsecrets/cert", s.handleSealedSecretsCert)
@@ -1587,6 +1584,7 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 		DatadogAgentPresence:         true,
 		DatadogRightsizing:           true,
 		SealedSecretsController:      true,
+		TraefikRoutes:                true,
 		SealedSecretsCert:            true,
 		ResourceReadCoverage:         true,
 		SearchCoverage:               true,
@@ -1618,6 +1616,7 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 		TrafficRecords:               true,
 		GitOpsWriteEvidence:          true,
 		GitOpsActionCapabilities:     true,
+		OwnerAccessGrantReview:       true,
 		ArgoRollbackSync:             true,
 		ArgoSyncInheritance:          true,
 		ArgoEnableSelfHealOff:        true,
@@ -1676,6 +1675,11 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	caps.MCPHelmTools = s.mcpHandler != nil && !k8s.ForceDisableHelmWrite
 	caps.MCPApplicationEvidence = s.mcpApplicationEvidenceAvailable(r)
 	caps.Deployment = k8s.DeploymentInfo{Mode: deploymentMode()}
+	if cloudMode() && !pkgauth.UserTokenMode() && cloud.OwnerAccessConfigured() {
+		approved := cloud.OwnerAccess()
+		caps.OwnerAccess = &approved
+		caps.OwnerAccessSetup = readOwnerAccessSetup()
+	}
 	caps.CloudConnect = s.cloudConnectCapability()
 	caps.Features = advertisedFeatures()
 	// handlePodFileUpload refuses in Radar Cloud; hide the control to match.
@@ -1813,7 +1817,7 @@ func (s *Server) parseNamespacesForUser(r *http.Request) []string {
 func (s *Server) parseNamespacesForUserWithStatus(r *http.Request) ([]string, bool) {
 	namespaces := parseNamespaces(r.URL.Query())
 	if k8s.ForceNamespaceScope {
-		target := k8s.GetNamespaceScopeTarget()
+		target := k8s.BoundOrCurrent(r.Context()).NamespaceScopeTarget()
 		if target == "" {
 			return []string{}, false
 		}
@@ -1869,7 +1873,7 @@ func (s *Server) resolveHelmStorageScope(r *http.Request) ([]string, bool, bool,
 		// explicit filter to the pinned namespace (empty when it's out of scope)
 		// instead of reading releases the cache doesn't cover.
 		if k8s.ForceNamespaceScope {
-			if target := k8s.GetNamespaceScopeTarget(); target != "" && slices.Contains(explicit, target) {
+			if target := k8s.BoundOrCurrent(r.Context()).NamespaceScopeTarget(); target != "" && slices.Contains(explicit, target) {
 				return []string{target}, true, true, nil
 			}
 			return []string{}, true, true, nil
@@ -1985,7 +1989,7 @@ func (s *Server) canReadDecision(r *http.Request, group, resource, namespace, ve
 	if user == nil || s.permCache == nil {
 		return true, true
 	}
-	if s.permCache.Get(user.Username, user.Groups) == nil {
+	if k8s.PermissionCacheFor(r.Context(), s.permCache).Get(user.Username, user.Groups) == nil {
 		// Trigger namespace discovery so SAR cache has a parent UserPermissions
 		// entry. parseNamespacesForUser is the canonical path that populates
 		// this; if it hasn't run yet, canReadUser falls through to a fresh SAR.
@@ -2014,11 +2018,11 @@ func (s *Server) canReadUserDecision(ctx context.Context, user *auth.User, group
 	if user == nil || s.permCache == nil {
 		return true, true
 	}
-	perms := s.permCache.Get(user.Username, user.Groups)
+	perms := k8s.PermissionCacheFor(ctx, s.permCache).Get(user.Username, user.Groups)
 	// Keyed by connection generation, not context name: a reconnect under the
 	// same name can reach a different cluster, and the review must run on the
 	// client its key names.
-	conn := k8s.Current()
+	conn := k8s.BoundOrCurrent(ctx)
 	client, generation := conn.Client(), conn.ClientGeneration()
 	question := pkgauth.AccessReviewQuestion{Verb: verb, Group: group, Resource: resource, Namespace: namespace}
 	return s.accessReviews.Decide(ctx, user, perms, strconv.FormatUint(generation, 10), question, func(ctx context.Context) (bool, bool) {
@@ -5223,11 +5227,37 @@ func normalizeNilSlice(data any) any {
 	return data
 }
 
+// Four slots bound idle retention to 64 MiB. A full pod list can grow the
+// buffer to 16 MiB even though the encoded response is about half that size.
+const jsonResponseRetainedCap = 16 << 20
+
+var jsonResponseBuffers = make(chan *bytes.Buffer, 4)
+
 func (s *Server) writeJSON(w http.ResponseWriter, data any) {
 	w.Header().Set("Content-Type", "application/json")
-	data = normalizeNilSlice(data)
-	if err := json.NewEncoder(w).Encode(data); err != nil {
-		// Can't change HTTP status at this point, but log for debugging
+
+	var buf *bytes.Buffer
+	select {
+	case buf = <-jsonResponseBuffers:
+		buf.Reset()
+	default:
+		buf = new(bytes.Buffer)
+	}
+	defer func() {
+		if buf.Cap() <= jsonResponseRetainedCap {
+			select {
+			case jsonResponseBuffers <- buf:
+			default:
+			}
+		}
+	}()
+
+	if err := jsonv2.MarshalWrite(buf, normalizeNilSlice(data), json.DefaultOptionsV1()); err != nil {
+		log.Printf("Failed to encode JSON response: %v", err)
+		return
+	}
+	buf.WriteByte('\n')
+	if _, err := w.Write(buf.Bytes()); err != nil {
 		log.Printf("Failed to encode JSON response: %v", err)
 	}
 }
@@ -5586,21 +5616,21 @@ func (s *Server) getUserNamespacesWithStatus(r *http.Request, requested []string
 		return requested, false
 	}
 
-	perms := s.permCache.Get(user.Username, user.Groups)
+	perms := k8s.PermissionCacheFor(r.Context(), s.permCache).Get(user.Username, user.Groups)
 	if perms != nil {
 		log.Printf("[auth] Using cached permissions for %s: allowed=%v", user.Username, perms.AllowedNamespaces == nil)
 	}
 	if perms == nil {
 		log.Printf("[auth] No cached permissions for %s — discovering namespaces", user.Username)
 		// Discover namespaces synchronously on first request
-		conn := k8s.Current()
+		conn := k8s.BoundOrCurrent(r.Context())
 		client, generation := conn.Client(), conn.ClientGeneration()
 		if client == nil {
 			log.Printf("[auth] K8s client not available for namespace discovery (user=%s) — denying access", k8s.SanitizeForLog(user.Username))
 			return []string{}, true // fail-closed: cannot verify permissions
 		}
 		var ok bool
-		perms, ok = s.permCache.Resolve(r.Context(), user.Username, user.Groups, strconv.FormatUint(generation, 10), func(ctx context.Context) *auth.UserPermissions {
+		perms, ok = k8s.PermissionCacheFor(r.Context(), s.permCache).Resolve(r.Context(), user.Username, user.Groups, strconv.FormatUint(generation, 10), func(ctx context.Context) *auth.UserPermissions {
 			return discoverUserPermissions(ctx, client, user)
 		})
 		if !ok {
@@ -5615,7 +5645,7 @@ func (s *Server) getUserNamespacesWithStatus(r *http.Request, requested []string
 // returns nil when discovery fails.
 func discoverUserPermissions(ctx context.Context, client *kubernetes.Clientset, user *auth.User) *auth.UserPermissions {
 	var allNamespaces []string
-	if cache := k8s.GetResourceCache(); cache != nil {
+	if cache := k8s.BoundOrCurrent(ctx).ResourceCache(); cache != nil {
 		if nsLister := cache.Namespaces(); nsLister != nil {
 			nsList, _ := nsLister.List(labels.Everything())
 			for _, ns := range nsList {

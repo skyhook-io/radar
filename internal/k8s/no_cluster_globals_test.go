@@ -10,13 +10,22 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 )
 
 func TestNoClusterGlobals(t *testing.T) {
+	for _, dir := range []string{".", "../portforward"} {
+		t.Run(filepath.Base(dir), func(t *testing.T) { checkClusterGlobals(t, dir) })
+	}
+}
+
+func checkClusterGlobals(t *testing.T, dir string) {
 	denied := []string{
+		"github.com/skyhook-io/radar/internal/portforward.Manager", "*github.com/skyhook-io/radar/internal/portforward.Manager",
+		"map[*github.com/skyhook-io/radar/internal/portforward.Handle]struct{}", "*github.com/skyhook-io/radar/internal/portforward.Handle",
 		"*k8s.io/client-go/kubernetes.Clientset", "k8s.io/client-go/kubernetes.Interface",
 		"*k8s.io/client-go/rest.Config", "k8s.io/client-go/dynamic.Interface",
 		"*k8s.io/client-go/discovery.DiscoveryClient", "k8s.io/client-go/discovery.DiscoveryInterface",
@@ -30,14 +39,14 @@ func TestNoClusterGlobals(t *testing.T) {
 		"github.com/skyhook-io/radar/pkg/policyreports.Index", "*github.com/skyhook-io/radar/pkg/policyreports.Index",
 		"*PermissionCheckResult", "*Capabilities", "userCapEntry", "*userCapEntry", "userNSCapEntry", "*userNSCapEntry",
 	}
-	pkg, err := build.ImportDir(".", 0)
+	pkg, err := build.ImportDir(dir, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	fset := token.NewFileSet()
 	var files []*ast.File
 	for _, name := range pkg.GoFiles {
-		f, err := parser.ParseFile(fset, name, nil, parser.SkipObjectResolution)
+		f, err := parser.ParseFile(fset, filepath.Join(dir, name), nil, parser.SkipObjectResolution)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -46,7 +55,7 @@ func TestNoClusterGlobals(t *testing.T) {
 
 	// Resolve constructor results (including multi-result initializers) and
 	// import aliases using the same dependency versions the test was built with.
-	out, err := exec.Command("go", "list", "-deps", "-export", "-f", "{{.ImportPath}} {{.Export}}", ".").Output()
+	out, err := exec.Command("go", "list", "-deps", "-export", "-f", "{{.ImportPath}} {{.Export}}", dir).Output()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,11 +70,13 @@ func TestNoClusterGlobals(t *testing.T) {
 		return os.Open(exports[path])
 	})}
 	info := &types.Info{Defs: map[*ast.Ident]types.Object{}, Uses: map[*ast.Ident]types.Object{}}
-	checked, err := conf.Check("github.com/skyhook-io/radar/internal/k8s", fset, files, info)
+	checked, err := conf.Check("github.com/skyhook-io/radar/internal/"+pkg.Name, fset, files, info)
 	if err != nil {
 		t.Fatal(err)
 	}
-	checkConnectionMethodGetters(t, fset, files, checked, info)
+	if pkg.Name == "k8s" {
+		checkConnectionMethodGetters(t, fset, files, checked, info)
+	}
 	for _, name := range checked.Scope().Names() {
 		v, ok := checked.Scope().Lookup(name).(*types.Var)
 		if !ok {
@@ -82,7 +93,7 @@ func TestNoClusterGlobals(t *testing.T) {
 			typ = types.NewPointer(types.Unalias(ptr.Elem()))
 		}
 		typeName := types.TypeString(typ, func(p *types.Package) string {
-			if p == checked {
+			if p == checked && pkg.Name == "k8s" {
 				return ""
 			}
 			return p.Path()
@@ -94,10 +105,14 @@ func TestNoClusterGlobals(t *testing.T) {
 		_, isMap := typ.Underlying().(*types.Map)
 		cacheType := isMap || typeName == "sync.Map" || typeName == "golang.org/x/sync/singleflight.Group"
 		lowerName := strings.ToLower(name)
+		forwardMap := isMap && strings.Contains(typeName, "github.com/skyhook-io/radar/internal/portforward.")
 		cacheName := strings.Contains(lowerName, "capabilit") || strings.Contains(lowerName, "perm")
 		policyState := strings.Contains(lowerName, "kyverno") || strings.Contains(lowerName, "policyreport") || strings.Contains(lowerName, "warmup")
 		policyCounter := policyState && (strings.HasSuffix(lowerName, "gen") || strings.HasSuffix(lowerName, "generation"))
-		if policyCounter || strings.Contains(lowerName, "cachegeneration") || strings.Contains(lowerName, "cacheonce") || slices.Contains(denied, typeName) || wrapped || (cacheName && cacheType) {
+		if name == "helmResetFunc" || name == "helmReinitFunc" {
+			t.Errorf("%s: Helm operations use the request connection and need no switch callback", name)
+		}
+		if forwardMap || policyCounter || strings.Contains(lowerName, "cachegeneration") || strings.Contains(lowerName, "cacheonce") || slices.Contains(denied, typeName) || wrapped || (cacheName && cacheType) {
 			t.Errorf("%s: %s has type %s: cluster state belongs on *Connection", fset.Position(v.Pos()), name, typeName)
 		}
 	}

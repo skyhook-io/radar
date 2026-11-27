@@ -15,7 +15,7 @@ import (
 // Returns an error if a critical subsystem (timeline or resource cache) fails
 // to initialize. All other subsystems log warnings and continue in degraded mode.
 //
-// External subsystem callbacks (timeline, helm, traffic, prometheus) must be
+// External subsystem callbacks (timeline, traffic, prometheus) must be
 // registered via the Register*Funcs methods before calling this function.
 //
 // The progress callback receives human-readable status messages suitable for
@@ -51,7 +51,6 @@ func initAllSubsystems(ctx context.Context, progress func(string), discoveryWait
 
 	// Snapshot callback refs before parallel section
 	contextSwitchMu.RLock()
-	hReinitFn := helmReinitFunc
 	trReinitFn := trafficReinitFunc
 	promReinitFn := prometheusReinitFunc
 	contextSwitchMu.RUnlock()
@@ -151,18 +150,6 @@ func initAllSubsystems(ctx context.Context, progress func(string), discoveryWait
 		conn.initMetricsHistory()
 		logTiming("   Metrics history init: %v (parallel)", time.Since(mt))
 	}()
-
-	if hReinitFn != nil {
-		remainingWg.Add(1)
-		go func() {
-			defer remainingWg.Done()
-			ht := time.Now()
-			if err := hReinitFn(GetKubeconfigPath()); err != nil {
-				log.Printf("Warning: Helm init failed: %v", err)
-			}
-			logTiming("   Helm init: %v (parallel)", time.Since(ht))
-		}()
-	}
 
 	if trReinitFn != nil {
 		remainingWg.Add(1)
@@ -288,7 +275,7 @@ func runCRDWarmupSequence(ctx context.Context, deferredDone <-chan struct{}, sti
 
 // ResetAllSubsystems tears down all subsystems in reverse order of init.
 // Init order: 1) timeline, 2) resource cache + API discovery, 3) dynamic cache,
-// 4) remaining (metrics history, helm, traffic, prometheus).
+// 4) remaining (metrics history, traffic, prometheus).
 // Safe to call on first boot when singletons are nil.
 // Each reset is wrapped in a panic recover so a failure in one subsystem
 // does not prevent remaining subsystems from being torn down.
@@ -300,7 +287,7 @@ func resetAllSubsystems(conn *Connection) {
 	// The point of no return: nothing can be admitted against the connection
 	// whose resources are about to go.
 	RetireServingConnection()
-	// Step 4 subsystems (reverse): prometheus, traffic, helm, metrics history
+	// Step 4 subsystems (reverse): prometheus, traffic, metrics history
 	contextSwitchMu.RLock()
 	costResetFn := costResetFunc
 	contextSwitchMu.RUnlock()
@@ -315,18 +302,14 @@ func resetAllSubsystems(conn *Connection) {
 		safeReset("prometheus", promResetFn)
 	}
 
+	// Closing a traffic source waits for its in-flight Connect. Interrupt its
+	// tunnel first, including an attempt still waiting to become ready.
+	safeReset("automatic port-forwards", conn.PortForwards().Close)
 	contextSwitchMu.RLock()
 	trResetFn := trafficResetFunc
 	contextSwitchMu.RUnlock()
 	if trResetFn != nil {
 		safeReset("traffic", trResetFn)
-	}
-
-	contextSwitchMu.RLock()
-	hResetFn := helmResetFunc
-	contextSwitchMu.RUnlock()
-	if hResetFn != nil {
-		safeReset("Helm", hResetFn)
 	}
 
 	safeReset("metrics history", conn.closeMetricsHistory)

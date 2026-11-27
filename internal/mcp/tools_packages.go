@@ -8,6 +8,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/skyhook-io/radar/internal/helm"
+	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/server"
 )
 
@@ -46,6 +47,7 @@ func normalizeMCPPackageSourceFilter(source string) string {
 }
 
 func handleListPackages(ctx context.Context, req *mcp.CallToolRequest, input listPackagesInput) (*mcp.CallToolResult, any, error) {
+	ctx = k8s.CaptureConnection(ctx)
 	user, groups := "", []string(nil)
 	if u := userFromContext(ctx); u != nil {
 		user, groups = u.Username, u.Groups

@@ -33,3 +33,6 @@ export {
 export { IssueRecentChanges, groupRecentChanges, recentChangesAnchor, recentChangeTimelineTarget } from './IssueRecentChanges';
 export type { IssueExpansion, IssueRecentChangesState, IssueTimelineEventTarget, IssueTimelineLinks } from './IssueRecentChanges';
 export { changeVerb, rowChangeVerb } from './change-verb';
+export { AppIssueList } from './AppIssueList';
+export { buildIssueAppIndex } from './issue-app-index';
+export type { IssueAppInventoryRow } from './issue-app-index';

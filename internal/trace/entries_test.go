@@ -244,3 +244,21 @@ func TestPodsHopNamesTheWorkloadTheCallerMayRead(t *testing.T) {
 		})
 	}
 }
+
+func TestEndpointPodCounts(t *testing.T) {
+	pod := func(ready bool, ip string) *corev1.Pod {
+		status := corev1.ConditionFalse
+		if ready {
+			status = corev1.ConditionTrue
+		}
+		return &corev1.Pod{Status: corev1.PodStatus{Phase: corev1.PodRunning, PodIP: ip, Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: status}}}}
+	}
+	svc := &corev1.Service{}
+	if r, total := EndpointPodCounts(svc, []*corev1.Pod{pod(true, "10.0.0.1"), pod(true, "10.0.0.2"), pod(false, "10.0.0.3")}); r != 2 || total != 3 {
+		t.Errorf("ready/total = %d/%d, want 2/3", r, total)
+	}
+	pnr := &corev1.Service{Spec: corev1.ServiceSpec{PublishNotReadyAddresses: true}}
+	if r, total := EndpointPodCounts(pnr, []*corev1.Pod{pod(false, "10.0.0.1"), pod(false, "10.0.0.2")}); r != 2 || total != 2 {
+		t.Errorf("publishNotReadyAddresses ready/total = %d/%d, want 2/2", r, total)
+	}
+}
