@@ -13,6 +13,8 @@ export function FormSaveActions({
   onDiscard,
   feedback,
   error,
+  saveLabel = "Save changes",
+  canSave = dirty,
 }: {
   dirty: boolean;
   busy: boolean;
@@ -20,6 +22,8 @@ export function FormSaveActions({
   onDiscard: () => void;
   feedback?: FormFeedback;
   error?: string;
+  saveLabel?: string;
+  canSave?: boolean;
 }) {
   const success = !dirty && !busy && !error && feedback?.tone === "success";
   const detail =
@@ -29,11 +33,11 @@ export function FormSaveActions({
       <div className="flex min-h-8 flex-wrap items-center gap-3">
         <button
           type="button"
-          disabled={!dirty || busy}
+          disabled={!canSave || busy}
           onClick={onSave}
           className="btn-brand min-w-28 px-3 py-2 text-xs"
         >
-          {busy ? "Saving…" : "Save changes"}
+          {busy ? "Saving…" : saveLabel}
         </button>
         {success && (
           <span

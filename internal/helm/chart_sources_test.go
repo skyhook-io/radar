@@ -102,7 +102,7 @@ func chartSourceTestServer(t *testing.T, versions ...string) *httptest.Server {
 func newChartSourceTestClient(t *testing.T) *Client {
 	t.Helper()
 	dir := t.TempDir()
-	return &Client{settings: &cli.EnvSettings{RepositoryConfig: filepath.Join(dir, "repositories.yaml"), RepositoryCache: dir}}
+	return &Client{repositorySettings: &repositorySettings{settings: &cli.EnvSettings{RepositoryConfig: filepath.Join(dir, "repositories.yaml"), RepositoryCache: dir}}}
 }
 
 func TestEnsureClassicRepositoryDoesNotHoldMutexAcrossNetwork(t *testing.T) {
@@ -381,7 +381,7 @@ func TestRepositoryConfigurationPersistsAcrossClientRestart(t *testing.T) {
 	if _, err := c.ensureClassicRepository(server.URL, "repo"); err != nil {
 		t.Fatal(err)
 	}
-	restarted := &Client{settings: &cli.EnvSettings{RepositoryConfig: c.settings.RepositoryConfig, RepositoryCache: c.settings.RepositoryCache}}
+	restarted := &Client{repositorySettings: &repositorySettings{settings: &cli.EnvSettings{RepositoryConfig: c.settings.RepositoryConfig, RepositoryCache: c.settings.RepositoryCache}}}
 	versions, err := restarted.sourceVersions(ChartSourceCandidate{Type: "repository", Reference: "repo", URL: server.URL}, "app")
 	if err != nil || len(versions) != 1 || versions[0] != "1.2.3" {
 		t.Fatalf("restart recovery = %+v, %v", versions, err)

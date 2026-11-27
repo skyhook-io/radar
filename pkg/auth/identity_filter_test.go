@@ -21,6 +21,9 @@ func TestForwardedIdentityAllowed(t *testing.T) {
 		{"non-cloud: system username rejected", "system:kube-controller-manager", nil, false, false},
 		{"non-cloud: serviceaccount username rejected", "system:serviceaccount:kube-system:default", nil, false, false},
 
+		{"non-cloud: managed owner group rejected", "alice", []string{"radar:owner-access:argocd"}, false, false},
+		{"cloud: managed owner group accepted in the tunnel vocabulary", "user_01ABC", []string{"radar:owner-access:argocd"}, true, true},
+
 		// Cloud: reserved-principal rejection.
 		{"cloud: system:masters group rejected", "user_01ABC", []string{"radar:owner", "system:masters"}, true, false},
 		{"cloud: system:authenticated group rejected", "user_01ABC", []string{"radar:owner", "system:authenticated"}, true, false},

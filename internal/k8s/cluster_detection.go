@@ -211,7 +211,7 @@ func GetClusterInfo(ctx context.Context) (*ClusterInfo, error) {
 
 // GetClusterPlatform attempts to detect the Kubernetes platform/provider
 func GetClusterPlatform(ctx context.Context) (string, error) {
-	if isNKP(ctx) {
+	if IsNKP(ctx) {
 		return "nkp", nil
 	}
 
@@ -258,10 +258,13 @@ func GetClusterPlatform(ctx context.Context) (string, error) {
 	return "generic", nil
 }
 
-// isNKP trusts the namespace cache only once it holds namespaces: an empty
-// list may just be unsynced. Otherwise it asks the API once per cluster, with
-// a short limit so cluster info never waits on a slow namespace read.
-func isNKP(ctx context.Context) bool {
+// IsNKP reports whether the cluster has the NKP namespace, as Radar's own
+// ServiceAccount sees it, whatever the signed-in user may read. A denied read
+// counts as no. It trusts the namespace cache only once it holds namespaces:
+// an empty list may just be unsynced. Otherwise it asks the API once per
+// cluster, with a short limit so cluster info never waits on a slow
+// namespace read.
+func IsNKP(ctx context.Context) bool {
 	if cache := GetResourceCache(); cache != nil {
 		if nsLister := cache.Namespaces(); nsLister != nil {
 			if nsList, err := nsLister.List(labels.Everything()); err == nil && len(nsList) > 0 {

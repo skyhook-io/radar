@@ -58,13 +58,18 @@ var (
 	currentContext = k8s.GetContextName
 	listServices   = cachedServices
 	startForward   = func(ctx context.Context, ns, name string, port int, contextName string) (string, error) {
-		info, err := portforward.Start(portforward.OwnerLoki, ctx, ns, name, port, contextName)
+		conn := k8s.Current()
+		if conn == nil || conn.ContextName() != contextName {
+			return "", errors.New("the cluster connection changed")
+		}
+		h, err := conn.PortForwards().Start(ctx, portforward.OwnerLoki, ns, name, port)
 		if err != nil {
 			return "", err
 		}
-		return info.Address, nil
+		holdForward(h)
+		return h.Address(), nil
 	}
-	stopForward  = func() { portforward.Stop(portforward.OwnerLoki) }
+	stopForward  = releaseForward
 	namedPodPort = cachedNamedPodPort
 )
 
@@ -421,22 +426,59 @@ func scrubLocked(text string) string {
 	return prom.RedactURLs(text)
 }
 
-// RegisterSignals subscribes Loki to lost port-forwards. Call once at startup.
-func RegisterSignals() {
-	portforward.SetOnForwardLost(portforward.OwnerLoki, forwardLost)
+// tunnel is the port-forward discovery opened; *portforward.Handle in production.
+type tunnel interface {
+	Address() string
+	Done() <-chan struct{}
+	Stop()
 }
 
-// forwardLost drops a discovered address the lost forward served (address is
-// the forward's URL); every subscriber hears every loss, so it matches on it.
-func forwardLost(_ portforward.Owner, address string) {
-	// A replacement forward may already serve the same local port; the loss
-	// then describes the old tunnel only, as for Prometheus.
-	if portforward.IsActiveAddress(address) {
+// forward is the one tunnel Loki holds. Its own lock, never held while taking
+// client.mu, because stopForward runs under client.mu.
+var forward struct {
+	mu sync.Mutex
+	t  tunnel
+}
+
+// holdForward makes t the tunnel Loki uses, stopping the one it replaces.
+func holdForward(t tunnel) {
+	forward.mu.Lock()
+	old := forward.t
+	forward.t = t
+	forward.mu.Unlock()
+	if old != nil {
+		old.Stop()
+	}
+	go watchForward(t)
+}
+
+func releaseForward() {
+	forward.mu.Lock()
+	t := forward.t
+	forward.t = nil
+	forward.mu.Unlock()
+	if t != nil {
+		t.Stop()
+	}
+}
+
+// watchForward drops the discovered address when t ends while still held: its
+// pod went away or its connection closed. A tunnel stopped or replaced on
+// purpose is no longer held by then.
+func watchForward(t tunnel) {
+	<-t.Done()
+	forward.mu.Lock()
+	lost := forward.t == t
+	if lost {
+		forward.t = nil
+	}
+	forward.mu.Unlock()
+	if !lost {
 		return
 	}
 	client.mu.Lock()
 	defer client.mu.Unlock()
-	if client.source == "discovered" && address != "" && client.baseURL == address {
+	if client.source == "discovered" && client.baseURL == t.Address() {
 		client.baseURL = ""
 	}
 }

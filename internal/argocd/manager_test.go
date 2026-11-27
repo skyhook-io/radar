@@ -10,12 +10,13 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/skyhook-io/radar/internal/portforward"
+
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	"k8s.io/client-go/kubernetes"
+
 	"k8s.io/client-go/kubernetes/fake"
-	"k8s.io/client-go/rest"
 
 	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/pkg/argoapi"
@@ -58,7 +59,7 @@ func (f *fakeArgo) handler() http.Handler {
 
 func newTestManager(cfg config.Config) *Manager {
 	m := &Manager{
-		clusterClients: func() (kubernetes.Interface, *rest.Config) { return nil, nil },
+		clusterClients: func() probeCluster { return probeCluster{} },
 		inCluster:      func() bool { return false },
 		contextName:    func() string { return "" },
 		loadConfig:     func() config.Config { return cfg },
@@ -504,15 +505,14 @@ func TestInClusterEnvSeedUsesDeterministicBindingWithoutClusterLookup(t *testing
 
 func TestWatchForwardExit_DropsWhenCurrentForwardDies(t *testing.T) {
 	m := newTestManager(config.Config{})
-	fwd := &activeForward{localPort: 12345, stopCh: make(chan struct{}), cancel: func() {}}
+	fwd := &testForward{localPort: 12345, cancel: func() {}}
 	m.forward = fwd
 	m.baseURL = "https://localhost:12345"
 	m.client = newClient(m.baseURL, "tok", false)
 
-	// Pre-loaded errCh makes watchForwardExit return synchronously.
-	errCh := make(chan error, 1)
-	errCh <- errors.New("pod restarted")
-	m.watchForwardExit(fwd, errCh)
+	done := make(chan struct{})
+	close(done)
+	m.watchForwardExit(fwd, done)
 
 	if m.forward != nil || m.client != nil || m.baseURL != "" {
 		t.Fatalf("expected connection dropped after unexpected forward exit; forward=%v client=%v baseURL=%q", m.forward, m.client, m.baseURL)
@@ -525,16 +525,16 @@ func TestWatchForwardExit_DropsWhenCurrentForwardDies(t *testing.T) {
 
 func TestWatchForwardExit_NoOpAfterForwardReplaced(t *testing.T) {
 	m := newTestManager(config.Config{})
-	oldFwd := &activeForward{localPort: 1, stopCh: make(chan struct{}), cancel: func() {}}
-	newFwd := &activeForward{localPort: 2, stopCh: make(chan struct{}), cancel: func() {}}
+	oldFwd := &testForward{localPort: 1, cancel: func() {}}
+	newFwd := &testForward{localPort: 2, cancel: func() {}}
 	// A deliberate reconnect already replaced oldFwd with newFwd.
 	m.forward = newFwd
 	m.baseURL = "https://localhost:2"
 	m.client = newClient(m.baseURL, "tok", false)
 
-	errCh := make(chan error, 1)
-	errCh <- nil
-	m.watchForwardExit(oldFwd, errCh)
+	done := make(chan struct{})
+	close(done)
+	m.watchForwardExit(oldFwd, done)
 
 	if m.forward != newFwd || m.client == nil || m.baseURL != "https://localhost:2" {
 		t.Fatal("a superseded forward's exit must not drop the current connection")
@@ -1023,3 +1023,15 @@ func TestProbe_DoesNotRecordTheCallersOwnDeadline(t *testing.T) {
 		t.Fatalf("a cancelled probe replaced the recorded failure with %v", m.LastProbeError())
 	}
 }
+
+type testForward struct {
+	localPort int
+	exited    bool
+	cancel    func()
+}
+
+func (f *testForward) Alive() bool { return !f.exited }
+func (f *testForward) Info() *portforward.ConnectionInfo {
+	return &portforward.ConnectionInfo{LocalPort: f.localPort}
+}
+func (f *testForward) Stop() { f.cancel() }

@@ -30,6 +30,7 @@ type fakeProvider struct {
 	warmFunc              func(context.Context, schema.GroupVersionResource, string) error
 	typedReasons          map[string]string
 	unlistable            []k8score.APIResource
+	shortNamed            []k8score.APIResource
 	// typedNamespaceReasons give a typed kind's reason per namespace.
 	typedNamespaceReasons map[string]map[string]string
 	listErrors            map[string]error
@@ -145,6 +146,7 @@ func (f *fakeProvider) PlanDynamic(gvr schema.GroupVersionResource, namespaces [
 	return plan
 }
 func (f *fakeProvider) UnlistableKinds() []k8score.APIResource                     { return f.unlistable }
+func (f *fakeProvider) ShortNamedKinds() []k8score.APIResource                     { return f.shortNamed }
 func (f *fakeProvider) PrepareDynamicObservations(_ []schema.GroupVersionResource) {}
 func (f *fakeProvider) DynamicCacheStopped() bool                                  { return false }
 
@@ -326,6 +328,35 @@ func TestSearch_DynamicSpecMatchWithSnippet(t *testing.T) {
 	}
 	if len(res.Hits[0].Snippets) != 1 || res.Hits[0].Snippets[0].Path != "spec.action" {
 		t.Fatalf("expected spec snippet, got %+v", res.Hits[0].Snippets)
+	}
+}
+
+func TestSearch_KindFilterAcceptsDiscoveredShortName(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "autoscaling.k8s.io", Version: "v1", Resource: "verticalpodautoscalers"}
+	vpa := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "autoscaling.k8s.io/v1",
+		"kind":       "VerticalPodAutoscaler",
+		"metadata":   map[string]any{"name": "web", "namespace": "shop"},
+	}}
+	p := &fakeProvider{
+		dynamic:    map[schema.GroupVersionResource][]*unstructured.Unstructured{gvr: {vpa}},
+		kinds:      map[schema.GroupVersionResource]string{gvr: "VerticalPodAutoscaler"},
+		shortNamed: []k8score.APIResource{{Group: gvr.Group, Version: gvr.Version, Kind: "VerticalPodAutoscaler", Name: gvr.Resource, ShortNames: []string{"vpa"}}},
+	}
+	res, err := Search(context.Background(), p, Parse("kind:vpa"), Options{Include: IncludeNone})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Hits) != 1 || res.Hits[0].Kind != "VerticalPodAutoscaler" {
+		t.Fatalf("kind:vpa hits = %+v, want the VerticalPodAutoscaler", res.Hits)
+	}
+	p.shortNamed = nil
+	res, err = Search(context.Background(), p, Parse("kind:vpa"), Options{Include: IncludeNone})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Hits) != 0 {
+		t.Fatalf("kind:vpa without a discovered short name hit %+v", res.Hits)
 	}
 }
 

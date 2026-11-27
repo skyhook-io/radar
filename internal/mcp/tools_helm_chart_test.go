@@ -17,6 +17,7 @@ import (
 	"k8s.io/client-go/rest"
 
 	"github.com/skyhook-io/radar/internal/helm"
+	"github.com/skyhook-io/radar/internal/k8s"
 )
 
 // An agent about to install a chart must be able to pick an exact version on
@@ -46,11 +47,11 @@ func TestGetHelmChartListsVersionsOnTheReadOnlyEndpoint(t *testing.T) {
 	if err := f.WriteFile(filepath.Join(dir, "repositories.yaml"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	helm.ResetClient()
-	if err := helm.InitializeWithRESTConfig(&rest.Config{Host: "http://127.0.0.1:1"}); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(helm.ResetClient)
+	helm.ResetTestClient()
+	previousConfig := k8s.SetTestConfig(&rest.Config{Host: "http://127.0.0.1:1"})
+	t.Cleanup(func() { k8s.SetTestConfig(previousConfig) })
+	helm.Initialize()
+	t.Cleanup(helm.ResetTestClient)
 
 	ctx := context.Background()
 	st, ct := mcpsdk.NewInMemoryTransports()

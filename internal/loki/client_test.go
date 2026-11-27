@@ -108,24 +108,64 @@ func TestRetireDisables(t *testing.T) {
 	}
 }
 
+type fakeTunnel struct {
+	address string
+	done    chan struct{}
+	stopped atomic.Bool
+}
+
+func newFakeTunnel(address string) *fakeTunnel {
+	return &fakeTunnel{address: address, done: make(chan struct{})}
+}
+func (f *fakeTunnel) Address() string       { return f.address }
+func (f *fakeTunnel) Done() <-chan struct{} { return f.done }
+func (f *fakeTunnel) Stop() {
+	if f.stopped.CompareAndSwap(false, true) {
+		close(f.done)
+	}
+}
+
+func eventually(t *testing.T, what string, ok func() bool) {
+	t.Helper()
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+		if ok() {
+			return
+		}
+	}
+	t.Fatal(what)
+}
+
+// A tunnel that ends on its own (its pod went away, the connection closed)
+// drops the address it served; one replaced or stopped on purpose does not.
 func TestForwardLostDropsAddress(t *testing.T) {
 	reset(t)
 	srv := fakeLoki(t, 200, labelsOK, nil)
 	listServices = func() ([]corev1.Service, bool) {
 		return []corev1.Service{svc("logging", "loki", nil, port("http-metrics", 3100))}, true
 	}
-	startForward = func(context.Context, string, string, int, string) (string, error) { return srv.URL, nil }
+	var tunnel *fakeTunnel
+	startForward = func(context.Context, string, string, int, string) (string, error) {
+		tunnel = newFakeTunnel(srv.URL)
+		holdForward(tunnel)
+		return srv.URL, nil
+	}
 	Configure("", nil)
 	if err := EnsureConnected(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	forwardLost("loki", srv.URL)
-	if CurrentStatus().Connected {
-		t.Fatal("a lost forward still reads as connected")
+	replacement := newFakeTunnel(srv.URL)
+	holdForward(replacement)
+	if !tunnel.stopped.Load() {
+		t.Fatal("a replaced tunnel kept running")
 	}
-	forwardLost("prometheus", "http://localhost:1")
+	time.Sleep(20 * time.Millisecond)
+	if !CurrentStatus().Connected {
+		t.Fatal("stopping a replaced tunnel dropped the connection")
+	}
+	close(replacement.done) // ends on its own, not through Stop
+	eventually(t, "a lost forward still reads as connected", func() bool { return !CurrentStatus().Connected })
 	if !CurrentStatus().Configured {
-		t.Fatal("an unrelated loss retired Loki")
+		t.Fatal("a lost forward retired Loki")
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/k8s"
 )
 
 // A release stored in default whose manifest also places a Deployment in the
@@ -69,8 +70,10 @@ metadata:
 	}
 	devA.SetCanI("list", "", "secrets", "", false)
 	admin.SetCanI("list", "", "secrets", "", true)
-	env.srv.permCache.Set("dev-a", nil, devA)
-	env.srv.permCache.Set("admin", nil, admin)
+
+	k8s.PermissionCacheFor(k8s.CaptureConnection(t.Context()), env.srv.permCache).Set("dev-a", nil, devA)
+
+	k8s.PermissionCacheFor(k8s.CaptureConnection(t.Context()), env.srv.permCache).Set("admin", nil, admin)
 
 	get := func(t *testing.T, path, user string) string {
 		t.Helper()

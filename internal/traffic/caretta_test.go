@@ -2,12 +2,21 @@ package traffic
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
+
+	"github.com/skyhook-io/radar/internal/portforward"
+	"github.com/skyhook-io/radar/internal/portforward/forwardtest"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/fake"
 )
 
 func TestCarettaRejectsCrossOriginRedirects(t *testing.T) {
@@ -90,5 +99,223 @@ func TestCarettaAppliesHeaders(t *testing.T) {
 	}
 	if got := gotAuth.Load().(string); got != "Bearer caretta-token" {
 		t.Errorf("probe Authorization = %q, want %q", got, "Bearer caretta-token")
+	}
+}
+
+func TestCarettaReleasedForward(t *testing.T) {
+	cfg := forwardtest.Server(t, forwardtest.ServeTunnel)
+	manager := portforward.NewManager(kubernetes.NewForConfigOrDie(cfg), cfg, "ctx")
+	defer manager.Close()
+	for _, path := range []string{"flows", "raw"} {
+		t.Run(path, func(t *testing.T) {
+			forward, err := manager.Start(t.Context(), portforward.OwnerTraffic, "ns", "svc", 9090)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cluster := fake.NewSimpleClientset()
+			c := NewCarettaSource(cluster)
+			c.forwards, c.currentContext, c.isConnected = manager, "ctx", true
+			c.forward = forward
+			c.prometheusAddr = c.forward.Address()
+			address := fmt.Sprintf("127.0.0.1:%d", forward.Info().LocalPort)
+			c.forward.Stop()
+
+			var listener net.Listener
+			for deadline := time.Now().Add(time.Second); ; {
+				listener, err = net.Listen("tcp4", address)
+				if err == nil {
+					break
+				}
+				if !errors.Is(err, syscall.EADDRINUSE) || time.Now().After(deadline) {
+					t.Fatal(err)
+				}
+				time.Sleep(time.Millisecond)
+			}
+			var hits atomic.Int32
+			replacement := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				hits.Add(1)
+				w.Write([]byte(`{"status":"success","data":{"result":[]}}`))
+			})}
+			defer replacement.Close()
+			go replacement.Serve(listener)
+			if path == "flows" {
+				_, err = c.GetFlows(t.Context(), FlowOptions{})
+			} else {
+				_, err = c.queryPrometheusRaw(t.Context(), "up")
+			}
+			if len(cluster.Actions()) == 0 {
+				t.Error("dead forward did not trigger backend discovery")
+			}
+			if hits.Load() != 0 || c.forward != nil || c.prometheusAddr != "" {
+				t.Fatalf("replacement hits=%d, cached address=%q, query error=%v", hits.Load(), c.prometheusAddr, err)
+			}
+		})
+	}
+}
+
+func TestCarettaReleasesRejectedForward(t *testing.T) {
+	closed := make(chan struct{})
+	cfg := forwardtest.Server(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			defer close(closed)
+		}
+		forwardtest.ServeTunnel(w, r)
+	})
+	m := portforward.NewManager(kubernetes.NewForConfigOrDie(cfg), cfg, "ctx")
+	defer m.Close()
+	metrics := promStub(t, promBackend{})
+	c := sourceWithServices(t, "ns", carettaStoreSvc("ns", "svc"))
+	c.forwards = m
+	defer c.Close()
+	c.httpClient.Transport = &http.Transport{DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, metrics.Listener.Addr().String())
+	}}
+	defer c.httpClient.CloseIdleConnections()
+	info, err := c.Connect(t.Context(), "ctx")
+	if err != nil || info.Connected || c.forward != nil || !strings.Contains(info.Error, "holds no Caretta metrics") {
+		t.Fatalf("Connect with no Caretta data = %+v, %v", info, err)
+	}
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("Caretta kept its rejected tunnel open")
+	}
+}
+
+func TestCarettaFlowReadRetriesFailedReconnect(t *testing.T) {
+	var restarting, abortRead atomic.Bool
+	readCtx, cancelRead := context.WithCancel(t.Context())
+	defer cancelRead()
+	var refused atomic.Int32
+	cfg := forwardtest.Server(t, func(w http.ResponseWriter, r *http.Request) {
+		if restarting.Load() && r.Method == http.MethodPost {
+			refused.Add(1)
+			if abortRead.Load() {
+				cancelRead()
+			}
+			http.Error(w, "pod restarting", http.StatusServiceUnavailable)
+			return
+		}
+		forwardtest.ServeTunnel(w, r)
+	})
+	manager := portforward.NewManager(kubernetes.NewForConfigOrDie(cfg), cfg, "ctx")
+	defer manager.Close()
+
+	metrics := promStub(t, promBackend{links: true})
+	c := sourceWithServices(t, "ns", carettaStoreSvc("ns", "svc"))
+	c.forwards, c.isConnected = manager, true
+	defer c.Close()
+	// The fake API upgrades the tunnel. Serve PromQL responses from the store fixture.
+	c.httpClient.Transport = &http.Transport{DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, metrics.Listener.Addr().String())
+	}}
+	defer c.httpClient.CloseIdleConnections()
+	info, err := c.Connect(t.Context(), "ctx")
+	if err != nil || !info.Connected {
+		t.Fatalf("initial connection: %+v, %v", info, err)
+	}
+	lost := c.forward
+	lost.Stop()
+	restarting.Store(true)
+	failedAt := time.Now()
+	response, err := c.GetFlows(t.Context(), FlowOptions{})
+	if err != nil || response.Warning == "" || c.ConnectionInfo().Connected || refused.Load() != 1 {
+		t.Fatalf("expected a failed reconnect during restart: response=%+v err=%v refused=%d", response, err, refused.Load())
+	}
+
+	if c.reconnectAfter.Before(failedAt.Add(5*time.Second)) || c.reconnectDelay != 5*time.Second {
+		t.Fatalf("first failed reconnect scheduled for %v with delay %v", c.reconnectAfter, c.reconnectDelay)
+	}
+	c.reconnectAfter = time.Now().Add(time.Hour)
+	if _, err := c.GetFlows(t.Context(), FlowOptions{}); err != nil || refused.Load() != 1 {
+		t.Fatalf("read during backoff retried: err=%v refused=%d", err, refused.Load())
+	}
+
+	for _, seconds := range []int{10, 20, 40, 60, 60} {
+		wantDelay := time.Duration(seconds) * time.Second
+		c.reconnectAfter = time.Now().Add(-time.Second)
+		if _, err := c.GetFlows(t.Context(), FlowOptions{}); err != nil || c.reconnectDelay != wantDelay {
+			t.Fatalf("retry delay=%v want=%v err=%v", c.reconnectDelay, wantDelay, err)
+		}
+	}
+	c.reconnectAfter = time.Now().Add(-time.Second)
+	abortRead.Store(true)
+	_, _ = c.GetFlows(readCtx, FlowOptions{})
+	if readCtx.Err() == nil {
+		t.Fatal("reconnect never reached the cancelled read")
+	}
+
+	restarting.Store(false)
+	response, err = c.GetFlows(t.Context(), FlowOptions{})
+	if err != nil || len(response.Flows) != 1 || !c.forward.Alive() || c.forward == lost || !c.reconnectAfter.IsZero() || c.reconnectDelay != 0 {
+		t.Fatalf("later flow read did not restore the tunnel: response=%+v err=%v", response, err)
+	}
+}
+
+func TestCarettaCancelledRevalidationKeepsBinding(t *testing.T) {
+	for _, query := range []string{"up", "count(caretta_links_observed)"} {
+		t.Run(query, func(t *testing.T) {
+			cfg := forwardtest.Server(t, forwardtest.ServeTunnel)
+			manager := portforward.NewManager(kubernetes.NewForConfigOrDie(cfg), cfg, "ctx")
+			defer manager.Close()
+			forward, err := manager.Start(t.Context(), portforward.OwnerTraffic, "ns", "svc", 9090)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			metrics := promStub(t, promBackend{links: true})
+			entered := make(chan struct{})
+			var stall atomic.Bool
+			stall.Store(true)
+			backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Query().Get("query") == query && stall.CompareAndSwap(true, false) {
+					close(entered)
+					<-r.Context().Done()
+					return
+				}
+				metrics.Config.Handler.ServeHTTP(w, r)
+			}))
+			defer backend.Close()
+
+			c := NewCarettaSource(fake.NewSimpleClientset())
+			defer c.Close()
+			c.currentContext, c.isConnected = "ctx", true
+			c.bindLocked(forward.Address(), &metricsServiceInfo{namespace: "ns", name: "svc"}, forward)
+			localPort := forward.Info().LocalPort
+			c.httpClient.Transport = &http.Transport{DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				if addr != fmt.Sprintf("localhost:%d", localPort) {
+					return nil, fmt.Errorf("unexpected metrics address %s", addr)
+				}
+				return (&net.Dialer{}).DialContext(ctx, network, backend.Listener.Addr().String())
+			}}
+			defer c.httpClient.CloseIdleConnections()
+
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			finished := make(chan struct{})
+			go func() {
+				defer close(finished)
+				_, _ = c.Connect(ctx, "ctx")
+			}()
+			select {
+			case <-entered:
+			case <-finished:
+				t.Fatal("Connect returned before revalidating the binding")
+			case <-time.After(5 * time.Second):
+				t.Fatal("revalidation did not reach the backend")
+			}
+			cancel()
+			<-finished
+			if !forward.Alive() || c.forward != forward || c.prometheusAddr != forward.Address() {
+				t.Fatal("cancelled revalidation closed or cleared the live binding")
+			}
+			if !c.backendVerified || !c.reconnectAfter.IsZero() {
+				t.Fatal("cancelled revalidation discarded verification or scheduled a reconnect")
+			}
+			response, err := c.GetFlows(t.Context(), FlowOptions{})
+			if err != nil || len(response.Flows) != 1 || c.forward != forward {
+				t.Fatalf("later flow read did not reuse the binding: response=%+v err=%v", response, err)
+			}
+		})
 	}
 }

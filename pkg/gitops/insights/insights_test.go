@@ -3047,15 +3047,6 @@ func TestArgoApplicationConditionsCreateNamespaceAlreadySet(t *testing.T) {
 	})
 }
 
-func fluxKustomization(status map[string]any) *unstructured.Unstructured {
-	return &unstructured.Unstructured{Object: map[string]any{
-		"apiVersion": "kustomize.toolkit.fluxcd.io/v1",
-		"kind":       "Kustomization",
-		"metadata":   map[string]any{"namespace": "team", "name": "app"},
-		"status":     status,
-	}}
-}
-
 // Ready moves on every reconcile, so a healthy Kustomization that deployed weeks
 // ago must not read as deployed just now.
 func TestKustomizationHistoryDatesARevisionByItsFirstReconcile(t *testing.T) {

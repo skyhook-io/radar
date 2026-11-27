@@ -4,17 +4,19 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"helm.sh/helm/v3/pkg/action"
-	"helm.sh/helm/v3/pkg/storage/driver"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes/fake"
-	"k8s.io/client-go/rest"
 	"net/http"
 	"net/http/httptest"
 	"path"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/skyhook-io/radar/internal/k8s"
+	"helm.sh/helm/v3/pkg/action"
+	"helm.sh/helm/v3/pkg/storage/driver"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/rest"
 
 	"helm.sh/helm/v3/pkg/chart"
 	"helm.sh/helm/v3/pkg/release"
@@ -272,16 +274,16 @@ func TestMCPPreviewReportsCompleteObjectChangesAndRedactsValues(t *testing.T) {
 			}
 			before := &release.Release{Namespace: "default", Version: 1, Chart: &chart.Chart{Metadata: &chart.Metadata{Version: "1.0.0"}}, Manifest: prefix + fixture.old, Config: map[string]any{"password": "old-credential"}}
 			after := &release.Release{Namespace: "default", Version: 2, Manifest: prefix + fixture.new, Config: map[string]any{"password": "new-credential"}, Chart: &chart.Chart{Metadata: &chart.Metadata{Version: "1.0.0"}}}
-			result, err := mcpUpgradeResult(before, after, true)
+			result, err := mcpUpgradeResult(k8s.Current(), before, after, true)
 			if err != nil || len(result.Changed) != 1 || result.ParseErrors != 0 || strings.Contains(result.ValuesDiff, "credential") {
 				t.Fatalf("incomplete or unsafe preview: %+v %v", result, err)
 			}
 			after.Manifest += "\n---\n" + targetNamespaceManifest("added") + "\n---\ninvalid: ["
-			result, err = mcpUpgradeResult(before, after, true)
+			result, err = mcpUpgradeResult(k8s.Current(), before, after, true)
 			if err != nil || len(result.Added) != 1 || result.ParseErrors != 1 {
 				t.Fatalf("partial/addition comparison: %+v %v", result, err)
 			}
-			result, err = mcpUpgradeResult(after, before, true)
+			result, err = mcpUpgradeResult(k8s.Current(), after, before, true)
 			if err == nil && len(result.Removed) != 1 {
 				t.Fatalf("removal missing: %+v", result)
 			}
@@ -297,7 +299,7 @@ func TestMCPUpgradePreflightIsNotPartialMutation(t *testing.T) {
 	if !errors.As(err, &preflight) || !strings.Contains(err.Error(), "expected 1") {
 		t.Fatalf("stale refusal not classified: %v", err)
 	}
-	if _, err := getReleaseWith(context.Background(), cfg, "", "default", "demo", nil); err == nil || !strings.Contains(err.Error(), "no usable") {
+	if _, err := getReleaseWith(context.Background(), k8s.Current(), cfg, "", "default", "demo", nil); err == nil || !strings.Contains(err.Error(), "no usable") {
 		t.Fatalf("corrupt release not safely refused: %v", err)
 	}
 }
@@ -365,14 +367,14 @@ items:
 `
 	before := &release.Release{Chart: ch, Version: 1, Namespace: "default", Manifest: old}
 	after := &release.Release{Chart: ch, Version: 2, Namespace: "default", Manifest: next}
-	got, err := mcpUpgradeResult(before, after, true)
+	got, err := mcpUpgradeResult(k8s.Current(), before, after, true)
 	if err != nil || got.ParseErrors != 0 || len(got.Added) != 1 || len(got.Removed) != 1 || len(got.Changed) != 1 {
 		t.Fatalf("list changes lost: %+v %v", got, err)
 	}
 	if got.Added[0].Name != "added" || got.Removed[0].Name != "removed" || got.Changed[0].Name != "changed" {
 		t.Fatalf("wrong list identities: %+v", got)
 	}
-	if refs := parseManifestResources(old, "default"); len(refs) != 2 {
+	if refs := parseManifestResources(k8s.Current(), old, "default"); len(refs) != 2 {
 		t.Fatalf("uninstall preview lost list contents: %v", refs)
 	}
 	for _, malformed := range []string{`kind: ConfigMap`, `apiVersion: v1
@@ -380,7 +382,7 @@ kind: List
 items: broken`, `apiVersion: v1
 kind: List
 items: [42]`} {
-		_, errors := parseManifestResourceObjects(malformed, "default")
+		_, errors := parseManifestResourceObjects(k8s.Current(), malformed, "default")
 		if errors == 0 {
 			t.Fatalf("unidentified document counted complete: %s", malformed)
 		}
@@ -389,7 +391,7 @@ items: [42]`} {
 
 func TestManifestCommentDocumentsAndTypedListIdentity(t *testing.T) {
 	for _, manifest := range []string{"# Source: fixture/templates/disabled.yaml\n# Copyright fixture", "null", "~", "apiVersion: v1\nkind: List\nitems:\n", "apiVersion: v1\nkind: ConfigMapList\nitems: null\n"} {
-		objects, failures := parseManifestResourceObjects(manifest, "default")
+		objects, failures := parseManifestResourceObjects(k8s.Current(), manifest, "default")
 		if len(objects) != 0 || failures != 0 {
 			t.Fatalf("empty document counted incomplete: %q: %v %d", manifest, objects, failures)
 		}
@@ -404,7 +406,7 @@ func TestManifestCommentDocumentsAndTypedListIdentity(t *testing.T) {
 		{"partial version", "  apiVersion: v1\n", 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			objects, failures := parseManifestResourceObjects("apiVersion: v1\nkind: ConfigMapList\nitems:\n- metadata: {name: inherited}\n"+tc.fields, "default")
+			objects, failures := parseManifestResourceObjects(k8s.Current(), "apiVersion: v1\nkind: ConfigMapList\nitems:\n- metadata: {name: inherited}\n"+tc.fields, "default")
 			if failures != tc.wantErrors {
 				t.Fatalf("failures=%d want %d", failures, tc.wantErrors)
 			}
@@ -413,7 +415,7 @@ func TestManifestCommentDocumentsAndTypedListIdentity(t *testing.T) {
 			}
 		})
 	}
-	objects, failures := parseManifestResourceObjects("apiVersion: v1\nkind: List\nitems:\n- metadata: {name: ambiguous}\n", "default")
+	objects, failures := parseManifestResourceObjects(k8s.Current(), "apiVersion: v1\nkind: List\nitems:\n- metadata: {name: ambiguous}\n", "default")
 	if failures != 1 || len(objects) != 0 {
 		t.Fatalf("generic List invented an item kind: %+v %d", objects, failures)
 	}
@@ -431,7 +433,7 @@ func TestMCPPreviewMatchesIdentityAcrossAPIVersions(t *testing.T) {
 		{"namespace", strings.ReplaceAll(manifest, "namespace: default", "namespace: other"), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := mcpUpgradeResult(&release.Release{Chart: ch, Version: 1, Namespace: "default", Manifest: manifest}, &release.Release{Chart: ch, Version: 2, Namespace: "default", Manifest: tc.next}, true)
+			got, err := mcpUpgradeResult(k8s.Current(), &release.Release{Chart: ch, Version: 1, Namespace: "default", Manifest: manifest}, &release.Release{Chart: ch, Version: 2, Namespace: "default", Manifest: tc.next}, true)
 			if err != nil || got.ParseErrors != 0 {
 				t.Fatalf("preview failed: %+v %v", got, err)
 			}

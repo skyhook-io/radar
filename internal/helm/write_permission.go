@@ -15,6 +15,7 @@ import (
 // An empty namespace skips the signed-in user preflight for existing REST callers;
 // targeted operations must validate their namespace before calling.
 func CheckWritePermission(ctx context.Context, namespace string) (int, error) {
+	ctx = k8s.CaptureConnection(ctx)
 	user := pkgauth.UserFromContext(ctx)
 	// Authenticated repository/source management and cache refresh have no target release.
 	if user != nil && namespace == "" {
@@ -36,7 +37,7 @@ func CheckWritePermission(ctx context.Context, namespace string) (int, error) {
 		}
 		return 0, nil
 	}
-	if k8s.GetClient() == nil || k8s.GetConnectionStatus().State == k8s.StateDisconnected {
+	if k8s.ConnectionFrom(ctx).Client() == nil || k8s.GetConnectionStatus().State == k8s.StateDisconnected {
 		return http.StatusServiceUnavailable, fmt.Errorf("couldn't verify Radar's Kubernetes permissions for Helm; restore the cluster connection and try again")
 	}
 	if namespace != "" {

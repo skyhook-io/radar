@@ -184,6 +184,7 @@ export interface CloudConnectCapability {
 
 export interface FeatureCapabilities {
   gitopsActionCapabilities?: boolean
+  ownerAccessGrantReview?: boolean
  helmSourceIdentity?: boolean
   helmInventory?: boolean
   datadogRightsizing?: boolean
@@ -247,6 +248,7 @@ export interface FeatureCapabilities {
   runtimeAdvisoryChecks?: boolean
   runtimeAdvisoryProgress?: boolean
   sealedSecretsController?: boolean // GET /api/sealedsecrets/controller
+  traefikRoutes?: boolean // GET /api/traefik/routes
   cronJobTriggerJobName?: boolean
   sealedSecretsCert?: boolean // GET /api/sealedsecrets/cert
   workflowStop?: boolean // POST /api/workflows/{namespace}/{name}/stop
@@ -1080,6 +1082,8 @@ export interface APIResource {
   definitionName?: string
   featured?: boolean
   verbs: string[]
+  /** kubectl short names from API discovery (e.g. "pdb"). Absent on older Radar. */
+  shortNames?: string[]
   observation?: DynamicResourceObservation
 }
 
@@ -1712,11 +1716,16 @@ export interface TrafficEndpoint {
 }
 
 // Traffic flow between two endpoints
+/** Set when a port was not observed but taken from the destination's Services:
+ *  `service` for their one port, `serviceMultiple` (port 0) for several. */
+export type TrafficPortSource = 'service' | 'serviceMultiple'
+
 export interface TrafficFlow {
   source: TrafficEndpoint
   destination: TrafficEndpoint
   protocol: string // tcp, udp, http, grpc
   port: number
+  portSource?: TrafficPortSource
   l7Protocol?: string // HTTP, gRPC, DNS
   httpMethod?: string
   httpPath?: string
@@ -1780,6 +1789,7 @@ export interface AggregatedFlow {
   destination: TrafficEndpoint
   protocol: string
   port: number
+  portSource?: TrafficPortSource
   flowCount: number
   bytesByProtocol?: Record<string, { bytesSent: number; bytesRecv: number }>
   /** Cross-protocol sums kept for compatibility; display the breakdown when present. */
