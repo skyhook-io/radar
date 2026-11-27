@@ -603,6 +603,21 @@ func TestWaitKeepsWaitingPastARetryableRefusal(t *testing.T) {
 	}
 }
 
+// A quota refusal whose quota text runs past the shown length is still a
+// quota refusal: the whole message is classified, only the shown one cut.
+func TestLongQuotaRefusalIsNotFinal(t *testing.T) {
+	long := &corev1.Event{
+		ObjectMeta:     metav1.ObjectMeta{Name: "radar-probe-abc.3", Namespace: "shop"},
+		InvolvedObject: corev1.ObjectReference{Kind: "Job", Name: "radar-probe-abc", Namespace: "shop"},
+		Reason:         "FailedCreate",
+		Message:        `Error creating: pods "radar-probe-abc-z" is forbidden: ` + strings.Repeat("x", 320) + ` exceeded quota: compute`,
+	}
+	msg, final := podCreationRefused(context.Background(), fake.NewClientset(long), "shop", probeJobRef{name: "radar-probe-abc"})
+	if final || msg == "" || len(msg) > 310 {
+		t.Fatalf("final %v, msg %d chars", final, len(msg))
+	}
+}
+
 func TestPolicyDenial(t *testing.T) {
 	for msg, want := range map[string]bool{
 		`pods "p" is forbidden: ValidatingAdmissionPolicy 'x' with binding 'y' denied request: no`: true,

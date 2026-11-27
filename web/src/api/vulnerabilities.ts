@@ -544,12 +544,16 @@ export function fetchVulnerabilityReachabilityPlan(w: VulnerabilityWorkloadRef, 
   return fetchJSON<VulnerabilityReachability>(reachabilityQuery(w, routes, true))
 }
 
-/** Runs the probe: creates up to maxProbes short-lived probe Pods in the workload's namespace. */
-export async function runVulnerabilityReachability(w: VulnerabilityWorkloadRef, routes: VulnerabilityRoute[]): Promise<VulnerabilityReachability> {
+/**
+ * Runs the probe: creates up to maxProbes short-lived probe Pods in the
+ * workload's namespace. clusterKey is the cluster the user confirmed; Radar
+ * refuses the run (409) if it is now connected to another.
+ */
+export async function runVulnerabilityReachability(w: VulnerabilityWorkloadRef, routes: VulnerabilityRoute[], clusterKey: string | undefined): Promise<VulnerabilityReachability> {
   const response = await apiFetch(`${getApiBase()}${reachabilityPath(w)}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ group: w.group || undefined, routes }),
+    body: JSON.stringify({ group: w.group || undefined, routes, clusterKey: clusterKey ?? '' }),
   })
   if (!response.ok) {
     const { body, unknownRoute } = await readErrorResponse(response)

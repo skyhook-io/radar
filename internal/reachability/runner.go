@@ -12,6 +12,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -213,9 +214,11 @@ func Run(ctx context.Context, client kubernetes.Interface, opts RunOptions) (res
 	job := buildProbeJob(opts)
 	created, err := client.BatchV1().Jobs(opts.Namespace).Create(runCtx, job, metav1.CreateOptions{})
 	if err != nil {
-		// A Create cut short by the caller going away may still have been
-		// stored; its name is Radar's own, so delete it in case.
-		if runCtx.Err() != nil {
+		// A Create cut short (the caller went away, the connection dropped)
+		// may still have been stored, and only an answer from the apiserver
+		// says it wasn't. The name is this run's own, so delete it in case.
+		var status apierrors.APIStatus
+		if runCtx.Err() != nil || !errors.As(err, &status) {
 			deleteProbeJob(client, opts.Namespace, job.Name)
 		}
 		return nil, fallbackCommand, fmt.Errorf("couldn't create the probe Job: %w", err)
@@ -473,8 +476,8 @@ func podCreationRefused(ctx context.Context, client kubernetes.Interface, namesp
 	if latest == nil {
 		return "", false
 	}
-	msg = truncate(strings.TrimPrefix(latest.Message, "Error creating: "), 300)
-	return msg, policyDenial(msg)
+	full := strings.TrimPrefix(latest.Message, "Error creating: ")
+	return truncate(full, 300), policyDenial(full)
 }
 
 // policyDenial is whether a pod creation refusal is a policy's verdict on

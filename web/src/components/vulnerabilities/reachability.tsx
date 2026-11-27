@@ -94,7 +94,9 @@ export const REACHABILITY = {
   noAnswer: 'gave no answer from inside the cluster',
   notRun: 'not checked',
   scope: (namespace: string) =>
-    `A probe Pod in ${namespace} called the Service behind each route. This proves the Service answers inside the cluster. The load balancer, node port, Ingress controller and access from the internet were not tested.`,
+    `A probe Pod in ${namespace} called the Service behind each route it checked. This proves the Service answers inside the cluster. The load balancer, node port, Ingress controller and access from the internet were not tested.`,
+  /** Under a run where no probe Pod ran. */
+  nothingRan: 'No probe Pod ran, so nothing was tested.',
 }
 
 const OUTCOME: Record<VulnerabilityReachabilityOutcome, { words: string; icon: typeof CheckCircle2; tone: string }> = {
@@ -108,8 +110,22 @@ function allChecks(r: VulnerabilityReachability): VulnerabilityReachabilityCheck
   return (r.routes ?? []).flatMap((route) => route.checks)
 }
 
+/** What a finished run tested, or that it tested nothing. */
+export function scopeOf(r: VulnerabilityReachability): string {
+  return allChecks(r).some((c) => c.outcome && c.outcome !== 'not_run') ? REACHABILITY.scope(r.namespace) : REACHABILITY.nothingRan
+}
+
 /** One line for a whole run, for a cell or a workload link. */
 export function reachabilitySummary(r: VulnerabilityReachability): { text: string; outcome: VulnerabilityReachabilityOutcome } {
+  const base = checksSummary(r)
+  // A route Radar couldn't probe (a TCPRoute, no Service port behind it)
+  // keeps an all-clear from reading as the whole workload.
+  const untested = (r.routes ?? []).filter((route) => route.checks.length === 0).length
+  if (untested === 0 || base.outcome === 'not_run') return base
+  return { text: `${base.text}, ${untested} route${untested === 1 ? '' : 's'} not checked`, outcome: base.outcome === 'answered' ? 'degraded' : base.outcome }
+}
+
+function checksSummary(r: VulnerabilityReachability): { text: string; outcome: VulnerabilityReachabilityOutcome } {
   const checks = allChecks(r)
   const ran = checks.filter((c) => c.outcome && c.outcome !== 'not_run')
   const answered = ran.filter((c) => c.outcome === 'answered')
@@ -142,7 +158,7 @@ export function ReachabilityBadge({ workload }: { workload: VulnerabilityWorkloa
   const o = OUTCOME[s.outcome]
   const Icon = o.icon
   return (
-    <WithTooltip tip={`${s.text}, checked at ${timeOf(entry.result.checkedAt)}. ${REACHABILITY.scope(entry.result.namespace)}`}>
+    <WithTooltip tip={`${s.text}, checked at ${timeOf(entry.result.checkedAt)}. ${scopeOf(entry.result)}`}>
       <span className={clsx('inline-flex min-w-0 items-center gap-1 text-xs', o.tone)}>
         <Icon className="h-3 w-3 shrink-0" aria-hidden />
         <span className="truncate">{s.text}</span>
@@ -178,17 +194,19 @@ export function ReachabilityCheck({ workload, routes, routesTotal }: {
   }, [plan])
   const running = entry?.state === 'running'
 
-  const run = useCallback(async () => {
+  // clusterKey is the cluster the user confirmed (or chose not to be asked
+  // about again): the run is refused if Radar has switched since.
+  const run = useCallback(async (clusterKey: string | undefined) => {
     setEntry(key, { state: 'running' })
     try {
-      setEntry(key, { state: 'done', result: await runVulnerabilityReachability(workload, routes) })
+      setEntry(key, { state: 'done', result: await runVulnerabilityReachability(workload, routes, clusterKey) })
     } catch (e) {
       setEntry(key, { state: 'failed', error: e instanceof Error ? e.message : String(e) })
     }
   }, [key, workload, routes])
 
   const start = useCallback(async () => {
-    if (inClusterConsentGiven(cap?.clusterKey)) return run()
+    if (inClusterConsentGiven(cap?.clusterKey)) return run(cap?.clusterKey)
     setPlan({ state: 'loading' })
     try {
       setPlan({ state: 'ready', plan: await fetchVulnerabilityReachabilityPlan(workload, routes) })
@@ -247,7 +265,7 @@ export function ReachabilityCheck({ workload, routes, routesTotal }: {
           requests={requests}
           maxProbes={plan.plan.maxProbes}
           onClose={() => setPlan(undefined)}
-          onConfirm={() => { setPlan(undefined); run() }}
+          onConfirm={() => { const confirmed = plan.plan.clusterKey; setPlan(undefined); run(confirmed) }}
         />
       )}
     </div>
@@ -265,7 +283,7 @@ function ReachabilityResult({ result }: { result: VulnerabilityReachability }) {
         </div>
       ))}
       <span className="text-theme-text-tertiary">
-        {timeOf(result.checkedAt) && `Checked at ${timeOf(result.checkedAt)}. `}{REACHABILITY.scope(result.namespace)}
+        {timeOf(result.checkedAt) && `Checked at ${timeOf(result.checkedAt)}. `}{scopeOf(result)}
       </span>
     </div>
   )
