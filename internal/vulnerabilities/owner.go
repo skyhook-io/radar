@@ -220,7 +220,9 @@ func (r *ownerReader) manager(ref resourceid.Ref, labels map[string]string) *Own
 }
 
 // argoSources are an Application's repositories: its hydrator's dry source
-// (where people edit) when it has one, else its source or sources.
+// (where people edit) when it has one, else its sources, else its source,
+// the precedence Argo CD applies when both are set. chart is the first
+// source's that names one.
 func argoSources(app *unstructured.Unstructured) (sources []OwnerSource, chart string) {
 	add := func(raw any) {
 		src, _ := raw.(map[string]any)
@@ -237,14 +239,16 @@ func argoSources(app *unstructured.Unstructured) (sources []OwnerSource, chart s
 		add(dry)
 		return sources, chart
 	}
+	if list, _, _ := unstructured.NestedFieldNoCopy(app.Object, "spec", "sources"); list != nil {
+		if items, _ := list.([]any); len(items) > 0 {
+			for _, src := range items {
+				add(src)
+			}
+			return sources, chart
+		}
+	}
 	if src, _, _ := unstructured.NestedFieldNoCopy(app.Object, "spec", "source"); src != nil {
 		add(src)
-	}
-	if list, _, _ := unstructured.NestedFieldNoCopy(app.Object, "spec", "sources"); list != nil {
-		items, _ := list.([]any)
-		for _, src := range items {
-			add(src)
-		}
 	}
 	return sources, chart
 }
@@ -308,11 +312,19 @@ func fluxSourceURL(src *unstructured.Unstructured) string {
 // query, fragment and any other user the same way.
 func safeRepo(repo string) string {
 	if !strings.Contains(repo, "://") {
+		// The user part ends at the last @ before the path, whatever
+		// characters it holds, so it goes before the query is cut.
+		head, path, hasPath := strings.Cut(repo, "/")
+		if i := strings.LastIndex(head, "@"); i >= 0 && head[:i] != "git" {
+			head = head[i+1:]
+		}
+		if hasPath {
+			repo = head + "/" + path
+		} else {
+			repo = head
+		}
 		repo, _, _ = strings.Cut(repo, "#")
 		repo, _, _ = strings.Cut(repo, "?")
-		if i := strings.LastIndex(repo, "@"); i >= 0 && repo[:i] != "git" {
-			repo = repo[i+1:]
-		}
 		return repo
 	}
 	if u, err := url.Parse(repo); err == nil && u.Scheme == "ssh" && u.User != nil && u.User.Username() == "git" {

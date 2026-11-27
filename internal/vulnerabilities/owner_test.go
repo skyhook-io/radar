@@ -242,6 +242,7 @@ func TestSafeRepo(t *testing.T) {
 		"git@github.com:a/b.git?private_token=x#y":  "git@github.com:a/b.git",
 		"key:secret@minio.local:9000/bucket":        "minio.local:9000/bucket",
 		"minio.local:9000/bucket":                   "minio.local:9000/bucket",
+		"us?er:pa#ss@github.com:a/b.git":            "github.com:a/b.git",
 	} {
 		if got := safeRepo(in); got != want {
 			t.Errorf("safeRepo(%q) = %q, want %q", in, got, want)
@@ -294,5 +295,18 @@ func TestPruneOwnersKeepsNamedWorkloads(t *testing.T) {
 	resp.PruneOwners()
 	if len(resp.Owners) != 1 || resp.Owners[0].Name != "a" {
 		t.Fatalf("owners = %+v", resp.Owners)
+	}
+}
+
+// With both spec.source and spec.sources set, Argo CD deploys sources, so
+// the owner names those, not the inactive source.
+func TestArgoSourcesPrefersSources(t *testing.T) {
+	app := ownerObject("argoproj.io/v1alpha1", "Application", "argocd", "shop", map[string]any{
+		"source":  map[string]any{"repoURL": "https://github.com/acme/old.git", "path": "old"},
+		"sources": []any{map[string]any{"repoURL": "https://charts.example.com", "chart": "shop"}, map[string]any{"repoURL": "https://github.com/acme/deploy.git", "path": "apps"}},
+	}, nil)
+	sources, chart := argoSources(app)
+	if want := []OwnerSource{{Repo: "https://charts.example.com"}, {Repo: "https://github.com/acme/deploy.git", Path: "apps"}}; !slices.Equal(sources, want) || chart != "shop" {
+		t.Errorf("argoSources = %+v, %q; want %+v, shop", sources, chart, want)
 	}
 }
