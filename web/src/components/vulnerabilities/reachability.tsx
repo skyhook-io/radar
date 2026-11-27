@@ -7,6 +7,7 @@ import { WithTooltip } from '../ui/Tooltip'
 import { getApiBase } from '../../api/config'
 import {
   fetchVulnerabilityReachabilityPlan,
+  reachabilityRequestKeys,
   runVulnerabilityReachability,
   useVulnerabilityReachabilityCapability,
   type VulnerabilityReachability,
@@ -203,10 +204,10 @@ export function ReachabilityCheck({ workload, routes, routesTotal }: {
 
   // clusterKey is the cluster the user confirmed (or chose not to be asked
   // about again): the run is refused if Radar has switched since.
-  const run = useCallback(async (clusterKey: string | undefined) => {
+  const run = useCallback(async (clusterKey: string | undefined, requests?: string[]) => {
     setEntry(key, { state: 'running' })
     try {
-      const result = await runVulnerabilityReachability(workload, routes, clusterKey)
+      const result = await runVulnerabilityReachability(workload, routes, clusterKey, requests)
       // The routes this check left out (past the ones the page lists) stay
       // with the result, so its summary never reads as the whole workload.
       setEntry(key, { state: 'done', result: { ...result, routesTotal: Math.max(routesTotal ?? routes.length, routes.length) } })
@@ -275,7 +276,7 @@ export function ReachabilityCheck({ workload, routes, routesTotal }: {
           requests={requests}
           maxProbes={plan.plan.maxProbes}
           onClose={() => setPlan(undefined)}
-          onConfirm={() => { const confirmed = plan.plan.clusterKey; setPlan(undefined); run(confirmed) }}
+          onConfirm={() => { const confirmed = plan.plan; setPlan(undefined); run(confirmed.clusterKey, reachabilityRequestKeys(confirmed)) }}
         />
       )}
     </div>

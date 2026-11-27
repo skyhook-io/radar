@@ -547,15 +547,31 @@ export function fetchVulnerabilityReachabilityPlan(w: VulnerabilityWorkloadRef, 
 }
 
 /**
+ * The requests a plan would send, keyed as the server keys them: a run sends
+ * the ones the user confirmed, and is refused (409) if the routes changed.
+ */
+export function reachabilityRequestKeys(plan: VulnerabilityReachability): string[] {
+  const keys = new Set<string>()
+  for (const route of plan.routes ?? []) {
+    for (const c of route.checks) {
+      const r = c.inClusterRequest
+      if (c.benign || !r) continue
+      keys.add([c.route, c.target ?? '', r.protocol ?? '', r.scheme ?? '', r.host ?? '', r.path ?? ''].join('\x1f'))
+    }
+  }
+  return [...keys]
+}
+
+/**
  * Runs the probe: creates up to maxProbes short-lived probe Pods in the
  * workload's namespace. clusterKey is the cluster the user confirmed; Radar
  * refuses the run (409) if it is now connected to another.
  */
-export async function runVulnerabilityReachability(w: VulnerabilityWorkloadRef, routes: VulnerabilityRoute[], clusterKey: string | undefined): Promise<VulnerabilityReachability> {
+export async function runVulnerabilityReachability(w: VulnerabilityWorkloadRef, routes: VulnerabilityRoute[], clusterKey: string | undefined, requests?: string[]): Promise<VulnerabilityReachability> {
   const response = await apiFetch(`${getApiBase()}${reachabilityPath(w)}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ group: w.group || undefined, routes, clusterKey: clusterKey ?? '' }),
+    body: JSON.stringify({ group: w.group || undefined, routes, clusterKey: clusterKey ?? '', requests }),
   })
   if (!response.ok) {
     const { body, unknownRoute } = await readErrorResponse(response)

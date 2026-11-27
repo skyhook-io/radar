@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { REACHABILITY, reachabilitySummary, scopeOf } from './reachability'
-import type { VulnerabilityReachability, VulnerabilityReachabilityOutcome } from '../../api/vulnerabilities'
+import { reachabilityRequestKeys, type VulnerabilityReachability, type VulnerabilityReachabilityOutcome } from '../../api/vulnerabilities'
 
 function run(...outcomes: VulnerabilityReachabilityOutcome[]): VulnerabilityReachability {
   return {
@@ -51,5 +51,21 @@ describe('reachabilitySummary', () => {
     expect(scope).toContain('inside the cluster')
     expect(scope).toContain('access from the internet were not tested')
     expect(scope).not.toMatch(/[—–]/)
+  })
+})
+
+describe('reachabilityRequestKeys', () => {
+  it('keys the confirmed requests as the server does', () => {
+    const req = { protocol: 'http', scheme: 'http', path: '/' }
+    const plan: VulnerabilityReachability = {
+      allowed: true, namespace: 'prio', maxProbes: 5,
+      routes: [{ route: { via: 'LoadBalancer', namespace: 'prio', name: 'web' }, checks: [
+        { route: 'a', target: 'web:80', inClusterRequest: req },
+        { route: 'a', target: 'web:80', inClusterRequest: req },
+        { route: 'c', target: 'idle:80', benign: true, inClusterRequest: req },
+        { route: 'd' },
+      ] }],
+    }
+    expect(reachabilityRequestKeys(plan)).toEqual(['a\x1fweb:80\x1fhttp\x1fhttp\x1f\x1f/'])
   })
 })
