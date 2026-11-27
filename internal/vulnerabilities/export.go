@@ -98,7 +98,6 @@ func (j *rollup) imageMetas() map[string]imageMeta {
 	return out
 }
 
-// oldestScan is the oldest of the reports merged for the image.
 // imageTail is the image view's last cells: OS end of life and scanner.
 func (m imageMeta) imageTail() []string {
 	return []string{m.osEOL, m.scanner.Name, m.scanner.Version}
@@ -130,6 +129,7 @@ func cvePublished(c CVE) time.Time {
 	return *c.PublishedAt
 }
 
+// oldestScan is the oldest of the reports merged for the image.
 func (a *imageAgg) oldestScan() time.Time {
 	t := a.report.scannedAt
 	for _, r := range a.others {
