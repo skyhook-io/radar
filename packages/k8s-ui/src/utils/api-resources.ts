@@ -369,6 +369,7 @@ export function getKindPlural(resource: APIResource): string {
   return resource.name
 }
 
-export function resourceSearchAliases(resource: Pick<APIResource, 'group' | 'kind'>): string[] {
-  return resource.group === 'apiextensions.k8s.io' && resource.kind === 'CustomResourceDefinition' ? ['crd', 'crds'] : []
+export function resourceSearchAliases(resource: Pick<APIResource, 'group' | 'kind'> & Partial<Pick<APIResource, 'shortNames'>>): string[] {
+  const aliases = (resource.shortNames ?? []).map(name => name.toLowerCase())
+  return resource.group === 'apiextensions.k8s.io' && resource.kind === 'CustomResourceDefinition' ? ['crd', 'crds', ...aliases] : aliases
 }

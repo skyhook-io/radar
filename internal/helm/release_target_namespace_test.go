@@ -22,7 +22,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes/fake"
-	"k8s.io/client-go/rest"
 )
 
 func targetNamespaceManifest(names ...string) string {
@@ -119,7 +118,7 @@ func targetNamespaceActionConfig(t *testing.T) (*action.Configuration, *[]string
 		writeTestJSON(t, w, obj)
 	}))
 	t.Cleanup(srv.Close)
-	getter := newRESTConfigGetter(&rest.Config{Host: srv.URL}, "store", nil)
+	getter := boundWriteGetterAfterSwitch(t, srv.URL, "store")
 	mapper := meta.NewDefaultRESTMapper([]schema.GroupVersion{{Version: "v1"}})
 	mapper.Add(schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"}, meta.RESTScopeNamespace)
 	getter.mapper = mapper

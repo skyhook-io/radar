@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/traffic"
 )
 
@@ -126,5 +127,75 @@ func TestTrafficFlowsPayloadByPod(t *testing.T) {
 	}
 	if n := len(trafficFlowsPayload(&traffic.FlowsResponse{}, flows, true)["aggregated"].([]traffic.AggregatedFlow)); n != 2 {
 		t.Errorf("by pod: %d edges, want one per pod", n)
+	}
+}
+
+func TestVisibleFlowsWithholdsServicePortsFromUnreadableNamespaces(t *testing.T) {
+	env := newAuthTestServer(t)
+	env.srv.permCache.Set("alice", nil, &auth.UserPermissions{AllowedNamespaces: []string{"a"}})
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r = r.WithContext(auth.ContextWithUser(r.Context(), &auth.User{Username: "alice"}))
+	pod := func(ns, name string) traffic.Endpoint {
+		return traffic.Endpoint{Namespace: ns, Name: name, Kind: traffic.EndpointKindWorkload}
+	}
+	flows := []traffic.Flow{
+		// Visible through its source; the port was read from b's Services.
+		{Source: pod("a", "web"), Destination: pod("b", "db"), Port: 5432, PortSource: traffic.PortSourceService},
+		{Source: pod("a", "web"), Destination: pod("b", "cache"), PortSource: traffic.PortSourceServiceMultiple},
+		{Source: pod("a", "web"), Destination: pod("a", "db"), Port: 5432, PortSource: traffic.PortSourceService},
+		{Source: pod("a", "web"), Destination: pod("b", "api"), Port: 8080},
+	}
+	got := env.srv.visibleFlows(r, flows, []string{"a"}, traffic.FlowOptions{})
+	want := []struct {
+		port   int
+		source string
+	}{{0, ""}, {0, ""}, {5432, traffic.PortSourceService}, {8080, ""}}
+	for i, w := range want {
+		if got[i].Port != w.port || got[i].PortSource != w.source {
+			t.Errorf("flow %d (%s): got %d/%q, want %d/%q", i, got[i].Destination.Name, got[i].Port, got[i].PortSource, w.port, w.source)
+		}
+	}
+}
+
+// A selection carries the port the caller was shown. Matched against the
+// withheld port, the edge finds its records; matched against the Service's port,
+// it would find none, and a guessed port would confirm the hidden one.
+func TestVisibleFlowsMatchesTheWithheldPort(t *testing.T) {
+	env := newAuthTestServer(t)
+	env.srv.permCache.Set("alice", nil, &auth.UserPermissions{AllowedNamespaces: []string{"a"}})
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r = r.WithContext(auth.ContextWithUser(r.Context(), &auth.User{Username: "alice"}))
+	flows := []traffic.Flow{{
+		Source:      traffic.Endpoint{Namespace: "a", Name: "web", Kind: traffic.EndpointKindWorkload},
+		Destination: traffic.Endpoint{Namespace: "b", Name: "db", Kind: traffic.EndpointKindWorkload},
+		Port:        5432, PortSource: traffic.PortSourceService,
+	}}
+	selecting := func(port int) traffic.FlowOptions {
+		return traffic.FlowOptions{Match: &traffic.FlowMatch{Pairs: []traffic.EndpointPair{{
+			Source:      traffic.EndpointRef{Namespace: "a", Name: "web", Kind: traffic.EndpointKindWorkload},
+			Destination: traffic.EndpointRef{Namespace: "b", Name: "db", Kind: traffic.EndpointKindWorkload},
+			Port:        port,
+		}}}}
+	}
+	if got := env.srv.visibleFlows(r, flows, []string{"a"}, selecting(0)); len(got) != 1 || got[0].Port != 0 {
+		t.Errorf("selecting the edge as shown (port 0): %+v", got)
+	}
+	if got := env.srv.visibleFlows(r, flows, []string{"a"}, selecting(5432)); len(got) != 0 {
+		t.Errorf("selecting the withheld port matched: %+v", got)
+	}
+}
+
+// The namespaces a request names are a view filter, not the caller's access: a
+// caller who can read b keeps the port of an edge into b while viewing a.
+func TestVisibleFlowsKeepsServicePortsTheCallerCanRead(t *testing.T) {
+	s := &Server{}
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	flows := []traffic.Flow{{
+		Source:      traffic.Endpoint{Namespace: "a", Name: "web", Kind: traffic.EndpointKindWorkload},
+		Destination: traffic.Endpoint{Namespace: "b", Name: "db", Kind: traffic.EndpointKindWorkload},
+		Port:        5432, PortSource: traffic.PortSourceService,
+	}}
+	if got := s.visibleFlows(r, flows, []string{"a"}, traffic.FlowOptions{}); got[0].Port != 5432 {
+		t.Errorf("viewing namespace a withheld a port the caller can read: %+v", got[0])
 	}
 }

@@ -103,13 +103,13 @@ func setupAuthFakeProm(t *testing.T) *authFakeProm {
 	t.Helper()
 	f := &authFakeProm{}
 	srv := httptest.NewServer(f)
-	Initialize(nil, nil, "auth-test")
+	Initialize(nil, nil, "auth-test", nil)
 	SetManualURL(srv.URL)
 	seedScopeCache(t)
 	t.Cleanup(func() {
 		srv.Close()
 		Reset()
-		Initialize(nil, nil, "")
+		Initialize(nil, nil, "", nil)
 	})
 	return f
 }

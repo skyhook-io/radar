@@ -42,6 +42,8 @@ import { LonghornVolumeRenderer } from '../components/resources/renderers/Longho
 import { FluxHelmReleaseRenderer } from '../components/resources/renderers/FluxHelmReleaseRenderer'
 import { SecretProviderClassRenderer } from '../components/resources/renderers/SecretProviderClassRenderer'
 import { SealedSecretRenderer } from '../components/resources/renderers/SealedSecretRenderer'
+import { TraefikIngressRouteRenderer } from '../components/resources/renderers/TraefikIngressRouteRenderer'
+import { TraefikMiddlewareRenderer } from '../components/resources/renderers/TraefikMiddlewareRenderer'
 import { K3sHelmChartRenderer } from '../components/resources/renderers/K3sHelmChartRenderer'
 import { UpgradePlanRenderer } from '../components/resources/renderers/UpgradePlanRenderer'
 import {
@@ -56,6 +58,7 @@ export const resourceHosts: readonly ResourceHost[] = [
   { id: 'gateway-api', renderers: { HTTPRouteRenderer } },
   { id: 'rbac', renderers: { ServiceAccountRenderer, RoleRenderer, RoleBindingRenderer, NamespaceRenderer } },
   { id: 'sealed-secrets', renderers: { SealedSecretRenderer } },
+  { id: 'traefik', renderers: { TraefikIngressRouteRenderer, TraefikMiddlewareRenderer } },
   { id: 'k3s-helm', renderers: { K3sHelmChartRenderer } },
   { id: 'system-upgrade', renderers: { UpgradePlanRenderer } },
   { id: 'batch-and-admission', renderers: { JobRenderer, JobSetRenderer, KueueWorkloadRenderer } },

@@ -8,7 +8,7 @@ import { SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-colors'
 import { Tooltip } from '../ui/Tooltip'
 import type { TrafficGraphSelection } from './TrafficGraph'
 import {
-  dataByProtocol, connectionRows, displayVolume, edgesOnPort, flowDrops, flowErrors, formatRate, graphEndpointId, hasStatusData, isExternalKind,
+  dataByProtocol, connectionRows, displayVolume, edgesOnPort, flowDrops, flowErrors, formatRate, graphEndpointId, hasStatusData, isExternalKind, portLabel,
   type GraphFlow, type TrafficFocus,
 } from './trafficFilters'
 
@@ -129,7 +129,7 @@ export function TrafficConnectionsTable({ flows, isRateBased, selection, onSelec
                 : <ArrowRight className="h-3 w-3 text-theme-text-tertiary" />}
               {endpoint(flow.destination)}
               <span className="truncate text-theme-text-secondary tabular-nums">
-                {flow.port > 0 ? flow.port : '—'}
+                {portLabel(flow.port, flow.portSource) ?? '—'}
                 {(flow.l7Protocol || flow.protocol) && (
                   <span className="ml-1 text-theme-text-tertiary">{flow.l7Protocol || flow.protocol.toUpperCase()}</span>
                 )}

@@ -60,12 +60,12 @@ func TestHelmIssueStreamDoesNotLogCallerLeavingAsFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	previousClient := k8s.SetTestClient(client)
-	helm.ResetClient()
-	if err := helm.InitializeWithRESTConfig(config); err != nil {
-		t.Fatal(err)
-	}
+	helm.ResetTestClient()
+	previousConfig := k8s.SetTestConfig(config)
+	t.Cleanup(func() { k8s.SetTestConfig(previousConfig) })
+	helm.Initialize()
 	t.Cleanup(func() {
-		helm.ResetClient()
+		helm.ResetTestClient()
 		k8s.SetTestClient(previousClient)
 	})
 
@@ -79,7 +79,7 @@ func TestHelmIssueStreamDoesNotLogCallerLeavingAsFailure(t *testing.T) {
 	time.AfterFunc(200*time.Millisecond, cancel)
 	safety := time.AfterFunc(3*time.Second, func() { close(release) })
 	defer safety.Stop()
-	nativeHelmIssuesForContext(ctx, []string{"shop"}, issues.Filters{})
+	nativeHelmIssuesForContext(ctx, "shop", issues.Filters{})
 
 	if strings.Contains(logs.String(), "Failed to list Helm releases") {
 		t.Errorf("a caller leaving was logged as a Helm failure:\n%s", logs.String())

@@ -100,3 +100,4 @@ export {
   type WorkspaceProblem,
   type ProblemOrigin,
 } from './components/problems'
+export type { TraefikRouteFacts, TraefikRefFact, TraefikBackendFact, TraefikTLSFact, TraefikMiddlewareUse, TraefikRoutesResponse, TraefikRouteProblem } from './components/resources/traefik-route-facts'

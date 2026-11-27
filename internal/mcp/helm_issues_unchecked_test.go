@@ -14,6 +14,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
 
@@ -87,11 +88,11 @@ func TestIssuesToolSaysWhenHelmReleasesCouldNotBeChecked(t *testing.T) {
 				_, _ = io.WriteString(w, tc.body)
 			}))
 			t.Cleanup(storage.Close)
-			helm.ResetClient()
-			if err := helm.InitializeWithRESTConfig(&rest.Config{Host: storage.URL}); err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(helm.ResetClient)
+			helm.ResetTestClient()
+			previousConfig := k8s.SetTestConfig(&rest.Config{Host: storage.URL})
+			t.Cleanup(func() { k8s.SetTestConfig(previousConfig) })
+			helm.Initialize()
+			t.Cleanup(helm.ResetTestClient)
 
 			result, _, err := handleIssuesTool(context.Background(), nil, issuesInput{Namespace: "shop"})
 			if err != nil {
@@ -116,14 +117,14 @@ func TestIssuesToolSaysWhenHelmReleasesCouldNotBeChecked(t *testing.T) {
 // A caller that already left gets no answer, so its read cut short is not
 // a failed check.
 func TestNativeHelmIssuesDoNotSayUncheckedWhenCallerLeft(t *testing.T) {
-	helm.ResetClient()
-	if err := helm.InitializeWithRESTConfig(&rest.Config{Host: "http://127.0.0.1:1"}); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(helm.ResetClient)
+	helm.ResetTestClient()
+	previousConfig := k8s.SetTestConfig(&rest.Config{Host: "http://127.0.0.1:1"})
+	t.Cleanup(func() { k8s.SetTestConfig(previousConfig) })
+	helm.Initialize()
+	t.Cleanup(helm.ResetTestClient)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, _, unchecked := nativeHelmIssuesForContext(ctx, []string{"shop"}, issues.Filters{}); unchecked {
+	if _, _, unchecked := nativeHelmIssuesForContext(ctx, "shop", issues.Filters{}); unchecked {
 		t.Error("a caller that left was told Helm releases couldn't be checked")
 	}
 }
@@ -171,11 +172,14 @@ func TestDashboardHelmSeparatesDeniedFromFailed(t *testing.T) {
 				_, _ = io.WriteString(w, tc.body)
 			}))
 			t.Cleanup(storage.Close)
-			helm.ResetClient()
-			if err := helm.InitializeWithRESTConfig(&rest.Config{Host: storage.URL}); err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(helm.ResetClient)
+			helm.ResetTestClient()
+			config := &rest.Config{Host: storage.URL}
+			previousClient := k8s.SetTestClient(kubernetes.NewForConfigOrDie(config))
+			t.Cleanup(func() { k8s.SetTestClient(previousClient) })
+			previousConfig := k8s.SetTestConfig(config)
+			t.Cleanup(func() { k8s.SetTestConfig(previousConfig) })
+			helm.Initialize()
+			t.Cleanup(helm.ResetTestClient)
 
 			d := buildDashboard(context.Background(), k8s.GetResourceCache(), "shop", false, false)
 			if !d.HelmReleases.Unavailable {

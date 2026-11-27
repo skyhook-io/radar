@@ -32,6 +32,7 @@ export interface RadarFeatureSpec {
 export const RADAR_FEATURES = {
   datadogRightsizing: { label: 'Datadog-backed rightsizing', flag: 'datadogRightsizing', flagShippedWithEndpoint: true, requireAffirmativeSupport: true },
   datadogAgentPresence: { label: 'Datadog Agent setup hints', flag: 'datadogAgentPresence', flagShippedWithEndpoint: true },
+  ownerAccessGrantReview: { label: 'Cloud Owner permission checks', flag: 'ownerAccessGrantReview', flagShippedWithEndpoint: true },
   gitopsActionCapabilities: { label: 'GitOps action permission checks', flag: 'gitopsActionCapabilities', flagShippedWithEndpoint: true },
   openobserveCollectorPresence: { label: 'OpenObserve collector setup hints', flag: 'openobserveCollectorPresence', flagShippedWithEndpoint: true },
   openobserveLocalSetup: { label: 'OpenObserve connections in Settings', flag: 'openobserveLocalSetup', flagShippedWithEndpoint: true },
@@ -58,6 +59,7 @@ export const RADAR_FEATURES = {
   substrateHealthMetrics: { label: 'Agent Substrate charts', flag: 'substrateHealthMetrics', flagShippedWithEndpoint: true, requireAffirmativeSupport: true },
   cnpgWorkspace: { label: 'CloudNativePG views', flag: 'cnpgWorkspace', flagShippedWithEndpoint: true },
   sealedSecretsController: { label: 'Sealed Secrets controller status', flag: 'sealedSecretsController', flagShippedWithEndpoint: true },
+  traefikRoutes: { label: 'Traefik routes', flag: 'traefikRoutes', flagShippedWithEndpoint: true },
   sealedSecretsCert: { label: 'Sealed Secrets sealing certificate', flag: 'sealedSecretsCert', flagShippedWithEndpoint: true },
   workflowStop: { label: 'Argo Workflow stop actions', flag: 'workflowStop', flagShippedWithEndpoint: true },
   workflowTemplateSubmit: { label: 'Argo WorkflowTemplate submissions', flag: 'workflowTemplateSubmit', flagShippedWithEndpoint: true },

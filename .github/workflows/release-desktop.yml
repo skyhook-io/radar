@@ -28,7 +28,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version: '1.26'
+          go-version: '1.27'
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -81,8 +81,12 @@ jobs:
       - name: Build macOS .app (universal)
         run: cd cmd/desktop && wails build -platform darwin/universal -ldflags "-X main.version=${GITHUB_REF_NAME#v}"
 
-      - name: Update bundle identifier
-        run: plutil -replace CFBundleIdentifier -string "io.skyhook.radar" build/bin/radar-desktop.app/Contents/Info.plist
+      # Go 1.27 binaries need macOS 13; declaring it lets macOS refuse the app
+      # with a clear message instead of a crash at launch.
+      - name: Update bundle identifier and minimum macOS
+        run: |
+          plutil -replace CFBundleIdentifier -string "io.skyhook.radar" build/bin/radar-desktop.app/Contents/Info.plist
+          plutil -replace LSMinimumSystemVersion -string "13.0" build/bin/radar-desktop.app/Contents/Info.plist
 
       - name: Codesign with Developer ID
         run: |
@@ -161,7 +165,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version: '1.26'
+          go-version: '1.27'
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -267,7 +271,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version: '1.26'
+          go-version: '1.27'
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -494,6 +498,8 @@ jobs:
             name "Radar"
             desc "Kubernetes visibility — topology, traffic, and Helm management"
             homepage "https://github.com/skyhook-io/radar"
+
+            depends_on macos: :ventura
 
             app "Radar.app"
 

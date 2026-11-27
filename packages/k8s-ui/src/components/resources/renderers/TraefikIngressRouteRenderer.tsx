@@ -1,13 +1,21 @@
 import { Globe, Route, Layers, Lock } from 'lucide-react'
 import { Section, PropertyList, Property, AlertBanner, ResourceLink } from '../../ui/drawer-components'
 import { Badge } from '../../ui/Badge'
+import { TraefikRequestPath } from './TraefikRequestPath'
+import type { TraefikRouteFacts } from '../traefik-route-facts'
 
 interface TraefikIngressRouteRendererProps {
   data: any
   onNavigate?: (ref: { kind: string; namespace: string; name: string }) => void
+  /** Host-fetched rule facts; undefined keeps the drawer as before, null means they could not be loaded. */
+  routeFacts?: TraefikRouteFacts[] | null
+  /** How many routes use each Middleware ("ns/name"). */
+  middlewareUse?: Record<string, number>
+  /** The counts cover only the routes the caller can see. */
+  middlewareUsePartial?: boolean
 }
 
-export function TraefikIngressRouteRenderer({ data, onNavigate }: TraefikIngressRouteRendererProps) {
+export function TraefikIngressRouteRenderer({ data, onNavigate, routeFacts, middlewareUse, middlewareUsePartial }: TraefikIngressRouteRendererProps) {
   const spec = data.spec || {}
   const routes = spec.routes || []
   const entryPoints = spec.entryPoints || []
@@ -45,6 +53,12 @@ export function TraefikIngressRouteRenderer({ data, onNavigate }: TraefikIngress
 
   return (
     <>
+      {routeFacts === null && (
+        <Section title="Request path" defaultExpanded={true}>
+          <AlertBanner variant="warning" title="Route facts could not be loaded" className="mb-0" />
+        </Section>
+      )}
+      {routeFacts && routeFacts.length > 0 && <TraefikRequestPath facts={routeFacts} middlewareUse={middlewareUse} middlewareUsePartial={middlewareUsePartial} onNavigate={onNavigate} />}
       {hasNoRoutes && (
         <AlertBanner
           variant="warning"

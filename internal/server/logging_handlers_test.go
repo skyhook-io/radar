@@ -368,8 +368,6 @@ func TestLoggingPodShippingExcludedAndOutputNamespace(t *testing.T) {
 	}
 }
 
-func boolp(b bool) *bool { return &b }
-
 // Loggings that couldn't be read can't make a Flow "ignored": whether the
 // operator counts it is unknown, so a matching Flow may select the pod.
 func TestLoggingPodShippingUnreadLoggings(t *testing.T) {

@@ -26,6 +26,9 @@ type ScannedObject struct {
 // ScanAccess is the caller's access for a Scan, with the meanings of the
 // Options fields of the same names. Build it as for a Search.
 type ScanAccess struct {
+	// Discovery classifies cluster-scoped kinds for PermitsObject and Resolve.
+	// When nil, only kinds in the static catalog are recognized as cluster-scoped.
+	Discovery            *k8s.ResourceDiscovery
 	Selection            readscope.Selection
 	NamespaceCheckFailed bool
 	TypedKindAccess      func(namespaces []string, group, resource string) (allowed, denied, unchecked []string)
@@ -60,7 +63,7 @@ func Scan(ctx context.Context, p Provider, access ScanAccess, skip func(kind, gr
 // isn't permitted, reason says why: user_permission_check_failed when a check
 // went unanswered, which isn't a denial.
 func (a ScanAccess) PermitsObject(kind, group, namespace string) (permitted bool, reason readreason.Code) {
-	if clusterScoped, gvrGroup, gvrResource := k8s.ClassifyKindScope(kind, group); clusterScoped {
+	if clusterScoped, gvrGroup, gvrResource := a.Discovery.ClassifyKindScope(kind, group); clusterScoped {
 		if a.CanReadClusterScoped == nil {
 			return true, ""
 		}
@@ -136,7 +139,7 @@ func (a ScanAccess) Resolve(refs []ObjectRef) ScanAccess {
 	clusterKinds := map[kindKey]string{}
 	typedNamespaces := map[kindKey][]string{}
 	for _, ref := range refs {
-		if clusterScoped, group, resource := k8s.ClassifyKindScope(ref.Kind, ref.Group); clusterScoped {
+		if clusterScoped, group, resource := a.Discovery.ClassifyKindScope(ref.Kind, ref.Group); clusterScoped {
 			clusterKinds[kindKey{group, resource}] = ref.Kind
 			continue
 		}

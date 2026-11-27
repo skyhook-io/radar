@@ -145,6 +145,8 @@ func usableSample(val float64) bool {
 type BeylaSource struct {
 	k8sClient kubernetes.Interface
 	queryFn   promQueryFunc
+	// servicePorts reads a destination's Service ports; nil reads Radar's cache.
+	servicePorts servicePortLookup
 
 	// mu guards the fields Detect resolves and the pollers read. Manager releases
 	// its own lock before calling into a source, so a re-detection can land while
@@ -397,6 +399,9 @@ type l4LabelPresence struct {
 	portedDsts map[dstKey]bool
 	port       bool
 	transport  bool
+	// portsFilled counts the port-0 edges given a port, from an HTTP server_port
+	// or their destination's Services, because dst_port is not exported.
+	portsFilled int
 	// nodeLabelsMissing is set when the probe answered that no series carries
 	// a node label, so cross-node flows cannot be collapsed and count twice.
 	nodeLabelsMissing bool
@@ -520,6 +525,14 @@ func (p l4LabelPresence) warning(flowCount int) string {
 			// nothing.
 			metric := strings.TrimSuffix(p.metric, "_total")
 			switch {
+			case !p.port && !p.transport && p.portsFilled > 0:
+				parts = append(parts, fmt.Sprintf("Beyla is not exporting dst.port and transport. Ports marked \"from Service\" are "+
+					"taken from Service specs, not observed; an edge to a destination without a Service appears "+
+					"as port 0, and UDP is shown as TCP. Both are opt-in, added under attributes.select for %s.", metric))
+			case !p.port && p.portsFilled > 0:
+				parts = append(parts, fmt.Sprintf("Beyla is not exporting dst.port, so ports marked \"from Service\" are taken from "+
+					"Service specs, not observed; an edge to a destination without a Service appears as port 0. "+
+					"It is opt-in, added under attributes.select for %s.", metric))
 			case !p.port && !p.transport:
 				parts = append(parts, fmt.Sprintf("Beyla is not exporting dst.port and transport, so edges here "+
 					"have no port or protocol detail: they appear as port 0, and UDP is shown as TCP. Both are "+
@@ -727,6 +740,18 @@ func (s *BeylaSource) getFlowsInternal(ctx context.Context, opts FlowOptions, sc
 				f.Verdict = "error"
 			}
 		}
+	}
+
+	if !presence.port {
+		edges := make([]*Flow, 0, len(l4Map))
+		for _, f := range l4Map {
+			edges = append(edges, f)
+		}
+		lookup := s.servicePorts
+		if lookup == nil {
+			lookup = cachedServicePorts
+		}
+		presence.portsFilled = inferServicePorts(edges, l7Flows, presence.transport, lookup)
 	}
 
 	result := make([]Flow, 0, len(l4Map))

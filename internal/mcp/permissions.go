@@ -158,12 +158,12 @@ func resolveUserPermsDecision(ctx context.Context) (*pkgauth.User, *pkgauth.User
 	if user == nil {
 		return nil, nil, true
 	}
-	cache := getPermCache()
+	cache := k8s.PermissionCacheFor(ctx, getPermCache())
 	if perms := cache.Get(user.Username, user.Groups); perms != nil {
 		return user, perms, true
 	}
 
-	conn := k8s.Current()
+	conn := k8s.BoundOrCurrent(ctx)
 	client, generation := conn.Client(), conn.ClientGeneration()
 	if client == nil {
 		log.Printf("[mcp] K8s client unavailable for namespace discovery (user=%s) — denying access", user.Username)
@@ -215,7 +215,7 @@ func mcpAllNamespaceNames(ctx context.Context) []string {
 func mcpAllNamespaceNamesDecision(ctx context.Context) ([]string, bool) {
 	var allNamespaces []string
 	listed := true
-	if rc := k8s.GetResourceCache(); rc != nil {
+	if rc := k8s.BoundOrCurrent(ctx).ResourceCache(); rc != nil {
 		if nsLister := rc.Namespaces(); nsLister != nil {
 			nsList, err := nsLister.List(labels.Everything())
 			if err != nil {
@@ -420,7 +420,7 @@ func canReadInNamespaceDecision(ctx context.Context, group, resource, namespace,
 	// Keyed by connection generation, not context name: a reconnect under the
 	// same name can reach a different cluster, and the review must run on the
 	// client its key names.
-	conn := k8s.Current()
+	conn := k8s.BoundOrCurrent(ctx)
 	client, generation := conn.Client(), conn.ClientGeneration()
 	question := pkgauth.AccessReviewQuestion{Verb: verb, Group: group, Resource: resource, Namespace: namespace}
 	return accessReviews.Decide(ctx, user, perms, strconv.FormatUint(generation, 10), question, func(ctx context.Context) (bool, bool) {

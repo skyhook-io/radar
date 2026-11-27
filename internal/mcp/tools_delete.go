@@ -166,11 +166,11 @@ func handleDeleteResource(ctx context.Context, req *mcp.CallToolRequest, input d
 	}
 	var approved deleteConfirmation
 	if !dryRun {
-		target, err := verifyMutationConfirmation(ctx, "delete_resource", input.Confirm)
+		confirmation, err := verifyMutationConfirmation(ctx, "delete_resource", input.Confirm)
 		if err != nil {
 			return nil, nil, err
 		}
-		if json.Unmarshal([]byte(target), &approved) != nil || approved.UID == "" || (approved.Generation == 0 && approved.ResourceVersion == "") {
+		if json.Unmarshal([]byte(confirmation.Target), &approved) != nil || approved.UID == "" || (approved.Generation == 0 && approved.ResourceVersion == "") {
 			return nil, nil, fmt.Errorf("confirm is malformed; run dry_run=true again and review the new preview")
 		}
 		if approved.Resource != gvr.String() || approved.Namespace != namespace || approved.Name != name {
