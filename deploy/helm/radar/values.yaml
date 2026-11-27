@@ -656,11 +656,11 @@ usageReporting:
 # Checks > Vulnerabilities marks CVEs in CISA's Known Exploited
 # Vulnerabilities catalog (KEV) and can show FIRST's EPSS scores. Radar
 # downloads both public feeds itself, the first time someone opens the page,
-# then daily. Each feed takes an https URL (a mirror inside your network), a
-# file path, or "off"; empty keeps Radar's default public URL. Files over
-# 1 MiB (KEV is about 2 MB) don't fit a ConfigMap: use a mirror, or mount a
-# volume with feedVolume. See docs/integrations.md (Known exploited CVEs and
-# EPSS).
+# then daily. Each feed takes a URL (a mirror inside your network; plain
+# http is fine there), a file path, or "off"; empty keeps Radar's default
+# public URL. Files over 1 MiB (KEV is about 2 MB) don't fit a ConfigMap:
+# use a mirror, or mount a volume with feedVolume. See docs/integrations.md
+# (Known exploited CVEs and EPSS).
 vulnerabilities:
   kevFeed: ""
   epssFeed: ""
