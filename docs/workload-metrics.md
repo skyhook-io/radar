@@ -120,6 +120,8 @@ Prometheus, Mimir, VictoriaMetrics and Thanos can expose a compatible query API;
 collector configuration, labels, retention and histogram format determine which
 panels work. See [what each chart needs](#what-each-chart-needs) for exact series
 and [live-tested coverage](#live-tested-coverage) for tested configurations.
+Local Radar can also read a cluster's metrics from an OpenObserve organization
+that many clusters write to; see [OpenObserve (local)](configuration.md#openobserve-local).
 
 Radar discovers common in-cluster query Services and checks workload identity
 automatically. Hosted URLs, authentication and tenant headers still require
