@@ -39,7 +39,7 @@ import (
 // listener's cross-site read guard applies.
 //
 // KEV and EPSS come from the process's feed store (--kev-feed,
-// --epss-feed), loaded on the first read: public data, the same for every
+// --epss-feed), loaded on the first read of a cluster with Trivy Operator: public data, the same for every
 // caller, fetched by Radar on its own schedule and never on a URL a request
 // names. Response.intel says whether each feed is ready; until it is, the UI
 // and CSV say "unavailable" rather than reading a missing entry as "no".
@@ -190,7 +190,6 @@ func (s *Server) readVulnerabilities(w http.ResponseWriter, r *http.Request, exp
 		View:                 view,
 		Filter:               vulnerabilityFilter(r),
 		Export:               export,
-		Intel:                vulnerabilities.IntelSnapshot(),
 	})
 	if err != nil {
 		if r.Context().Err() != nil {

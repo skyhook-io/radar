@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -86,24 +87,43 @@ type Config struct {
 
 // Store loads the feeds in the background, starting on the first Snapshot
 // so a Radar nobody opens the Vulnerabilities page on never fetches them.
+// Each feed keeps its own schedule: reloaded Refresh after it last loaded
+// (a cached copy counts, so a restart doesn't download it again), and
+// RetryAfter after a failure, without reloading the other feed.
 type Store struct {
 	cfg   Config
 	start sync.Once
 	stop  context.CancelFunc
 	done  chan struct{}
 
-	mu   sync.RWMutex
-	snap Snapshot
+	mu        sync.RWMutex
+	kev, epss feed
 	// loaded fires after the first load attempt of both feeds.
 	loaded chan struct{}
 
-	// kick asks the loader to reload now (RefreshNow); lastManual is when
-	// someone last did, for the rate limit.
-	kick       chan struct{}
+	// kick asks the loader to reload now (RefreshNow), carrying when it was
+	// asked; lastManual is when someone last did, for the rate limit.
+	kick       chan time.Time
 	manualMu   sync.Mutex
 	lastManual time.Time
 	clock      func() time.Time
 }
+
+// feed is one feed's source, copy and schedule. status and data are guarded
+// by Store.mu; due and checked (when the last attempt ended) are the
+// loader's alone.
+type feed struct {
+	source    string
+	cacheName string
+	parse     func([]byte) (any, FeedStatus, error)
+	status    FeedStatus
+	// data is the parsed copy in use: *KEVCatalog or *EPSSScores.
+	data    any
+	due     time.Time
+	checked time.Time
+}
+
+func (f *feed) on() bool { return !off(f.source) }
 
 // ManualRefreshInterval is how often anyone may ask for a reload: the feeds
 // change daily, and each reload downloads several MB from a public server.
@@ -121,7 +141,7 @@ var ErrFeedsOff = errors.New("both feeds are turned off on this Radar")
 // feeds' status says when the reload finished. wait is how long until the
 // next reload may be asked for when it returns ErrRefreshTooSoon.
 func (s *Store) RefreshNow() (wait time.Duration, err error) {
-	if off(s.cfg.KEVSource) && off(s.cfg.EPSSSource) {
+	if !s.kev.on() && !s.epss.on() {
 		return 0, ErrFeedsOff
 	}
 	s.ensureStarted()
@@ -135,7 +155,7 @@ func (s *Store) RefreshNow() (wait time.Duration, err error) {
 	}
 	s.lastManual = now
 	select {
-	case s.kick <- struct{}{}:
+	case s.kick <- time.Now():
 	default:
 		// A reload is already queued.
 	}
@@ -153,27 +173,38 @@ func NewStore(cfg Config) *Store {
 	if cfg.Client == nil {
 		cfg.Client = &http.Client{Timeout: 2 * time.Minute}
 	}
-	kevBlocked := cfg.NoDownloads && isURL(cfg.KEVSource)
-	epssBlocked := cfg.NoDownloads && isURL(cfg.EPSSSource)
-	if kevBlocked {
-		cfg.KEVSource = "off"
-	}
-	if epssBlocked {
-		cfg.EPSSSource = "off"
-	}
-	s := &Store{cfg: cfg, loaded: make(chan struct{}), done: make(chan struct{}), kick: make(chan struct{}, 1), clock: time.Now}
-	s.snap.KEVStatus = initialStatus(cfg.KEVSource, DefaultKEVURL)
-	s.snap.EPSSStatus = initialStatus(cfg.EPSSSource, DefaultEPSSURL)
-	s.snap.KEVStatus.DownloadsOff = kevBlocked
-	s.snap.EPSSStatus.DownloadsOff = epssBlocked
+	s := &Store{cfg: cfg, loaded: make(chan struct{}), done: make(chan struct{}), kick: make(chan time.Time, 1), clock: time.Now}
+	s.kev = newFeed(cfg.KEVSource, DefaultKEVURL, cfg.NoDownloads, "kev.json", func(b []byte) (any, FeedStatus, error) {
+		c, err := ParseKEV(bytes.NewReader(b))
+		if err != nil {
+			return nil, FeedStatus{}, err
+		}
+		return c, FeedStatus{Version: c.Version, Count: c.Len()}, nil
+	})
+	s.epss = newFeed(cfg.EPSSSource, DefaultEPSSURL, cfg.NoDownloads, "epss.csv.gz", func(b []byte) (any, FeedStatus, error) {
+		e, err := ParseEPSS(bytes.NewReader(b))
+		if err != nil {
+			return nil, FeedStatus{}, err
+		}
+		return e, FeedStatus{Version: epssVersion(e), Count: e.Len()}, nil
+	})
 	return s
 }
 
-func initialStatus(source, public string) FeedStatus {
-	if off(source) {
-		return FeedStatus{State: StateDisabled}
+// newFeed resolves a source: with downloads off, a URL is off.
+func newFeed(source, public string, noDownloads bool, cacheName string, parse func([]byte) (any, FeedStatus, error)) feed {
+	source = strings.TrimSpace(source)
+	blocked := noDownloads && isURL(source)
+	if blocked {
+		source = "off"
 	}
-	return FeedStatus{State: StateLoading, Origin: originOf(source, public)}
+	f := feed{source: source, cacheName: cacheName, parse: parse}
+	if off(source) {
+		f.status = FeedStatus{State: StateDisabled, DownloadsOff: blocked}
+	} else {
+		f.status = FeedStatus{State: StateLoading, Origin: originOf(source, public)}
+	}
+	return f
 }
 
 func off(source string) bool {
@@ -201,7 +232,14 @@ func (s *Store) Snapshot() Snapshot {
 	s.ensureStarted()
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.snap
+	snap := Snapshot{KEVStatus: s.kev.status, EPSSStatus: s.epss.status}
+	snap.KEV, _ = s.kev.data.(*KEVCatalog)
+	snap.EPSS, _ = s.epss.data.(*EPSSScores)
+	now := time.Now()
+	for _, st := range []*FeedStatus{&snap.KEVStatus, &snap.EPSSStatus} {
+		st.Stale = st.State == StateReady && st.LoadedAt != nil && now.Sub(*st.LoadedAt) > StaleAfter
+	}
+	return snap
 }
 
 // WaitLoaded waits for the first load attempt, or ctx.
@@ -232,56 +270,46 @@ func (s *Store) ensureStarted() {
 
 func (s *Store) run(ctx context.Context) {
 	defer close(s.done)
-	if s.cfg.CacheDir != "" {
-		s.loadCached()
+	feeds := []*feed{&s.kev, &s.epss}
+	for _, f := range feeds {
+		s.loadCached(f)
 	}
 	first := true
 	for {
-		ok := s.refresh(ctx)
+		var next time.Time
+		for _, f := range feeds {
+			if !f.on() {
+				continue
+			}
+			if !time.Now().Before(f.due) {
+				s.refreshOne(ctx, f)
+			}
+			if next.IsZero() || f.due.Before(next) {
+				next = f.due
+			}
+		}
 		if first {
 			close(s.loaded)
 			first = false
 		}
-		wait := s.cfg.Refresh
-		if !ok {
-			wait = s.cfg.RetryAfter
+		if next.IsZero() {
+			return
 		}
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(wait):
-		case <-s.kick:
+		case <-time.After(time.Until(next)):
+		case asked := <-s.kick:
+			// An attempt that ended after the request answers it: a reload
+			// asked for while one runs, or as the first one starts, isn't
+			// downloaded twice.
+			for _, f := range feeds {
+				if f.checked.Before(asked) {
+					f.due = time.Time{}
+				}
+			}
 		}
 	}
-}
-
-// refresh reloads both feeds; ok is false when one failed.
-func (s *Store) refresh(ctx context.Context) bool {
-	okK := s.refreshOne(ctx, s.cfg.KEVSource, "kev.json", func(b []byte) (any, FeedStatus, error) {
-		c, err := ParseKEV(bytes.NewReader(b))
-		if err != nil {
-			return nil, FeedStatus{}, err
-		}
-		return c, FeedStatus{Version: c.Version, Count: c.Len()}, nil
-	}, func(v any, st FeedStatus) { s.snap.KEV, s.snap.KEVStatus = asKEV(v), st }, func() *FeedStatus { return &s.snap.KEVStatus })
-	okE := s.refreshOne(ctx, s.cfg.EPSSSource, "epss.csv.gz", func(b []byte) (any, FeedStatus, error) {
-		e, err := ParseEPSS(bytes.NewReader(b))
-		if err != nil {
-			return nil, FeedStatus{}, err
-		}
-		return e, FeedStatus{Version: epssVersion(e), Count: e.Len()}, nil
-	}, func(v any, st FeedStatus) { s.snap.EPSS, s.snap.EPSSStatus = asEPSS(v), st }, func() *FeedStatus { return &s.snap.EPSSStatus })
-	return okK && okE
-}
-
-func asKEV(v any) *KEVCatalog {
-	c, _ := v.(*KEVCatalog)
-	return c
-}
-
-func asEPSS(v any) *EPSSScores {
-	e, _ := v.(*EPSSScores)
-	return e
 }
 
 func epssVersion(e *EPSSScores) string {
@@ -291,85 +319,89 @@ func epssVersion(e *EPSSScores) string {
 	return e.ScoreDate.UTC().Format("2006-01-02")
 }
 
-func (s *Store) refreshOne(ctx context.Context, source, cacheName string, parse func([]byte) (any, FeedStatus, error), set func(any, FeedStatus), current func() *FeedStatus) bool {
-	if off(source) {
-		return true
-	}
-	body, err := s.read(ctx, source)
-	var parsed any
+// refreshOne reloads a feed and schedules its next load.
+func (s *Store) refreshOne(ctx context.Context, f *feed) {
+	body, err := s.read(ctx, f.source)
+	var data any
 	var st FeedStatus
 	if err == nil {
-		parsed, st, err = parse(body)
+		data, st, err = f.parse(body)
+	}
+	now := time.Now()
+	f.checked = now
+	s.mu.Lock()
+	f.status.CheckedAt = &now
+	if err != nil {
+		f.status.Error = err.Error()
+		if f.data == nil {
+			f.status.State = StateUnavailable
+		}
+		f.due = now.Add(s.cfg.RetryAfter)
+	} else {
+		st.State, st.Origin, st.LoadedAt, st.CheckedAt = StateReady, f.status.Origin, &now, &now
+		f.status, f.data = st, data
+		f.due = now.Add(s.cfg.Refresh)
+	}
+	s.mu.Unlock()
+	if err == nil && s.cfg.CacheDir != "" && isURL(f.source) {
+		if err := writeCache(filepath.Join(s.cfg.CacheDir, f.cacheName), body); err != nil {
+			log.Printf("[vulnintel] Failed to keep a copy of %s for restarts: %v", f.cacheName, err)
+		}
+	}
+}
+
+// loadCached reads a URL feed's last good copy, so the page has it while
+// the first fetch runs or when it fails. A copy younger than Refresh is
+// used as it is: the next download is due when it would have been.
+func (s *Store) loadCached(f *feed) {
+	if s.cfg.CacheDir == "" || !isURL(f.source) {
+		return
+	}
+	path := filepath.Join(s.cfg.CacheDir, f.cacheName)
+	info, err := os.Stat(path)
+	if err != nil {
+		return
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	data, st, err := f.parse(b)
+	if err != nil {
+		return
+	}
+	at := info.ModTime()
+	if now := time.Now(); at.After(now) {
+		at = now
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	cur := current()
-	checked := time.Now()
-	cur.CheckedAt = &checked
-	if err != nil {
-		cur.Error = err.Error()
-		if cur.LoadedAt == nil {
-			cur.State = StateUnavailable
-		} else {
-			cur.Stale = time.Since(*cur.LoadedAt) > StaleAfter
-		}
-		return false
-	}
-	st.State, st.Origin, st.LoadedAt, st.CheckedAt = StateReady, cur.Origin, &checked, &checked
-	set(parsed, st)
-	if s.cfg.CacheDir != "" && isURL(source) {
-		writeCache(filepath.Join(s.cfg.CacheDir, cacheName), body)
-	}
-	return true
+	st.State, st.Origin, st.LoadedAt = StateReady, f.status.Origin, &at
+	f.status, f.data = st, data
+	s.mu.Unlock()
+	f.due = at.Add(s.cfg.Refresh)
 }
 
-// loadCached reads the last good copies, so the page has them while the
-// first fetch runs or when it fails.
-func (s *Store) loadCached() {
-	for _, f := range []struct {
-		source, name string
-		load         func([]byte, time.Time)
-	}{
-		{s.cfg.KEVSource, "kev.json", func(b []byte, at time.Time) {
-			if c, err := ParseKEV(bytes.NewReader(b)); err == nil {
-				s.snap.KEV = c
-				s.snap.KEVStatus = FeedStatus{State: StateReady, Origin: s.snap.KEVStatus.Origin, Version: c.Version, Count: c.Len(), LoadedAt: &at}
-			}
-		}},
-		{s.cfg.EPSSSource, "epss.csv.gz", func(b []byte, at time.Time) {
-			if e, err := ParseEPSS(bytes.NewReader(b)); err == nil {
-				s.snap.EPSS = e
-				s.snap.EPSSStatus = FeedStatus{State: StateReady, Origin: s.snap.EPSSStatus.Origin, Version: epssVersion(e), Count: e.Len(), LoadedAt: &at}
-			}
-		}},
-	} {
-		if off(f.source) || !isURL(f.source) {
-			continue
-		}
-		path := filepath.Join(s.cfg.CacheDir, f.name)
-		info, err := os.Stat(path)
-		if err != nil {
-			continue
-		}
-		b, err := os.ReadFile(path)
-		if err != nil {
-			continue
-		}
-		s.mu.Lock()
-		f.load(b, info.ModTime())
-		s.mu.Unlock()
-	}
-}
-
-func writeCache(path string, body []byte) {
+// writeCache replaces path atomically. Two Radars on one machine share the
+// directory, so each writes its own temporary file.
+func writeCache(path string, body []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return
+		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, body, 0o644); err != nil {
-		return
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return err
 	}
-	_ = os.Rename(tmp, path)
+	_, err = tmp.Write(body)
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp.Name(), path)
+	}
+	if err != nil {
+		_ = os.Remove(tmp.Name())
+	}
+	return err
 }
 
 func (s *Store) read(ctx context.Context, source string) ([]byte, error) {

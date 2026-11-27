@@ -256,7 +256,8 @@ func ParseEPSS(r io.Reader) (*EPSSScores, error) {
 		}
 		score, err1 := strconv.ParseFloat(rec[ei], 32)
 		pct, err2 := strconv.ParseFloat(rec[pi], 32)
-		if err1 != nil || err2 != nil {
+		// Both are probabilities; NaN fails the comparisons too.
+		if err1 != nil || err2 != nil || !(score >= 0 && score <= 1) || !(pct >= 0 && pct <= 1) {
 			continue
 		}
 		s.entries = append(s.entries, epssEntry{key: key, score: float32(score), pct: float32(pct)})
@@ -264,7 +265,8 @@ func ParseEPSS(r io.Reader) (*EPSSScores, error) {
 	if len(s.entries) == 0 {
 		return nil, errors.New("EPSS scores: the file scores no CVEs")
 	}
-	slices.SortFunc(s.entries, func(a, b epssEntry) int {
+	// Stable, so of a CVE listed twice the first row wins.
+	slices.SortStableFunc(s.entries, func(a, b epssEntry) int {
 		switch {
 		case a.key < b.key:
 			return -1
