@@ -126,7 +126,7 @@ describe('VulnerabilitiesView', () => {
     expect(marks()).toHaveLength(1)
     const running = marks()[0].closest('span.truncate')!
     expect(running.textContent).toBe('web, worker')
-    act(() => container.querySelector<HTMLButtonElement>('button[aria-expanded]')!.click())
+    act(() => container.querySelector<HTMLButtonElement>('button[aria-expanded]:not([aria-haspopup])')!.click())
     // Expanded: the mark sits beside web's link only.
     const marked = Array.from(marks()).map((m) => m.closest('li')?.textContent ?? '').filter(Boolean)
     expect(marked).toHaveLength(1)

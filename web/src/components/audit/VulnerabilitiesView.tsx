@@ -24,6 +24,7 @@ import {
   FilterPill,
   Input,
   RowActionMenu,
+  type RowActionItem,
 } from '@skyhook-io/k8s-ui'
 import { SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-colors'
 import { formatRelativeAgeTime } from '@skyhook-io/k8s-ui/utils/format'
@@ -52,6 +53,7 @@ import {
   type VulnerableImage,
 } from '../../api/vulnerabilities'
 import type { SelectedResource } from '../../types'
+import { EndOfLifeBadge, OPTIONAL_FILTERS, OptionalHead, availableColumns, columnsFor, daysSince, isoDate, optionalColumn, useOptionalColumns, useOptionalFilters } from '../vulnerabilities/columns'
 import { useConnection } from '../../context/ConnectionContext'
 import { useDesktopDownload } from '../../hooks/useDesktopDownload'
 import { ChecksViewTabs } from './ChecksViewTabs'
@@ -108,9 +110,13 @@ const TRIVY_INSTALL_URL = 'https://aquasecurity.github.io/trivy-operator/latest/
 // Each table's columns, shared by its header, rows and expanded sub-rows so
 // detail lines up under the column it belongs to. Short values get fixed
 // tracks; the text columns take the rest.
-const IMAGE_COLS = 'grid-cols-[minmax(220px,1.6fr)_minmax(180px,1.2fr)_88px_minmax(0,2fr)_72px]'
+// The image and CVE tables have optional columns (vulnerabilities/columns),
+// so their tracks are built per render rather than fixed classes.
+const gridOf = (tracks: (string | false | undefined)[]): React.CSSProperties => ({ gridTemplateColumns: tracks.filter(Boolean).join(' ') })
+const trackOf = (view: VulnerabilityView, name: string, on: boolean | undefined) => on && optionalColumn(view, name)?.track
+const imageGrid = (c: Record<string, boolean>) => gridOf(['minmax(220px,1.6fr)', trackOf('image', 'os', c.os), 'minmax(180px,1.2fr)', '88px', 'minmax(0,2fr)', trackOf('image', 'scanner', c.scanner), '72px'])
+const cveGrid = (c: Record<string, boolean>) => gridOf(['minmax(260px,1.6fr)', '80px', '48px', trackOf('cve', 'published', c.published), trackOf('cve', 'age', c.age), 'minmax(200px,1.6fr)', '56px', '64px', '80px'])
 const FIX_COLS = 'grid-cols-[minmax(200px,1.2fr)_minmax(220px,1.5fr)_120px_minmax(0,1.6fr)_64px_80px]'
-const CVE_COLS = 'grid-cols-[minmax(260px,1.6fr)_80px_48px_minmax(200px,1.6fr)_56px_64px_80px]'
 const WORKLOAD_COLS = 'grid-cols-[minmax(200px,1.4fr)_minmax(180px,1.2fr)_minmax(0,2.4fr)]'
 // With the route column, shown only when the answer reports exposure.
 const WORKLOAD_ROUTE_COLS = 'grid-cols-[minmax(200px,1.4fr)_minmax(180px,1.2fr)_minmax(180px,1.2fr)_minmax(0,2fr)]'
@@ -130,6 +136,9 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
   const severities = (params.get('severity') ?? '').split(',').filter((s): s is VulnerabilitySeverity => LEGEND.some((x) => x.key === s))
   const fixableOnly = params.get('fixable') === '1'
   const exposedOnly = params.get('exposed') === '1'
+  const eolOnly = params.get('eol') === '1'
+  const optional = useOptionalColumns()
+  const optionalFilters = useOptionalFilters()
   const queryDraft = params.get('q') ?? ''
   const workload = parseWorkloadParam(params.get('workload'))
   const query = useDebouncedValue(queryDraft.trim(), 300)
@@ -146,7 +155,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
     mutate(next)
     setParams(next, { replace: !push })
   }
-  const tableParams: VulnerabilitiesParams = { view, namespaces, severities, fixableOnly, exposed: exposedOnly, query, workload }
+  const tableParams: VulnerabilitiesParams = { view, namespaces, severities, fixableOnly, exposed: exposedOnly, osEndOfLife: eolOnly, query, workload }
   const { data, isLoading, isFetching, isPlaceholderData, error, dataUpdatedAt, refetch } = useVulnerabilities(tableParams, !reportsAbsent)
   const hasReports = !reportsAbsent && (hasVulnerabilityReports(resources) || !!data)
   const trivySearch = new URLSearchParams({ by: 'cve', q: JAVA4SHELL_CVE })
@@ -170,29 +179,26 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
     else p.delete('severity')
   })
 
+  const header = <PageHeader icon={ShieldAlert} title="Vulnerabilities" description={PAGE_DESCRIPTION} />
   if (isLoading && !reportsAbsent) {
     return (
       <div className="flex-1 flex flex-col min-h-0 p-4 gap-4 overflow-auto">
         <ChecksViewTabs />
-        {advisory && <PageHeader icon={ShieldAlert} title="Vulnerabilities" />}
+        {header}
         {advisory}
         <PaneLoader label="Reading vulnerability reports…" className="flex-1" />
       </div>
     )
   }
   if (!data || reportsAbsent) {
-    const showInstallNote = advisory && (reportsAbsent || isKindUnknown(error))
+    // No report kind: nothing failed, the cluster has no scanner yet.
+    const noScanner = reportsAbsent || isKindUnknown(error)
     return (
       <div className="flex-1 flex flex-col min-h-0 p-4 gap-4 overflow-auto">
         <ChecksViewTabs />
-        {advisory && <PageHeader icon={ShieldAlert} title="Vulnerabilities" />}
+        {header}
         {advisory}
-        {showInstallNote ? (
-          <p className="text-xs text-theme-text-secondary">
-            General image vulnerability scanning requires Trivy Operator.{' '}
-            <a href={TRIVY_INSTALL_URL} target="_blank" rel="noreferrer" className="text-accent-text hover:underline">Installation guide</a>
-          </p>
-        ) : (
+        {noScanner ? <NoScannerState /> : (
           <div className="flex flex-1 items-center justify-center"><VulnerabilitiesError error={error} /></div>
         )}
       </div>
@@ -200,19 +206,28 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
   }
 
   // By fix lists only fixable findings, and hides the chip that says so.
-  // An older Radar ignores exposed=1 and reports no exposure.
+  // An older Radar ignores exposed=1 and reports no exposure, and ignores
+  // eol=1 and sends no end-of-life count.
   const exposure = data.exposure
-  const filtered = severities.length > 0 || (fixableOnly && view !== 'fix') || (exposedOnly && !!exposure) || query !== '' || !!workload
+  const eolCount = data.summary.imagesOsEndOfLife
+  // An optional chip: shown when this browser shows it and there is something
+  // to filter to, and always while a link sets it.
+  const eolChip = eolCount !== undefined && (eolOnly || (optionalFilters.shown('eol') && eolCount > 0))
+  // Optional filters this Radar can apply: an older one sends no end-of-life count.
+  const filterAvailable = (key: string) => key !== 'eol' || eolCount !== undefined
+  const filtered = severities.length > 0 || (fixableOnly && view !== 'fix') || (exposedOnly && !!exposure) || (eolOnly && eolCount !== undefined) || query !== '' || !!workload
   // Narrowed only to a workload whose images are all clean or unscanned:
   // the folds below list them, so "nothing matches" would mislead.
-  const workloadFolds = !!workload && (view === 'image' || view === 'workload') && severities.length === 0 && !fixableOnly && query === '' &&
+  const workloadFolds = !!workload && (view === 'image' || view === 'workload') && severities.length === 0 && !fixableOnly && !(exposedOnly && !!exposure) && !(eolOnly && eolCount !== undefined) && query === '' &&
     ((data.unscanned ?? []).length > 0 || (data.clean ?? []).length > 0 || (data.cleanWorkloads ?? []).length > 0)
   const rows = view === 'cve' ? data.cves ?? [] : view === 'workload' ? data.workloads ?? [] : view === 'fix' ? data.fixes ?? [] : data.images ?? []
 
   // With nothing scanned or readable there are no counts to show or filter.
   const known = findingsCertainty(data) !== 'unknown'
   // A new view or filter starts again from the first page of rows.
-  const pageKey = JSON.stringify([view, namespaces, severities, fixableOnly, exposedOnly, query, workload])
+  // Every filter lives in the URL; the view and the namespace scope aren't filters.
+  const clearFilters = () => update((p) => { for (const key of [...p.keys()]) if (!KEEP_ON_CLEAR.has(key)) p.delete(key) }, true)
+  const pageKey = JSON.stringify([view, namespaces, severities, fixableOnly, exposedOnly, eolOnly, query, workload])
   const fixChip = known && view !== 'fix'
   return (
     <div aria-busy={isFetching} className="flex-1 flex flex-col min-h-0 p-4 gap-4 overflow-auto">
@@ -220,11 +235,18 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
       <PageHeader
         icon={ShieldAlert}
         title="Vulnerabilities"
-        description="Known CVEs in the images that run now, from Trivy Operator's reports."
+        description={PAGE_DESCRIPTION}
         actions={
           <div className="flex items-center gap-2">
             <FreshnessControl mode="auto" dataUpdatedAt={dataUpdatedAt} isFetching={isFetching} onRefresh={() => refetch()} connectionState={connection.state} />
-            <ExportMenu params={tableParams} cluster={connection.clusterName || connection.context} />
+            <PageMenu
+              params={tableParams}
+              cluster={connection.clusterName || connection.context}
+              columns={data.view === view ? availableColumns(view, data).map((c) => ({ key: c.key, label: c.label, shown: optional.shown.has(c.key) })) : []}
+              onToggleColumn={optional.toggle}
+              filters={OPTIONAL_FILTERS.filter((f) => filterAvailable(f.key)).map((f) => ({ key: f.key, label: f.label, shown: optionalFilters.shown(f.key) }))}
+              onToggleFilter={optionalFilters.toggle}
+            />
           </div>
         }
       />
@@ -265,7 +287,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
               onClick={() => toggleSeverity(s.key)}
             />
           ))}
-          {(fixChip || exposure) && <span aria-hidden className="mx-1.5 h-5 w-px bg-theme-border" />}
+          {known && (fixChip || exposure || eolChip) && <span aria-hidden className="mx-1.5 h-5 w-px bg-theme-border" />}
           {fixChip && <FilterPill label="Fix available" tooltip="Only findings the scanner lists a fixed release for" active={fixableOnly} onClick={() => update((p) => (fixableOnly ? p.delete('fixable') : p.set('fixable', '1')))} />}
           {exposure && (
             <FilterPill
@@ -274,6 +296,15 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
               tooltip={EXPOSURE.chipTip}
               active={exposedOnly}
               onClick={() => update((p) => (exposedOnly ? p.delete('exposed') : p.set('exposed', '1')))}
+            />
+          )}
+          {eolChip && (
+            <FilterPill
+              label="OS end of life"
+              count={eolCount}
+              tooltip="Only images whose OS release Trivy reports as end of life. Images not scanned yet stay listed: their OS is unknown."
+              active={eolOnly}
+              onClick={() => update((p) => (eolOnly ? p.delete('eol') : p.set('eol', '1')))}
             />
           )}
           {workload && (
@@ -311,7 +342,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
           matches={filtered && data.view === view ? {
             count: rows.length + (data.coverage.rowsOmitted ?? 0),
             // Every filter lives in the URL; the view and the namespace scope aren't filters.
-            onClear: () => update((p) => { for (const key of [...p.keys()]) if (!KEEP_ON_CLEAR.has(key)) p.delete(key) }, true),
+            onClear: clearFilters,
           } : undefined}
         />
         {error && <p className="text-xs text-warning-text">Couldn't refresh: {error instanceof Error ? error.message : 'request failed'}. Showing the last answer.</p>}
@@ -328,12 +359,13 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
             tone="neutral"
             icon={ShieldAlert}
             headline={emptyHeadline(view, filtered, data, workloadFolds ? workload : null)}
-            body={filtered && !workloadFolds ? 'Clear a filter to see more.' : data.summary.imagesScanned === 0 && (data.unscanned ?? []).length > 0 ? 'No report covers a running image yet. Trivy Operator scans workloads as they appear; if this persists, check that it is running and that its target namespaces include these.' : undefined}
+            action={filtered && !workloadFolds ? <button type="button" onClick={clearFilters} className="btn-secondary px-3 py-1.5 text-xs font-medium">Clear filters</button> : undefined}
+            body={filtered && !workloadFolds ? undefined : data.summary.imagesScanned === 0 && data.summary.imagesUnscanned > 0 ? 'Trivy Operator scans each workload shortly after it starts. If nothing appears within a few minutes, check that it is running and that its target namespaces include these. The images waiting for a report are listed below.' : undefined}
           />
         ) : view === 'fix' ? (
           <Paged key={pageKey} rows={data.fixes ?? []}>{(rows) => <FixTable fixes={rows} onOpen={(w) => onNavigateToResource(toResource(w))} onShowCVE={(id) => update((p) => { p.set('by', 'cve'); p.set('q', id) }, true)} />}</Paged>
         ) : view === 'cve' ? (
-          <Paged key={pageKey} rows={data.cves ?? []}>{(rows) => <CVETable cves={rows} onOpen={(w) => onNavigateToResource(toResource(w))} />}</Paged>
+          <Paged key={pageKey} rows={data.cves ?? []}>{(rows) => <CVETable cves={rows} columns={columnsFor('cve', optional.shown, data)} onOpen={(w) => onNavigateToResource(toResource(w))} />}</Paged>
         ) : view === 'workload' ? (
           <Paged key={pageKey} rows={data.workloads ?? []}>{(rows) => <WorkloadTable
             workloads={rows}
@@ -347,6 +379,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
         ) : (
           <Paged key={pageKey} rows={data.images ?? []}>{(rows) => <ImageTable
             images={rows}
+            columns={columnsFor('image', optional.shown, data)}
             onOpen={(w) => onNavigateToResource(toResource(w))}
             onOpenReport={(img) => onNavigateToResource({ kind: img.report.kind, group: img.report.group, namespace: img.report.namespace ?? '', name: img.report.name })}
           />}</Paged>
@@ -371,8 +404,17 @@ const VIEW_NAMES: Partial<Record<VulnerabilityView, string>> = { fix: 'By fix', 
 // The page's overflow menu: CSV of the view on screen with its filters, or
 // of every finding (one row per CVE, image and workload, the shape a POA&M
 // or a ticket import wants). Each lists every row and every value the table
-// shortens.
-function ExportMenu({ params, cluster }: { params: VulnerabilitiesParams; cluster: string }) {
+// shortens. Below them, a checkbox for each of the view's optional columns,
+// then one for each optional filter chip, each group after a divider.
+function PageMenu({ params, cluster, columns: columnChoices, onToggleColumn, filters, onToggleFilter }: {
+  params: VulnerabilitiesParams
+  cluster: string
+  /** The view's optional columns this answer has data for. */
+  columns: { key: string; label: string; shown: boolean }[]
+  onToggleColumn: (key: string) => void
+  filters: { key: string; label: string; shown: boolean }[]
+  onToggleFilter: (key: string) => void
+}) {
   const { support, guard } = useRadarFeature('vulnerabilitiesExport')
   const desktopDownload = useDesktopDownload()
   const download = useMutation({
@@ -381,18 +423,21 @@ function ExportMenu({ params, cluster }: { params: VulnerabilitiesParams; cluste
     onSuccess: (csv, { as, cluster }) => triggerDownload(csv, 'text/csv;charset=utf-8', vulnerabilitiesCSVFilename(as, cluster), desktopDownload),
     meta: { errorMessage: 'Could not download the CSV' },
   })
-  if (support !== 'supported') return null
   const pending = download.isPending ? download.variables?.as : undefined
-  return (
-    <RowActionMenu
-      compact={false}
-      ariaLabel="More actions"
-      items={[
-        { key: 'view', label: `Download ${VIEW_NAMES[params.view] ?? 'this view'} as CSV`, icon: FileSpreadsheet, pending: pending === params.view, disabled: !!pending, onClick: () => download.mutate({ params, as: params.view, cluster }) },
-        { key: 'findings', label: 'Download all findings as CSV', icon: FileSpreadsheet, pending: pending === 'findings', disabled: !!pending, onClick: () => download.mutate({ params, as: 'findings', cluster }) },
-      ]}
-    />
-  )
+  const downloads: RowActionItem[] = support !== 'supported' ? [] : [
+    { key: 'view', label: `Download ${VIEW_NAMES[params.view] ?? 'this view'} as CSV`, icon: FileSpreadsheet, pending: pending === params.view, disabled: !!pending, onClick: () => download.mutate({ params, as: params.view, cluster }) },
+    { key: 'findings', label: 'Download all findings as CSV', icon: FileSpreadsheet, pending: pending === 'findings', disabled: !!pending, onClick: () => download.mutate({ params, as: 'findings', cluster }) },
+  ]
+  const columns: RowActionItem[] = columnChoices.map((c) => ({
+    key: c.key, label: `Show ${c.label}`, checked: c.shown, onClick: () => onToggleColumn(c.key),
+  }))
+  const filterItems: RowActionItem[] = filters.map((f) => ({
+    key: `filter.${f.key}`, label: `Show ${f.label} filter`, checked: f.shown, onClick: () => onToggleFilter(f.key),
+  }))
+  // Each group after the first opens with a divider.
+  const items = [downloads, columns, filterItems].filter((g) => g.length > 0)
+    .flatMap((g, i) => g.map((item, j) => ({ ...item, divider: i > 0 && j === 0 })))
+  return <RowActionMenu compact={false} ariaLabel="More actions" items={items} />
 }
 
 function emptyHeadline(view: VulnerabilityView, filtered: boolean, data: VulnerabilitiesResponse, workload: { name: string } | null): string {
@@ -405,27 +450,47 @@ function emptyHeadline(view: VulnerabilityView, filtered: boolean, data: Vulnera
   if (filtered) return 'Nothing matches these filters'
   const s = data.summary
   if (!readsComplete(data.coverage) && totalFindings(s.counts) === 0 && s.imagesClean === 0) return 'No findings could be read in this scope'
-  if (s.imagesScanned === 0) return 'No scanned images run in this scope'
+  if (s.imagesScanned === 0) return s.imagesUnscanned > 0 ? "Trivy hasn't scanned the images in this scope yet" : 'No workloads run in this scope'
   if (view === 'fix' && totalFindings(s.counts) > 0) return `None of the ${totalFindings(s.counts)} reported findings has a fixed release yet`
   return `No CVEs reported for the ${s.imagesScanned} scanned ${s.imagesScanned === 1 ? 'image' : 'images'} that run`
+}
+
+const PAGE_DESCRIPTION = "Known CVEs in the images that run now, from Trivy Operator's reports."
+
+// A cluster without Trivy Operator: what the page is for, and the one step
+// that fills it. The Java4Shell check above it works without Trivy.
+function NoScannerState() {
+  return (
+    <section aria-label="Trivy Operator not installed" className="flex flex-col gap-4 rounded-2xl border border-theme-border bg-theme-surface p-6 shadow-theme-sm">
+      <div className="flex items-start gap-3">
+        <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-theme-text-tertiary" aria-hidden />
+        <div className="flex flex-col gap-1">
+          <h2 className="text-base font-semibold text-theme-text-primary">Trivy Operator isn't installed in this cluster</h2>
+          <p className="max-w-2xl text-sm text-theme-text-secondary">
+            Radar reads the vulnerability reports Trivy Operator writes for each running image. With it installed, this page shows:
+          </p>
+        </div>
+      </div>
+      <ul className="grid max-w-3xl list-disc gap-x-8 gap-y-1.5 pl-12 text-sm text-theme-text-secondary sm:grid-cols-2">
+        <li>The package upgrades that clear the most Critical and High CVEs</li>
+        <li>Every image, CVE and workload, worst first</li>
+        <li>Which affected workloads have a route from outside the cluster</li>
+        <li>CSV downloads for a compliance tracker or a ticket import</li>
+      </ul>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 pl-8">
+        <a href={TRIVY_INSTALL_URL} target="_blank" rel="noreferrer" className="btn-brand inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium">
+          Install Trivy Operator <ExternalLink className="h-3.5 w-3.5" aria-hidden />
+        </a>
+        <span className="text-xs text-theme-text-tertiary">Findings appear here once Trivy has scanned your workloads.</span>
+      </div>
+    </section>
+  )
 }
 
 function VulnerabilitiesError({ error }: { error: unknown }) {
   const upgrade = getRadarUpgradeRequirement(error)
   if (upgrade) {
     return <EmptyState tone="neutral" icon={ShieldAlert} headline={radarUpgradeHeadline('Vulnerability views')} body={radarUpgradeDetail(upgrade)} action={<RadarUpgradeAction requirement={upgrade} />} />
-  }
-  // A cluster without the report kind: nothing failed, there is no scanner.
-  if (isKindUnknown(error)) {
-    return (
-      <EmptyState
-        tone="neutral"
-        icon={ShieldAlert}
-        headline="No vulnerability reports in this cluster"
-        body="General image vulnerability scanning requires Trivy Operator. When installed, its reports appear here."
-        action={<a href={TRIVY_INSTALL_URL} target="_blank" rel="noreferrer" className="btn-brand px-3 py-1.5 text-xs font-medium">How to install Trivy Operator</a>}
-      />
-    )
   }
   return (
     <EmptyState
@@ -508,15 +573,16 @@ function CoverageNotes({ data, view, matches }: {
             <button type="button" onClick={matches.onClear} className="text-accent-text hover:underline">Clear filters</button>
           </>
         )}
-        {/* For someone comparing these numbers with Trivy's own: why they can differ. */}
-        <WithTooltip tip={[
+        {/* For someone comparing these numbers with Trivy's own: why they can differ.
+            With nothing scanned there are no numbers or order to explain. */}
+        {data.summary.imagesScanned > 0 && <WithTooltip tip={[
           "Reports list what was known when each image was scanned, after Trivy's own filters.",
           'A CVE counts once per package version in an image, and findings Trivy left unrated are rated from their CVSS score, so totals can differ from the summaries in Trivy\'s reports.',
           data.coverage.inactiveReports > 0 ? `${data.coverage.inactiveReports} ${data.coverage.inactiveReports === 1 ? 'report is' : 'reports are'} about older revisions or builds that don't run now, and ${data.coverage.inactiveReports === 1 ? "isn't" : "aren't"} counted.` : '',
         ].filter(Boolean).join(' ')}>
           <Info className="h-3.5 w-3.5" aria-label="How these numbers relate to Trivy's" />
-        </WithTooltip>
-        {data.exposure && (
+        </WithTooltip>}
+        {data.exposure && data.summary.imagesScanned > 0 && (
           <WithTooltip tip={sortRule(view)}>
             <span className="inline-flex items-center gap-1 rounded px-1 hover:text-theme-text-secondary" tabIndex={0} aria-label={`Sort: ${sortRule(view)}`}>
               <ArrowDownWideNarrow className="h-3.5 w-3.5" aria-hidden />
@@ -609,12 +675,13 @@ function Num({ children, strong = false }: { children: React.ReactNode; strong?:
   return <span className={clsx('text-right font-mono text-xs tabular-nums', strong ? 'font-medium text-theme-text-primary' : 'text-theme-text-secondary')}>{children}</span>
 }
 
-function ImageTable({ images, onOpen, onOpenReport }: { images: VulnerableImage[]; onOpen: (w: VulnerabilityWorkloadRef) => void; onOpenReport: (img: VulnerableImage) => void }) {
+function ImageTable({ images, columns, onOpen, onOpenReport }: { images: VulnerableImage[]; columns: Record<string, boolean>; onOpen: (w: VulnerabilityWorkloadRef) => void; onOpenReport: (img: VulnerableImage) => void }) {
+  const grid = imageGrid(columns)
   return (
     <div className="shrink-0 overflow-x-auto overflow-y-hidden rounded-lg border border-theme-border bg-theme-surface">
-      <div className="min-w-[860px]">
-        <div className={clsx(HEAD, IMAGE_COLS)}>
-          <span>Image</span><span>Findings</span><NumHead>With a fix</NumHead><span>Running in</span><NumHead>Scanned</NumHead>
+      <div style={{ minWidth: 860 + (columns.os ? 156 : 0) + (columns.scanner ? 128 : 0) }}>
+        <div className={HEAD} style={grid}>
+          <span>Image</span>{columns.os && <OptionalHead column={optionalColumn('image', 'os')} />}<span>Findings</span><NumHead>With a fix</NumHead><span>Running in</span>{columns.scanner && <OptionalHead column={optionalColumn('image', 'scanner')} />}<NumHead>Scanned</NumHead>
         </div>
         {images.map((img) => {
           const exposure = exposureLookup(img.exposed)
@@ -625,11 +692,21 @@ function ImageTable({ images, onOpen, onOpenReport }: { images: VulnerableImage[
               key={img.id}
               flush
               summary={
-                <div className={clsx('grid flex-1 items-center gap-4 text-sm', IMAGE_COLS)}>
+                <div className="grid flex-1 items-center gap-4 text-sm" style={grid}>
                   <span className="flex min-w-0 flex-col">
                     <ImageName image={img.image} className="text-theme-text-primary" />
-                    <span className="truncate font-mono text-xs text-theme-text-tertiary">{[imageParts(img.image).path, img.os].filter(Boolean).join(' · ')}</span>
+                    {/* With the OS column on, the OS and its badge move there. */}
+                    <span className="flex min-w-0 items-center gap-1.5">
+                      <span className="truncate font-mono text-xs text-theme-text-tertiary">{[imageParts(img.image).path, !columns.os && img.os].filter(Boolean).join(' · ')}</span>
+                      {!columns.os && img.osEndOfLife && <EndOfLifeBadge />}
+                    </span>
                   </span>
+                  {columns.os && (
+                    <span className="flex min-w-0 flex-col items-start gap-0.5">
+                      <span className="truncate font-mono text-xs text-theme-text-secondary">{img.os || '—'}</span>
+                      {img.osEndOfLife && <EndOfLifeBadge />}
+                    </span>
+                  )}
                   {img.findingsUnread ? <span className="text-xs text-warning-text">Findings not read</span> : <SeverityBar counts={img.counts} className="max-w-[280px]" />}
                   <WithTooltip tip={img.findingsUnread ? undefined : `${fixable} of ${total} findings have a fixed release`}>
                     <Num>{img.findingsUnread ? '—' : <>{fixable}<span className="text-theme-text-tertiary"> of {total}</span></>}</Num>
@@ -641,22 +718,23 @@ function ImageTable({ images, onOpen, onOpenReport }: { images: VulnerableImage[
                       <ExposedCount exposed={img.exposed} total={img.exposedTotal} unknown={img.exposureUnknown} />
                     </span>
                   </span>
+                  {columns.scanner && <span className="truncate text-xs text-theme-text-secondary">{img.scanner ? [img.scanner.name, img.scanner.version].filter(Boolean).join(' ') : '—'}</span>}
                   <span className="text-right text-xs text-theme-text-tertiary">{formatRelativeAgeTime(img.scannedAt)}</span>
                 </div>
               }
             >
-              <div className={clsx('grid gap-4 py-1.5 pl-10 pr-3', IMAGE_COLS)}>
-                <div className="col-span-3 flex min-w-0 flex-col gap-1.5">
+              <div className="grid gap-4 py-1.5 pl-10 pr-3" style={grid}>
+                <div className="flex min-w-0 flex-col gap-1.5" style={{ gridColumn: `span ${columns.os ? 4 : 3}` }}>
                   <span className="text-xs font-medium text-theme-text-secondary">
                     {img.matching === img.findingsTotal ? 'Findings, worst first' : `${img.matching} of ${img.findingsTotal} findings match`}
                   </span>
-                  <FindingsList findings={img.findings} total={img.findingsTotal} unread={img.findingsUnread} />
+                  <FindingsList findings={img.findings} total={img.findingsTotal} unread={img.findingsUnread} packageUrl={columns.packageUrl} />
                   <span className="flex gap-3 text-xs">
                     {img.matching > img.findings.length && <span className="text-theme-text-tertiary">{img.matching - img.findings.length} more in the report.</span>}
                     <button type="button" onClick={() => onOpenReport(img)} className="text-accent-text hover:underline">Open the scan report</button>
                   </span>
                 </div>
-                <div className="col-span-2 flex min-w-0 flex-col gap-1.5">
+                <div className="flex min-w-0 flex-col gap-1.5" style={{ gridColumn: `span ${columns.scanner ? 3 : 2}` }}>
                   <span className="text-xs font-medium text-theme-text-secondary">{img.workloadsTotal} {img.workloadsTotal === 1 ? 'container' : 'containers'}{img.workloadsTotal > img.workloads.length ? ` (first ${img.workloads.length})` : ''}</span>
                   <WorkloadLinks workloads={img.workloads} onOpen={onOpen} exposure={exposure} />
                 </div>
@@ -676,7 +754,7 @@ function namespaceCount(img: VulnerableImage): string {
   return `${partial ? 'at least ' : ''}${n} ${n === 1 ? 'namespace' : 'namespaces'}`
 }
 
-function FindingsList({ findings, total, unread }: { findings: VulnerableImage['findings']; total: number; unread?: boolean }) {
+function FindingsList({ findings, total, unread, packageUrl }: { findings: VulnerableImage['findings']; total: number; unread?: boolean; packageUrl?: boolean }) {
   if (unread) {
     return <span className="text-xs text-warning-text">Not read: this request reached its findings limit before this image. Narrow with the namespace picker.</span>
   }
@@ -685,8 +763,13 @@ function FindingsList({ findings, total, unread }: { findings: VulnerableImage['
   }
   return (
     <div className="flex flex-col divide-y divide-theme-border border-y border-theme-border">
+      {packageUrl && (
+        <div className={clsx('grid items-center gap-3 py-1 text-[11px] font-semibold uppercase tracking-wider text-theme-text-tertiary', FINDING_COLS_PURL)}>
+          <span>CVE</span><span>Severity</span><span>Package</span><span>Fix</span><OptionalHead column={optionalColumn('image', 'packageUrl')} />
+        </div>
+      )}
       {findings.map((f, i) => (
-        <div key={`${f.id}/${f.package}/${f.installedVersion}/${i}`} className="grid grid-cols-[136px_72px_minmax(0,0.8fr)_minmax(0,1.4fr)] items-center gap-3 py-1 text-xs">
+        <div key={`${f.id}/${f.package}/${f.installedVersion}/${i}`} className={clsx('grid items-center gap-3 py-1 text-xs', packageUrl ? FINDING_COLS_PURL : FINDING_COLS)}>
           {f.link ? (
             <WithTooltip tip={f.title}><a href={f.link} target="_blank" rel="noreferrer" className="truncate font-mono text-accent-text hover:underline">{f.id}</a></WithTooltip>
           ) : (
@@ -695,11 +778,19 @@ function FindingsList({ findings, total, unread }: { findings: VulnerableImage['
           <SeverityBadge severity={f.severity} fromScore={f.severityFromScore} score={f.score} />
           <span className="truncate font-mono text-theme-text-secondary">{f.package}</span>
           <FixVersion installed={f.installedVersion} fixed={f.fixedVersion} target={f.fixTarget} />
+          {packageUrl && (
+            <WithTooltip tip={f.packageUrl}>
+              <span className="truncate font-mono text-theme-text-tertiary">{f.packageUrl || '—'}</span>
+            </WithTooltip>
+          )}
         </div>
       ))}
     </div>
   )
 }
+
+const FINDING_COLS = 'grid-cols-[136px_72px_minmax(0,0.8fr)_minmax(0,1.4fr)]'
+const FINDING_COLS_PURL = 'grid-cols-[136px_72px_minmax(0,0.8fr)_minmax(0,1.4fr)_minmax(0,1fr)]'
 
 function FixTable({ fixes, onOpen, onShowCVE }: { fixes: VulnerabilityFix[]; onOpen: (w: VulnerabilityWorkloadRef) => void; onShowCVE: (id: string) => void }) {
   return (
@@ -772,13 +863,19 @@ function FixTable({ fixes, onOpen, onShowCVE }: { fixes: VulnerabilityFix[]; onO
   )
 }
 
-function CVETable({ cves, onOpen }: { cves: VulnerabilityCVE[]; onOpen: (w: VulnerabilityWorkloadRef) => void }) {
+function CVETable({ cves, columns, onOpen }: { cves: VulnerabilityCVE[]; columns: Record<string, boolean>; onOpen: (w: VulnerabilityWorkloadRef) => void }) {
+  const grid = cveGrid(columns)
+  const extra = (columns.published ? 1 : 0) + (columns.age ? 1 : 0)
+  const now = Date.now()
   return (
     <div className="flex shrink-0 flex-col gap-2">
       <div className="shrink-0 overflow-x-auto overflow-y-hidden rounded-lg border border-theme-border bg-theme-surface">
-        <div className="min-w-[960px]">
-          <div className={clsx(HEAD, CVE_COLS)}>
-            <span>CVE</span><span>Severity</span><NumHead>Score</NumHead><span>Package</span><span>Fix</span><NumHead>Images</NumHead><NumHead>Workloads</NumHead>
+        <div style={{ minWidth: 960 + (columns.published ? 108 : 0) + (columns.age ? 92 : 0) }}>
+          <div className={HEAD} style={grid}>
+            <span>CVE</span><span>Severity</span><NumHead>Score</NumHead>
+            {columns.published && <OptionalHead column={optionalColumn('cve', 'published')} />}
+            {columns.age && <OptionalHead column={optionalColumn('cve', 'age')} align="right" />}
+            <span>Package</span><span>Fix</span><NumHead>Images</NumHead><NumHead>Workloads</NumHead>
           </div>
           {cves.map((c) => {
             const exposure = exposureLookup(c.exposed)
@@ -787,13 +884,15 @@ function CVETable({ cves, onOpen }: { cves: VulnerabilityCVE[]; onOpen: (w: Vuln
               key={c.id}
               flush
               summary={
-                <div className={clsx('grid flex-1 items-center gap-4 text-sm', CVE_COLS)}>
+                <div className="grid flex-1 items-center gap-4 text-sm" style={grid}>
                   <span className="flex min-w-0 flex-col">
                     <span className="truncate font-mono text-theme-text-primary">{c.id}</span>
                     {c.title && <span className="truncate text-xs text-theme-text-tertiary">{c.title}</span>}
                   </span>
                   <SeverityBadge severity={c.severity} />
                   <Num>{c.score?.toFixed(1) ?? '—'}</Num>
+                  {columns.published && <PublishedDate at={c.publishedAt} now={now} />}
+                  {columns.age && <CVEAge at={c.publishedAt} now={now} />}
                   <span className="truncate font-mono text-xs text-theme-text-secondary">{c.packages.join(', ')}</span>
                   <CVEFix cve={c} />
                   <Num>{c.images}</Num>
@@ -805,12 +904,12 @@ function CVETable({ cves, onOpen }: { cves: VulnerabilityCVE[]; onOpen: (w: Vuln
               }
             >
               {c.affected.map((a) => (
-                <div key={a.imageId} className={clsx(SUB, CVE_COLS)}>
+                <div key={a.imageId} className={SUB} style={grid}>
                   <span className="flex min-w-0 flex-col gap-0.5">
                     <ImageName image={a.image} className="text-theme-text-primary" />
                     <WorkloadLinks workloads={a.workloads} onOpen={onOpen} inline exposure={exposure} />
                   </span>
-                  <span className="col-span-2" />
+                  <span style={{ gridColumn: `span ${2 + extra}` }} />
                   <span className="col-span-2 flex min-w-0 flex-col">
                     {a.packages.map((p) => (
                       <span key={`${p.package}/${p.installedVersion}`} className="flex min-w-0 gap-1.5">
@@ -909,6 +1008,23 @@ function WorkloadRoute({ workload: w, gaps }: { workload: VulnerabilityWorkload;
     )
   }
   return <span />
+}
+
+// Days since the CVE was published; a dash when Trivy gave no readable date.
+function CVEAge({ at, now }: { at?: string; now: number }) {
+  const days = at ? daysSince(at, now) : undefined
+  return <Num>{days === undefined ? '—' : `${days.toLocaleString('en-US')} d`}</Num>
+}
+
+// The CVE's publication date; its age, which is not how long it has been
+// here, is in the tooltip.
+function PublishedDate({ at, now }: { at?: string; now: number }) {
+  const days = at ? daysSince(at, now) : undefined
+  return (
+    <WithTooltip tip={days === undefined ? undefined : `Published ${days.toLocaleString('en-US')} ${days === 1 ? 'day' : 'days'} ago. That is the CVE's age, not how long it has been in this cluster.`}>
+      <span className="font-mono text-xs tabular-nums text-theme-text-secondary">{at ? isoDate(at) : '—'}</span>
+    </WithTooltip>
+  )
 }
 
 // Whether an upgrade clears the CVE: in every image, some, or none.
@@ -1063,6 +1179,7 @@ function CleanList({ data, view, onOpen }: { data: VulnerabilitiesResponse; view
               <li key={c.id} className={FOLD_ROW}>
                 <span className="flex min-w-0 items-baseline gap-2">
                   <ImageName image={c.image} className="text-theme-text-primary" />
+                  {c.osEndOfLife && <EndOfLifeBadge />}
                   <span className="shrink-0 text-theme-text-tertiary">scanned {formatRelativeAgeTime(c.scannedAt)}</span>
                 </span>
                 <span className="flex min-w-0 flex-wrap items-baseline gap-x-4">
