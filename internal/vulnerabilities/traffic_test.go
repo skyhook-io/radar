@@ -185,6 +185,17 @@ func TestTrafficNameOnlyMatchNeedsOneWorkload(t *testing.T) {
 	if two.Traffic.WorkloadsTotal != 0 {
 		t.Fatalf("two workloads named frontend: %+v", two.Traffic.Workloads)
 	}
+
+	// The cluster has the twin, but this caller can't read it: still no
+	// match, since the cluster's inventory decides, not the caller's view.
+	ev.MarkSharedNames(func(ns, name string) bool { return ns == "shop" && name == "frontend" })
+	hidden, err := buildWith(context.Background(), items, targets[:len(targets)-1], ViewImage, Filter{}, false, nil, ev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hidden.Traffic.WorkloadsTotal != 0 {
+		t.Fatalf("a twin the caller can't see: %+v", hidden.Traffic.Workloads)
+	}
 }
 
 // The CSV says yes or nothing, with the window and what counted on every

@@ -20,11 +20,12 @@ func TestVulnerabilityTrafficMemo(t *testing.T) {
 	var memo vulnTrafficMemo
 	var calls atomic.Int32
 	ev := vulnerabilities.NewTrafficEvidence("caretta", time.Minute, false, nil, nil)
-	active := func() string { return "caretta" }
+	active := func() (string, bool) { return "caretta", true }
+	settled := func() string { return "caretta" }
 	fetch := func(context.Context) (*vulnerabilities.TrafficEvidence, bool) { calls.Add(1); return ev, true }
 	mgr := &traffic.Manager{}
 	for range 3 {
-		if got := memo.get(context.Background(), mgr, active, vulnTrafficWait, fetch); got != ev {
+		if got := memo.get(context.Background(), mgr, active, settled, vulnTrafficWait, fetch); got != ev {
 			t.Fatalf("got %v", got)
 		}
 	}
@@ -37,7 +38,7 @@ func TestVulnerabilityTrafficMemo(t *testing.T) {
 	other := &traffic.Manager{}
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	if got := memo.get(ctx, other, active, vulnTrafficWait, slow); got != nil {
+	if got := memo.get(ctx, other, active, settled, vulnTrafficWait, slow); got != nil {
 		t.Fatalf("a new cluster got the old answer: %v", got)
 	}
 	close(release)
@@ -50,9 +51,10 @@ func TestVulnerabilityTrafficMemoSourceSwitch(t *testing.T) {
 	var memo vulnTrafficMemo
 	mgr := &traffic.Manager{}
 	source := "hubble"
-	active := func() string { return source }
+	active := func() (string, bool) { return source, true }
+	settled := func() string { return source }
 	hubble := vulnerabilities.NewTrafficEvidence("hubble", time.Minute, true, nil, nil)
-	if got := memo.get(context.Background(), mgr, active, vulnTrafficWait, func(context.Context) (*vulnerabilities.TrafficEvidence, bool) { return hubble, true }); got != hubble {
+	if got := memo.get(context.Background(), mgr, active, settled, vulnTrafficWait, func(context.Context) (*vulnerabilities.TrafficEvidence, bool) { return hubble, true }); got != hubble {
 		t.Fatalf("got %v", got)
 	}
 	source = "caretta"
@@ -60,7 +62,7 @@ func TestVulnerabilityTrafficMemoSourceSwitch(t *testing.T) {
 	late := func(context.Context) (*vulnerabilities.TrafficEvidence, bool) { <-release; return hubble, true }
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	if got := memo.get(ctx, mgr, active, vulnTrafficWait, late); got != nil {
+	if got := memo.get(ctx, mgr, active, settled, vulnTrafficWait, late); got != nil {
 		t.Fatalf("after the switch: %v", got)
 	}
 	close(release)
@@ -77,21 +79,33 @@ func TestVulnerabilityTrafficMemoSourceSwitch(t *testing.T) {
 func TestVulnerabilityTrafficMemoKeepsAnswerOnFailure(t *testing.T) {
 	var memo vulnTrafficMemo
 	mgr := &traffic.Manager{}
-	active := func() string { return "beyla" }
+	active := func() (string, bool) { return "beyla", true }
+	settled := func() string { return "beyla" }
 	ev := vulnerabilities.NewTrafficEvidence("beyla", time.Minute, false, nil, nil)
-	memo.get(context.Background(), mgr, active, vulnTrafficWait, func(context.Context) (*vulnerabilities.TrafficEvidence, bool) { return ev, true })
+	memo.get(context.Background(), mgr, active, settled, vulnTrafficWait, func(context.Context) (*vulnerabilities.TrafficEvidence, bool) { return ev, true })
 	memo.mu.Lock()
 	memo.tried = memo.tried.Add(-vulnTrafficFresh)
 	memo.mu.Unlock()
 	var calls atomic.Int32
 	failing := func(context.Context) (*vulnerabilities.TrafficEvidence, bool) { calls.Add(1); return nil, false }
 	for range 2 {
-		if got := memo.get(context.Background(), mgr, active, vulnTrafficWait, failing); got != ev {
+		if got := memo.get(context.Background(), mgr, active, settled, vulnTrafficWait, failing); got != ev {
 			t.Fatalf("a failed fetch replaced the answer: %v", got)
 		}
 	}
 	if n := calls.Load(); n != 1 {
 		t.Fatalf("%d fetches after a failure", n)
+	}
+
+	// The manager busy detecting sources: the standing answer, at once,
+	// without a fetch.
+	busy := func() (string, bool) { return "", false }
+	start := time.Now()
+	if got := memo.get(context.Background(), mgr, busy, settled, vulnTrafficWait, failing); got != ev || time.Since(start) > time.Second {
+		t.Fatalf("busy manager: %v after %s", got, time.Since(start))
+	}
+	if n := calls.Load(); n != 1 {
+		t.Fatalf("a busy manager started a fetch")
 	}
 }
 

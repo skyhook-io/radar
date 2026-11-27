@@ -253,7 +253,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
           <div className="flex items-center gap-2">
             <FreshnessControl mode="auto" dataUpdatedAt={dataUpdatedAt} isFetching={isFetching} onRefresh={() => refetch()} connectionState={connection.state} />
             <PageMenu
-              params={{ ...tableParams, trafficSeen: trafficOnly && !!traffic }}
+              params={tableParams}
               cluster={connection.clusterName || connection.context}
               columns={data.view === view ? availableColumns(view, data).map((c) => ({ key: c.key, label: c.label, shown: optional.shown.has(c.key) })) : []}
               onToggleColumn={optional.toggle}

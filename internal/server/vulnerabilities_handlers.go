@@ -184,6 +184,9 @@ func (s *Server) readVulnerabilities(w http.ResponseWriter, r *http.Request, exp
 	if export && filter.TrafficSeenOnly {
 		trafficWait = vulnTrafficFetchTimeout
 	}
+	// The traffic answer is read before the reports: a context switch between
+	// the two would mark one cluster's workloads with another's traffic.
+	connection := k8s.GetResourceCache()
 	traffic := trafficFor(r.Context(), view, trafficWait)
 	if export && filter.TrafficSeenOnly && traffic == nil && view != vulnerabilities.ViewSummary {
 		if r.Context().Err() == nil {
@@ -229,6 +232,10 @@ func (s *Server) readVulnerabilities(w http.ResponseWriter, r *http.Request, exp
 			log.Printf("[vulnerabilities] Failed to read vulnerability reports %s/%s: %v", scope, "vulnerabilityreports", err)
 			s.writeError(w, http.StatusInternalServerError, err.Error())
 		}
+		return vulnerabilities.Response{}, false
+	}
+	if traffic != nil && k8s.GetResourceCache() != connection {
+		s.writeErrorCode(w, http.StatusConflict, string(readreason.ConnectionChanged), vulnerabilities.ErrConnectionChanged.Error())
 		return vulnerabilities.Response{}, false
 	}
 	return resp, true

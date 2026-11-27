@@ -78,17 +78,29 @@ func vulnerabilityTraffic(ctx context.Context, wait time.Duration) *vulnerabilit
 	if mgr == nil {
 		return nil
 	}
-	return vulnTraffic.get(ctx, mgr, mgr.GetActiveSourceName, wait, func(ctx context.Context) (*vulnerabilities.TrafficEvidence, bool) {
+	return vulnTraffic.get(ctx, mgr, mgr.ActiveSourceNameIfIdle, mgr.GetActiveSourceName, wait, func(ctx context.Context) (*vulnerabilities.TrafficEvidence, bool) {
 		return fetchVulnerabilityTraffic(ctx, mgr)
 	})
 }
 
 // get answers from the memo, fetching when it is older than vulnTrafficFresh.
 // fetch reports ok=false for an answer that failed, which keeps the last good
-// one standing until it is vulnTrafficStale old.
-func (m *vulnTrafficMemo) get(ctx context.Context, mgr *traffic.Manager, active func() string, wait time.Duration, fetch func(context.Context) (*vulnerabilities.TrafficEvidence, bool)) *vulnerabilities.TrafficEvidence {
+// one standing until it is vulnTrafficStale old. active must not block: while
+// the manager is busy (detecting sources), a read gets the standing answer
+// rather than waiting on it. settled is read once a fetch ends, off the
+// request path, to name the source it published under.
+func (m *vulnTrafficMemo) get(ctx context.Context, mgr *traffic.Manager, active func() (string, bool), settled func() string, wait time.Duration, fetch func(context.Context) (*vulnerabilities.TrafficEvidence, bool)) *vulnerabilities.TrafficEvidence {
 	m.mu.Lock()
-	if source := active(); m.manager != mgr || m.source != source {
+	source, idle := active()
+	if !idle {
+		var ev *vulnerabilities.TrafficEvidence
+		if m.manager == mgr {
+			ev = m.standing()
+		}
+		m.mu.Unlock()
+		return ev
+	}
+	if m.manager != mgr || m.source != source {
 		m.manager, m.source, m.gen = mgr, source, m.gen+1
 		m.at, m.tried, m.ev, m.fetching = time.Time{}, time.Time{}, nil, nil
 	}
@@ -107,7 +119,7 @@ func (m *vulnTrafficMemo) get(ctx context.Context, mgr *traffic.Manager, active 
 			ev, ok := fetch(fctx)
 			// A fetch that detected the source publishes under it; one that
 			// read a source since switched away from publishes nothing.
-			after := active()
+			after := settled()
 			m.mu.Lock()
 			if m.gen == gen && (m.source == after || m.source == "") && (ev == nil || ev.Source == after) {
 				m.source, m.tried = after, time.Now()
@@ -195,8 +207,51 @@ func fetchVulnerabilityTraffic(ctx context.Context, mgr *traffic.Manager) (*vuln
 		}
 	}
 	ev := vulnerabilities.NewTrafficEvidence(resp.Source, window, limited, flows, clusterNodes(cache))
+	ev.MarkSharedNames(workloadNameShared(cache))
 	log.Printf("[vulnerabilities] Live Traffic (%s) saw %d workloads receive connections in %s", resp.Source, ev.Len(), window)
 	return ev, true
+}
+
+// workloadNameShared says whether more than one workload kind in a
+// namespace has a name, by Radar's own cache. A kind the cache doesn't hold
+// isn't counted.
+func workloadNameShared(cache *k8s.ResourceCache) func(namespace, name string) bool {
+	if cache == nil {
+		return nil
+	}
+	return func(namespace, name string) bool {
+		n := 0
+		count := func(err error) {
+			if err == nil {
+				n++
+			}
+		}
+		if l := cache.Deployments(); l != nil {
+			_, err := l.Deployments(namespace).Get(name)
+			count(err)
+		}
+		if l := cache.StatefulSets(); l != nil {
+			_, err := l.StatefulSets(namespace).Get(name)
+			count(err)
+		}
+		if l := cache.DaemonSets(); l != nil {
+			_, err := l.DaemonSets(namespace).Get(name)
+			count(err)
+		}
+		if l := cache.CronJobs(); l != nil {
+			_, err := l.CronJobs(namespace).Get(name)
+			count(err)
+		}
+		if l := cache.Jobs(); l != nil {
+			_, err := l.Jobs(namespace).Get(name)
+			count(err)
+		}
+		if l := cache.Pods(); l != nil {
+			_, err := l.Pods(namespace).Get(name)
+			count(err)
+		}
+		return n > 1
+	}
 }
 
 // nodeAddressAnnotations are where CNIs record the address a node's own

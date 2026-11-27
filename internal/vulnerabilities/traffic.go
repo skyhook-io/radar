@@ -47,6 +47,31 @@ type TrafficEvidence struct {
 	// "" when the source named no kind (metrics sources name a workload
 	// only).
 	seen map[string]map[string]bool
+	// shared holds the namespace/names more than one workload kind in the
+	// cluster has: a match by name alone can't say which was seen.
+	shared map[string]bool
+}
+
+// MarkSharedNames records which of the names seen without a kind more than
+// one workload in the cluster has, by the whole cluster's inventory rather
+// than one caller's view, so what a caller can read never decides whose
+// traffic it was.
+func (e *TrafficEvidence) MarkSharedNames(shared func(namespace, name string) bool) {
+	if e == nil || shared == nil {
+		return
+	}
+	for key, kinds := range e.seen {
+		if !kinds[""] {
+			continue
+		}
+		ns, name, _ := strings.Cut(key, "/")
+		if shared(ns, name) {
+			if e.shared == nil {
+				e.shared = map[string]bool{}
+			}
+			e.shared[key] = true
+		}
+	}
 }
 
 // trafficFromOutsideSources are the sources whose endpoint kinds tell a
@@ -215,7 +240,7 @@ func (ix *trafficIndex) seen(w WorkloadRef) bool {
 	if kinds == nil {
 		return false
 	}
-	return kinds[strings.ToLower(w.Kind)] || (kinds[""] && ix.kinds[key] == 1)
+	return kinds[strings.ToLower(w.Kind)] || (kinds[""] && ix.kinds[key] == 1 && !ix.ev.shared[key])
 }
 
 // answer is the wire Traffic for the workloads in targets, at most n listed.
