@@ -387,13 +387,13 @@ func checkPodSpecSecurity(tr *evalTracker, kind, namespace, name string, spec co
 
 	// Pod-level checks
 	if spec.HostNetwork {
-		f("hostNetwork", SeverityWarning, "Pod uses host network")
+		f("hostNetwork", SeverityWarning, msgHostNetwork)
 	}
 	if spec.HostPID {
-		f("hostPID", SeverityDanger, "Pod uses host PID namespace")
+		f("hostPID", SeverityDanger, msgHostPID)
 	}
 	if spec.HostIPC {
-		f("hostIPC", SeverityDanger, "Pod uses host IPC namespace")
+		f("hostIPC", SeverityDanger, msgHostIPC)
 	}
 
 	// automountServiceAccountToken: honors both pod-level and SA-level settings.
@@ -475,31 +475,23 @@ func checkContainerSecurity(f func(string, string, string), c *corev1.Container,
 	sc := c.SecurityContext
 
 	if !effectivelyNonRoot(sc, podSC) {
-		f("runAsRoot", SeverityWarning, fmt.Sprintf("Container %q may run as root (runAsNonRoot not set)", c.Name))
+		f("runAsRoot", SeverityWarning, msgMayRunAsRoot(c.Name))
 	}
 
-	if sc != nil && sc.Privileged != nil && *sc.Privileged {
-		f("privileged", SeverityDanger, fmt.Sprintf("Container %q runs in privileged mode", c.Name))
+	if isPrivileged(sc) {
+		f("privileged", SeverityDanger, msgPrivileged(c.Name))
 	}
 
-	if sc == nil || sc.AllowPrivilegeEscalation == nil || *sc.AllowPrivilegeEscalation {
-		f("privilegeEscalation", SeverityDanger, fmt.Sprintf("Container %q allows privilege escalation", c.Name))
+	if allowsEscalation(sc) {
+		f("privilegeEscalation", SeverityDanger, msgEscalation(c.Name))
 	}
 
 	if sc == nil || sc.ReadOnlyRootFilesystem == nil || !*sc.ReadOnlyRootFilesystem {
 		f("readOnlyRootFs", SeverityWarning, fmt.Sprintf("Container %q does not use a read-only root filesystem", c.Name))
 	}
 
-	if sc != nil && sc.Capabilities != nil {
-		for _, cap := range sc.Capabilities.Add {
-			capStr := strings.ToUpper(string(cap))
-			switch capStr {
-			case "SYS_ADMIN", "NET_ADMIN", "ALL":
-				f("dangerousCapabilities", SeverityDanger, fmt.Sprintf("Container %q adds dangerous capability %s", c.Name, cap))
-			case "NET_RAW", "SYS_PTRACE", "MKNOD", "DAC_OVERRIDE":
-				f("insecureCapabilities", SeverityWarning, fmt.Sprintf("Container %q adds insecure capability %s", c.Name, cap))
-			}
-		}
+	for _, a := range addedCapabilities(c) {
+		f(a.checkID, a.severity, a.msg)
 	}
 }
 
@@ -521,29 +513,8 @@ func checkPodSpecVolumes(tr *evalTracker, kind, namespace, name string, spec cor
 	}
 
 	for _, v := range spec.Volumes {
-		if v.HostPath == nil {
-			continue
-		}
-		p := v.HostPath.Path
-
-		// Container runtime socket — critical attack vector
-		if strings.Contains(p, "docker.sock") || strings.Contains(p, "containerd.sock") || strings.Contains(p, "crio.sock") {
-			f("dockerSocketMount", SeverityDanger, fmt.Sprintf("Volume %q mounts container runtime socket %s", v.Name, p))
-			continue
-		}
-
-		// Root filesystem mount
-		if p == "/" {
-			f("sensitiveHostPath", SeverityDanger, fmt.Sprintf("Volume %q mounts the entire host root filesystem", v.Name))
-			continue
-		}
-
-		// Sensitive host paths
-		for _, prefix := range sensitiveHostPaths {
-			if p == prefix || strings.HasPrefix(p, prefix+"/") {
-				f("sensitiveHostPath", SeverityWarning, fmt.Sprintf("Volume %q mounts sensitive host path %s", v.Name, p))
-				break
-			}
+		if checkID, severity, msg, ok := hostPathFinding(v); ok {
+			f(checkID, severity, msg)
 		}
 	}
 

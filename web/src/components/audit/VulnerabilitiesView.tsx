@@ -46,6 +46,7 @@ import {
   type VulnerabilityCVE,
   type VulnerabilityFix,
   type VulnerabilityGap,
+  type VulnerabilityRiskFactor,
   type VulnerabilitySeverity,
   type VulnerabilityView,
   type VulnerabilityWorkload,
@@ -89,7 +90,13 @@ import {
   uncheckedRoutesSentence,
   EXPOSURE,
   type ExposureLookup,
+  RiskContext,
+  RISK_ORDER,
+  RiskMarks,
+  WorkloadRiskMarks,
+  riskLookup,
 } from '../vulnerabilities/parts'
+import { RiskFilter } from '../vulnerabilities/RiskFilter'
 
 interface VulnerabilitiesViewProps {
   namespaces: string[]
@@ -137,6 +144,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
   const fixableOnly = params.get('fixable') === '1'
   const exposedOnly = params.get('exposed') === '1'
   const eolOnly = params.get('eol') === '1'
+  const risks = (params.get('risk') ?? '').split(',').filter((r): r is VulnerabilityRiskFactor => RISK_ORDER.includes(r as VulnerabilityRiskFactor))
   const optional = useOptionalColumns()
   const optionalFilters = useOptionalFilters()
   const queryDraft = params.get('q') ?? ''
@@ -155,7 +163,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
     mutate(next)
     setParams(next, { replace: !push })
   }
-  const tableParams: VulnerabilitiesParams = { view, namespaces, severities, fixableOnly, exposed: exposedOnly, osEndOfLife: eolOnly, query, workload }
+  const tableParams: VulnerabilitiesParams = { view, namespaces, severities, fixableOnly, exposed: exposedOnly, osEndOfLife: eolOnly, risk: risks, query, workload }
   const { data, isLoading, isFetching, isPlaceholderData, error, dataUpdatedAt, refetch } = useVulnerabilities(tableParams, !reportsAbsent)
   const hasReports = !reportsAbsent && (hasVulnerabilityReports(resources) || !!data)
   const trivySearch = new URLSearchParams({ by: 'cve', q: JAVA4SHELL_CVE })
@@ -213,9 +221,14 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
   // An optional chip: shown when this browser shows it and there is something
   // to filter to, and always while a link sets it.
   const eolChip = eolCount !== undefined && (eolOnly || (optionalFilters.shown('eol') && eolCount > 0))
+  // An older Radar ignores risk= and sends no podRisk.
+  const podRisk = data.podRisk
+  // Hidden, never an empty-looking chip, when no workload in scope has a
+  // risk factor; a link that sets it still shows it.
+  const riskChip = !!podRisk?.counts && (risks.length > 0 || Object.values(podRisk.counts).some((n) => n > 0))
   // Optional filters this Radar can apply: an older one sends no end-of-life count.
   const filterAvailable = (key: string) => key !== 'eol' || eolCount !== undefined
-  const filtered = severities.length > 0 || (fixableOnly && view !== 'fix') || (exposedOnly && !!exposure) || (eolOnly && eolCount !== undefined) || query !== '' || !!workload
+  const filtered = severities.length > 0 || (fixableOnly && view !== 'fix') || (exposedOnly && !!exposure) || (eolOnly && eolCount !== undefined) || (risks.length > 0 && !!podRisk) || query !== '' || !!workload
   // Narrowed only to a workload whose images are all clean or unscanned:
   // the folds below list them, so "nothing matches" would mislead.
   const workloadFolds = !!workload && (view === 'image' || view === 'workload') && severities.length === 0 && !fixableOnly && !(exposedOnly && !!exposure) && !(eolOnly && eolCount !== undefined) && query === '' &&
@@ -227,7 +240,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
   // A new view or filter starts again from the first page of rows.
   // Every filter lives in the URL; the view and the namespace scope aren't filters.
   const clearFilters = () => update((p) => { for (const key of [...p.keys()]) if (!KEEP_ON_CLEAR.has(key)) p.delete(key) }, true)
-  const pageKey = JSON.stringify([view, namespaces, severities, fixableOnly, exposedOnly, eolOnly, query, workload])
+  const pageKey = JSON.stringify([view, namespaces, severities, fixableOnly, exposedOnly, eolOnly, risks, query, workload])
   const fixChip = known && view !== 'fix'
   return (
     <div aria-busy={isFetching} className="flex-1 flex flex-col min-h-0 p-4 gap-4 overflow-auto">
@@ -287,7 +300,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
               onClick={() => toggleSeverity(s.key)}
             />
           ))}
-          {known && (fixChip || exposure || eolChip) && <span aria-hidden className="mx-1.5 h-5 w-px bg-theme-border" />}
+          {known && (fixChip || exposure || eolChip || riskChip) && <span aria-hidden className="mx-1.5 h-5 w-px bg-theme-border" />}
           {fixChip && <FilterPill label="Fix available" tooltip="Only findings the scanner lists a fixed release for" active={fixableOnly} onClick={() => update((p) => (fixableOnly ? p.delete('fixable') : p.set('fixable', '1')))} />}
           {exposure && (
             <FilterPill
@@ -305,6 +318,13 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
               tooltip="Only images whose OS release Trivy reports as end of life. Images not scanned yet stay listed: their OS is unknown."
               active={eolOnly}
               onClick={() => update((p) => (eolOnly ? p.delete('eol') : p.set('eol', '1')))}
+            />
+          )}
+          {riskChip && podRisk && (
+            <RiskFilter
+              counts={podRisk.counts}
+              selected={risks}
+              onChange={(next) => update((p) => (next.length > 0 ? p.set('risk', next.join(',')) : p.delete('risk')))}
             />
           )}
           {workload && (
@@ -353,7 +373,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
       {data.view !== view ? (
         <PaneLoader label="Reading vulnerability reports…" className="min-h-48" />
       ) : (
-        <>
+        <RiskContext.Provider value={{ lookup: riskLookup(podRisk), selected: new Set(risks) }}>
         {rows.length === 0 ? (
           <EmptyState
             tone="neutral"
@@ -393,7 +413,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
           <CleanList data={data} view={view} onOpen={(w) => onNavigateToResource(toResource(w))} />
         )}
         <UnscannedList data={data} onOpen={(w) => onNavigateToResource(toResource(w))} />
-        </>
+        </RiskContext.Provider>
       )}
     </div>
   )
@@ -654,12 +674,14 @@ function WorkloadLinks({ workloads, onOpen, inline = false, exposure }: { worklo
       {workloads.map((w) => {
         const exposed = routesFor(exposure, w)
         return (
-        <li key={`${w.namespace}/${w.kind}/${w.name}/${w.container ?? ''}`} className="flex min-w-0 items-baseline gap-1">
+        <li key={`${w.namespace}/${w.kind}/${w.name}/${w.container ?? ''}`} className="flex min-w-0 flex-wrap items-baseline gap-x-1 gap-y-0.5">
           {exposed && <ExposedMark exposed={exposed} />}
           <button type="button" onClick={() => onOpen(w)} className="group flex min-w-0 items-baseline gap-1.5 text-left text-xs">
             <span className="truncate text-accent-text group-hover:underline">{w.name}</span>
             <span className="shrink-0 text-theme-text-tertiary">{w.kind} · {w.namespace}{w.container ? ` · ${w.container}` : ''}</span>
           </button>
+          {/* Wraps below the name rather than squeezing it. */}
+          <WorkloadRiskMarks workload={w} className="flex-nowrap self-center" />
         </li>
         )
       })}
@@ -716,6 +738,7 @@ function ImageTable({ images, columns, onOpen, onOpenReport }: { images: Vulnera
                     <span className="flex flex-wrap items-center gap-x-2 text-xs text-theme-text-tertiary">
                       {namespaceCount(img)}
                       <ExposedCount exposed={img.exposed} total={img.exposedTotal} unknown={img.exposureUnknown} />
+                      <RiskMarks factors={img.riskFactors} />
                     </span>
                   </span>
                   {columns.scanner && <span className="truncate text-xs text-theme-text-secondary">{img.scanner ? [img.scanner.name, img.scanner.version].filter(Boolean).join(' ') : '—'}</span>}
@@ -825,7 +848,10 @@ function FixTable({ fixes, onOpen, onShowCVE }: { fixes: VulnerabilityFix[]; onO
                       </span>
                     </WithTooltip>
                     <SeverityCounts counts={f.counts} />
-                    <WorkloadSummary workloads={runners} exposure={exposure} />
+                    <span className="flex min-w-0 flex-col gap-0.5">
+                      <WorkloadSummary workloads={runners} exposure={exposure} />
+                      <RiskMarks factors={f.riskFactors} />
+                    </span>
                     <Num>{f.images}</Num>
                     <span className="flex flex-col items-end">
                       <Num strong>{f.workloads}</Num>
@@ -888,6 +914,8 @@ function CVETable({ cves, columns, onOpen }: { cves: VulnerabilityCVE[]; columns
                   <span className="flex min-w-0 flex-col">
                     <span className="truncate font-mono text-theme-text-primary">{c.id}</span>
                     {c.title && <span className="truncate text-xs text-theme-text-tertiary">{c.title}</span>}
+                    {/* Here, not under the workload count: that column is too narrow for them. */}
+                    <RiskMarks factors={c.riskFactors} className="mt-0.5" />
                   </span>
                   <SeverityBadge severity={c.severity} />
                   <Num>{c.score?.toFixed(1) ?? '—'}</Num>
@@ -959,9 +987,10 @@ function WorkloadTable({ workloads, exposure, severities, query, namespaces, onO
             flush
             summary={
               <div className={clsx('grid flex-1 items-start gap-4 text-sm', cols)}>
-                <span className="flex min-w-0 flex-col">
+                <span className="flex min-w-0 flex-col gap-0.5">
                   <span className="truncate text-theme-text-primary">{w.name}</span>
                   <span className="text-xs text-theme-text-tertiary">{w.kind} · {w.namespace}</span>
+                  <WorkloadRiskMarks workload={w} />
                 </span>
                 <WorkloadFindings workload={w} />
                 {exposure && <WorkloadRoute workload={w} gaps={exposure.gaps} />}

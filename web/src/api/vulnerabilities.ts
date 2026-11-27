@@ -57,6 +57,34 @@ export interface VulnerabilityExposure {
   exposedTotal?: number
   /** None of the row's workloads is known exposed, but some are where Radar couldn't read every route kind. */
   exposureUnknown?: boolean
+  /** The risky Pod settings of the row's workloads, together. Absent from an older Radar. */
+  riskFactors?: VulnerabilityRiskFactor[]
+}
+
+/**
+ * A Pod setting that widens what a compromised container reaches, read from
+ * the workload's Pod specs with the Best practices checks' rules.
+ * mayRunAsRoot: nothing in the spec rules root out and no UID is set, so the
+ * image's USER decides; a workload that runs as root doesn't also carry it.
+ */
+export type VulnerabilityRiskFactor = 'privileged' | 'hostAccess' | 'runsAsRoot' | 'mayRunAsRoot' | 'dangerousCapabilities' | 'privilegeEscalation' | 'hostPort'
+
+/** A setting behind a risk factor: the Best practices check that flags it, in that check's words. */
+export interface VulnerabilityRiskSetting {
+  factor: VulnerabilityRiskFactor
+  /** Absent where no check flags the setting (a host port). */
+  check?: string
+  message: string
+}
+
+/** A workload with a risk factor, never a container. */
+export interface RiskyWorkload {
+  kind: string
+  group: string
+  namespace: string
+  name: string
+  factors: VulnerabilityRiskFactor[]
+  settings: VulnerabilityRiskSetting[]
 }
 
 export interface VulnerabilityFinding {
@@ -169,6 +197,7 @@ export interface VulnerabilityWorkload {
   routesTotal?: number
   /** No route seen, but Radar couldn't read every route kind that could reach it. */
   exposureUnknown?: boolean
+  riskFactors?: VulnerabilityRiskFactor[]
 }
 
 export interface VulnerabilitySummary {
@@ -212,6 +241,16 @@ export interface VulnerabilitiesResponse {
     /** Route kinds this cluster serves that Radar doesn't follow (Istio, Traefik IngressRoute, Contour, Knative). */
     unchecked?: { kind: string; group?: string }[]
   }
+  /**
+   * Present when this Radar reads risky Pod settings; absent from an older one.
+   * workloads: those the rows name with any factor, with settings only for the
+   * serious three and the factors the risk filter selects. counts: workloads
+   * in scope with each factor, before the filters.
+   */
+  podRisk?: {
+    workloads?: RiskyWorkload[]
+    counts: Record<VulnerabilityRiskFactor, number>
+  }
   coverage: {
     complete: boolean
     gaps: VulnerabilityGap[]
@@ -232,6 +271,8 @@ export interface VulnerabilitiesParams {
   exposed?: boolean
   /** Only images whose OS the scanner reports as end of life. */
   osEndOfLife?: boolean
+  /** Only rows affecting a workload with any of these risk factors. */
+  risk?: VulnerabilityRiskFactor[]
   query?: string
   workload?: { kind: string; group?: string; namespace: string; name: string }
 }
@@ -403,6 +444,7 @@ export function vulnerabilitiesPath(p: VulnerabilitiesParams): string {
   if (p.fixableOnly) params.set('fixable', '1')
   if (p.exposed) params.set('exposed', '1')
   if (p.osEndOfLife) params.set('eol', '1')
+  if (p.risk && p.risk.length > 0) params.set('risk', p.risk.join(','))
   if (p.query?.trim()) params.set('q', p.query.trim())
   if (p.workload) {
     params.set('workloadKind', p.workload.kind)

@@ -42,6 +42,7 @@ func (j *rollup) fixes(ctx context.Context, f Filter) ([]Fix, error) {
 	imageWorkloads := map[string][]WorkloadRef{}
 	imageExposed := map[string]bool{}
 	imageUnknown := map[string]bool{}
+	imageRisk := map[string]riskBits{}
 	for _, agg := range j.sortedImages() {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -55,6 +56,9 @@ func (j *rollup) fixes(ctx context.Context, f Filter) ([]Fix, error) {
 		distinct := withoutContainers(workloads)
 		imageExposed[r.imageID] = slices.ContainsFunc(distinct, j.exposed)
 		imageUnknown[r.imageID] = j.exposureUnknown(distinct)
+		for _, w := range distinct {
+			imageRisk[r.imageID] |= j.riskOf(w)
+		}
 		shown := m.listed(distinct, j.lim.workloadsPerAffected)
 		rowMatched := m.rowMatches(agg.searchText(), workloads)
 		packages := map[string]*imagePackage{}
@@ -160,6 +164,7 @@ func (j *rollup) fixes(ctx context.Context, f Filter) ([]Fix, error) {
 			return nil, j.stopped()
 		}
 		row.ExposureUnknown = row.ExposedTotal == 0 && slices.ContainsFunc(imageIDs, func(id string) bool { return imageUnknown[id] })
+		row.RiskFactors = imageRisks(imageIDs, imageRisk)
 		slices.SortStableFunc(row.Affected, func(x, y FixImage) int {
 			return cmp.Or(compareBool(imageExposed[y.ImageID], imageExposed[x.ImageID]), cmp.Compare(y.WorkloadsTotal, x.WorkloadsTotal), cmp.Compare(x.Image, y.Image))
 		})

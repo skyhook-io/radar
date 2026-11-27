@@ -19,7 +19,9 @@ import (
 // rolled up to the images that run now, by image, CVE, workload or fix.
 //
 // Query: view=image|cve|workload|fix|summary, severity=critical,high,
-// fixable=1, exposed=1, q=, namespaces=, and workloadKind + workloadNamespace +
+// fixable=1, exposed=1, risk= (risk factors, any of them; the answer also
+// carries the settings behind those), q=, namespaces=, and workloadKind +
+// workloadNamespace +
 // workloadName (+ optional workloadGroup) to narrow to one workload (the
 // workload drawer).
 //
@@ -39,6 +41,11 @@ import (
 // Gateway API routes across the caller's whole namespace ceiling, which
 // namespace access covers for those kinds; the view's narrower picker
 // scope would otherwise drop a shared Gateway and change the answer.
+//
+// Risk factors (podRisk, each row's riskFactors) come from the specs of the
+// Pods and CronJobs the answer already reads, with the Best practices
+// checks' rules: no read of its own, and no wider than the caller's Pod
+// access.
 func (s *Server) handleVulnerabilities(w http.ResponseWriter, r *http.Request) {
 	resp, ok := s.readVulnerabilities(w, r, false)
 	if ok {
@@ -135,6 +142,7 @@ func vulnerabilityFilter(r *http.Request) vulnerabilities.Filter {
 		ExposedOnly:     q.Get("exposed") == "1" || q.Get("exposed") == "true",
 		OSEndOfLifeOnly: q.Get("eol") == "1" || q.Get("eol") == "true",
 	}
+	filter.RiskFactors, _ = vulnerabilities.ParseRiskFactors(q.Get("risk"))
 	if kind, ns, name := q.Get("workloadKind"), q.Get("workloadNamespace"), q.Get("workloadName"); kind != "" && ns != "" && name != "" {
 		filter.Workload = &vulnerabilities.WorkloadRef{Kind: kind, Group: q.Get("workloadGroup"), Namespace: ns, Name: name}
 	}
@@ -158,6 +166,10 @@ func (s *Server) readVulnerabilities(w http.ResponseWriter, r *http.Request, exp
 		return vulnerabilities.Response{}, false
 	}
 	if _, err := vulnerabilities.ParseSeverities(q.Get("severity")); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return vulnerabilities.Response{}, false
+	}
+	if _, err := vulnerabilities.ParseRiskFactors(q.Get("risk")); err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return vulnerabilities.Response{}, false
 	}

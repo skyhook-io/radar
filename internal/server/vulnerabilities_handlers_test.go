@@ -144,6 +144,11 @@ func TestVulnerabilitiesFollowReportRBAC(t *testing.T) {
 	if status, _ := getVulnerabilities(t, env, "/api/vulnerabilities?view=nope", "alice"); status != http.StatusBadRequest {
 		t.Fatalf("bad view: %d", status)
 	}
+	for _, q := range []string{"risk=root", "risk=privileged,bogus"} {
+		if status, _ := getVulnerabilities(t, env, "/api/vulnerabilities?view=image&"+q, "alice"); status != http.StatusBadRequest {
+			t.Fatalf("%s: %d", q, status)
+		}
+	}
 }
 
 // The export reads through the same gate as the list: what bob can't read is
@@ -188,7 +193,11 @@ func TestVulnerabilitiesExport(t *testing.T) {
 	env.srv.permCache.Set("carol", nil, carol)
 	resp = env.authGet(t, "/api/vulnerabilities/export?view=workload", "carol", "")
 	body = readBody(t, resp)
-	if resp.StatusCode != http.StatusOK || body != "cluster,scanned,status,kind,namespace,workload,critical,high,medium,low,unrated,with_a_fix,containers,exposed_workloads\r\n"+k8s.GetClusterName()+",,no access,,*,,,,,,,,,\r\n" {
+	// After status, the gap row fills only namespace, the second of the
+	// workload view's own columns.
+	cols := vulnerabilities.ExportColumns[vulnerabilities.ViewWorkload]
+	gapRow := k8s.GetClusterName() + ",,no access,,*" + strings.Repeat(",", len(cols)-5)
+	if resp.StatusCode != http.StatusOK || body != strings.Join(cols, ",")+"\r\n"+gapRow+"\r\n" {
 		t.Fatalf("carol: %d %q", resp.StatusCode, body)
 	}
 
@@ -308,5 +317,19 @@ func TestVulnerabilitiesExportPrepareTimeout(t *testing.T) {
 	}
 	if resp := env.authGet(t, "/api/vulnerabilities/export?view=cve", "alice", ""); resp.StatusCode != http.StatusOK {
 		t.Fatalf("the next export: %d %s", resp.StatusCode, readBody(t, resp))
+	}
+}
+
+// risk= keeps the rows with any factor it names.
+func TestVulnerabilityFilterRisk(t *testing.T) {
+	for query, want := range map[string][]vulnerabilities.RiskFactor{
+		"risk=privileged,hostPort": {vulnerabilities.RiskPrivileged, vulnerabilities.RiskHostPort},
+		"risk=":                    nil,
+		"":                         nil,
+	} {
+		r := httptest.NewRequest(http.MethodGet, "/api/vulnerabilities?"+query, nil)
+		if got := vulnerabilityFilter(r).RiskFactors; !slices.Equal(got, want) {
+			t.Errorf("%q: %v", query, got)
+		}
 	}
 }
