@@ -145,6 +145,8 @@ func usableSample(val float64) bool {
 type BeylaSource struct {
 	k8sClient kubernetes.Interface
 	queryFn   promQueryFunc
+	// servicePorts reads a destination's Service ports; nil reads Radar's cache.
+	servicePorts servicePortLookup
 
 	// mu guards the fields Detect resolves and the pollers read. Manager releases
 	// its own lock before calling into a source, so a re-detection can land while
@@ -397,6 +399,9 @@ type l4LabelPresence struct {
 	portedDsts map[dstKey]bool
 	port       bool
 	transport  bool
+	// portsFilled counts the port-0 edges given a port, from an HTTP server_port
+	// or their destination's Services, because dst_port is not exported.
+	portsFilled int
 	// nodeLabelsMissing is set when the probe answered that no series carries
 	// a node label, so cross-node flows cannot be collapsed and count twice.
 	nodeLabelsMissing bool
@@ -520,6 +525,14 @@ func (p l4LabelPresence) warning(flowCount int) string {
 			// nothing.
 			metric := strings.TrimSuffix(p.metric, "_total")
 			switch {
+			case !p.port && !p.transport && p.portsFilled > 0:
+				parts = append(parts, fmt.Sprintf("Beyla is not exporting dst.port and transport. Ports marked \"from Service\" are "+
+					"taken from Service specs, not observed; an edge to a destination without a Service appears "+
+					"as port 0, and UDP is shown as TCP. Both are opt-in, added under attributes.select for %s.", metric))
+			case !p.port && p.portsFilled > 0:
+				parts = append(parts, fmt.Sprintf("Beyla is not exporting dst.port, so ports marked \"from Service\" are taken from "+
+					"Service specs, not observed; an edge to a destination without a Service appears as port 0. "+
+					"It is opt-in, added under attributes.select for %s.", metric))
 			case !p.port && !p.transport:
 				parts = append(parts, fmt.Sprintf("Beyla is not exporting dst.port and transport, so edges here "+
 					"have no port or protocol detail: they appear as port 0, and UDP is shown as TCP. Both are "+
@@ -727,6 +740,18 @@ func (s *BeylaSource) getFlowsInternal(ctx context.Context, opts FlowOptions, sc
 				f.Verdict = "error"
 			}
 		}
+	}
+
+	if !presence.port {
+		edges := make([]*Flow, 0, len(l4Map))
+		for _, f := range l4Map {
+			edges = append(edges, f)
+		}
+		lookup := s.servicePorts
+		if lookup == nil {
+			lookup = cachedServicePorts
+		}
+		presence.portsFilled = inferServicePorts(edges, l7Flows, presence.transport, lookup)
 	}
 
 	result := make([]Flow, 0, len(l4Map))
@@ -1155,12 +1180,13 @@ func (s *BeylaSource) queryUnorientable(ctx context.Context, opts FlowOptions, s
 			h.forward, h.backward = h.backward, 0
 		}
 		flows = append(flows, Flow{
-			Source:      Endpoint{Name: conv.key.srcWorkload, Namespace: conv.key.srcNs, Kind: mapBeylaKind(att.srcType), Workload: conv.key.srcWorkload},
-			Destination: Endpoint{Name: conv.key.dstWorkload, Namespace: conv.key.dstNs, Kind: mapBeylaKind(att.dstType), Workload: conv.key.dstWorkload},
-			Protocol:    mapBeylaTransport(conv.transport),
-			LastSeen:    time.Now(),
-			BytesSent:   h.forward,
-			BytesRecv:   h.backward,
+			Source:        Endpoint{Name: conv.key.srcWorkload, Namespace: conv.key.srcNs, Kind: mapBeylaKind(att.srcType), Workload: conv.key.srcWorkload},
+			Destination:   Endpoint{Name: conv.key.dstWorkload, Namespace: conv.key.dstNs, Kind: mapBeylaKind(att.dstType), Workload: conv.key.dstWorkload},
+			Protocol:      mapBeylaTransport(conv.transport),
+			LikelyOverlay: likelyOverlay(att.srcType, att.dstType, conv.transport, 0),
+			LastSeen:      time.Now(),
+			BytesSent:     h.forward,
+			BytesRecv:     h.backward,
 			// Beyla reports no request count for these, and deriving one from bytes
 			// would be a number it never measured.
 			DirectionUnknown: true,
@@ -1349,12 +1375,13 @@ func (s *BeylaSource) parseL4Flows(result *prom.QueryResult, w rateWindow) (map[
 		}
 
 		flow := &Flow{
-			Source:      Endpoint{Name: srcName, Namespace: srcNs, Kind: mapBeylaKind(srcType), Workload: srcName},
-			Destination: Endpoint{Name: dstName, Namespace: dstNs, Kind: mapBeylaKind(dstType), Workload: dstName, Port: port},
-			Protocol:    mapBeylaTransport(labels["transport"]),
-			Port:        port,
-			LastSeen:    time.Now(),
-			BytesSent:   int64(val * w.seconds),
+			Source:        Endpoint{Name: srcName, Namespace: srcNs, Kind: mapBeylaKind(srcType), Workload: srcName},
+			Destination:   Endpoint{Name: dstName, Namespace: dstNs, Kind: mapBeylaKind(dstType), Workload: dstName, Port: port},
+			Protocol:      mapBeylaTransport(labels["transport"]),
+			LikelyOverlay: likelyOverlay(srcType, dstType, labels["transport"], port),
+			Port:          port,
+			LastSeen:      time.Now(),
+			BytesSent:     int64(val * w.seconds),
 			// Deliberately not set here. Beyla exports rates, not connection counts,
 			// so there is no number to put in it — Hubble's `Connections: 1` means
 			// "one observed event" and sums to a real count, which does not carry
@@ -1460,6 +1487,14 @@ func parseIntLabel(s string) int {
 		return 0
 	}
 	return v
+}
+
+// likelyOverlay: node-to-node UDP is what a VXLAN or Geneve overlay looks like
+// from the physical NIC. Without dst_port (port 0) that is only a guess; with it,
+// only the overlay ports count.
+func likelyOverlay(srcType, dstType, transport string, port int) bool {
+	return strings.EqualFold(srcType, "node") && strings.EqualFold(dstType, "node") && strings.EqualFold(transport, "udp") &&
+		(port == 0 || port == 4789 || port == 8472 || port == 6081)
 }
 
 func mapBeylaKind(beylaType string) string {

@@ -20,8 +20,8 @@ func TestMutationConfirmationBinding(t *testing.T) {
 		t.Fatal(err)
 	}
 	reordered := auth.ContextWithUser(context.Background(), &auth.User{Username: "alice", Groups: []string{"team", "edit"}})
-	if target, err := verifyMutationConfirmation(reordered, "delete_resource", token); err != nil || target != "target-uid-rv-policy" {
-		t.Fatalf("valid binding: target=%q err=%v", target, err)
+	if confirmation, err := verifyMutationConfirmation(reordered, "delete_resource", token); err != nil || confirmation.Target != "target-uid-rv-policy" {
+		t.Fatalf("valid binding: confirmation=%v err=%v", confirmation, err)
 	}
 	for _, tc := range []struct {
 		name          string
@@ -99,6 +99,15 @@ func TestMutationConfirmationEmptyGroups(t *testing.T) {
 	}
 }
 
+func verifiedUninstallConfirmation(t *testing.T, ctx context.Context, token string) *mutationConfirmation {
+	t.Helper()
+	binding, err := verifyMutationConfirmation(ctx, "uninstall_helm", token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return binding
+}
+
 func TestMutationConfirmationSingleUse(t *testing.T) {
 	ctx := auth.ContextWithUser(context.WithValue(t.Context(), confirmationContextKey{}, "ctx-a"), &auth.User{Username: "u"})
 	first, err := issueMutationConfirmation(ctx, "uninstall_helm", "target")
@@ -112,10 +121,11 @@ func TestMutationConfirmationSingleUse(t *testing.T) {
 	if first == second {
 		t.Fatal("two previews of the same state must issue distinct tokens")
 	}
-	if !consumeMutationConfirmation(first) || consumeMutationConfirmation(first) {
+	binding := verifiedUninstallConfirmation(t, ctx, first)
+	if binding.consumeForUninstall(ctx) != nil || binding.consumeForUninstall(ctx) == nil {
 		t.Fatal("a token must be usable exactly once")
 	}
-	if !consumeMutationConfirmation(second) {
+	if verifiedUninstallConfirmation(t, ctx, second).consumeForUninstall(ctx) != nil {
 		t.Fatal("consuming one token must not consume another preview's token")
 	}
 
@@ -136,10 +146,12 @@ func TestMutationConfirmationSingleUse(t *testing.T) {
 				continue
 			}
 			reencoded := alt + "." + signature
-			if _, err := verifyMutationConfirmation(ctx, "uninstall_helm", reencoded); err != nil {
+			alternate, err := verifyMutationConfirmation(ctx, "uninstall_helm", reencoded)
+			if err != nil {
 				t.Fatalf("fixture: re-encoded token should still verify: %v", err)
 			}
-			if !consumeMutationConfirmation(token) || consumeMutationConfirmation(reencoded) {
+			original := verifiedUninstallConfirmation(t, ctx, token)
+			if original.consumeForUninstall(ctx) != nil || alternate.consumeForUninstall(ctx) == nil {
 				t.Fatal("a re-encoded copy of a used token must be refused")
 			}
 			return

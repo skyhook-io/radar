@@ -43,6 +43,12 @@ an inference from Beyla's code.
 `Default: false` in the attribute registry, so configuration A emits neither. A
 consumer grouping by them gets empty strings, which is how a port becomes `0` and
 how UDP becomes TCP. Configuration B is the only one where they appear.
+In configuration A Radar fills a port-0 edge whose direction is known: with the
+HTTP `server_port` when the destination serves HTTP on one port (observed, shown
+unmarked), otherwise from the destination's Services (a Service's own port, or
+the target port of the Services selecting a workload's pods), marked "from
+Service", or "multiple (from Service)" when they declare several. A marked port
+is declared, not observed.
 
 **`direction` is exported by default, and every conversation is reported twice.**
 Values are `request`, `response` and `unknown`. The response series has source and
@@ -109,6 +115,14 @@ collapsing the copies; any other per-agent target label would keep them apart an
 the flow would still count twice. Without the node attributes (configs A-C), the copies cannot
 be told apart from two replicas of one owner running on different nodes. The
 Service-attributed series has no destination node and comes from one agent only.
+
+**Node-to-node UDP is marked as likely overlay.** On a VXLAN or Geneve CNI
+(flannel, the k3s default, for example) Beyla also sees the encapsulated pod
+traffic on the node's own NIC: both owner types `Node`, `transport="UDP"`. Radar
+marks it `likelyOverlay` and offers "Hide node-to-node overlay", off by default.
+It needs `transport` (configs B and D). With `dst.port` too, only ports 4789,
+8472 and 6081 count; with `transport` alone it is a guess. kind's default CNI routes without
+encapsulation, so this cluster does not produce such traffic.
 
 ## Metric names
 

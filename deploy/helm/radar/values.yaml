@@ -292,7 +292,8 @@ service:
 # URL path prefix that Radar itself serves under, e.g. /radar. Set this when
 # your ingress forwards a subpath through to the service without stripping it.
 # Leave empty for root serving or for ingresses that rewrite /radar -> /.
-# Cannot be combined with cloud.enabled — Radar Cloud owns the URL path.
+# Must be "" with cloud.enabled, since Radar Cloud reaches Radar at the root
+# path. Where a default sets it (NKP sets /radar), override it with "".
 basePath: ""
 
 # Hostnames that Radar answers when auth.mode is none, besides localhost, IP
@@ -627,6 +628,21 @@ cloud:
     # while owner=false this renders nothing, but it stays latent — re-enabling
     # owner later activates it. See templates/cloud-rbac-node-ops.yaml.
     nodeOps: false
+    # Permissions this cluster authorizes Hub to activate for Cloud owners.
+    # Each grant has a dedicated group. Turn a grant off here to remove its
+    # cluster binding. Hub controls which approved grants are active.
+    integrationWrite:
+      argocd:
+        owner: true
+      velero:
+        owner: true
+      # CNPG defaults on for built-in admin and cluster-admin Owner roles.
+      # Set cnpg.owner: true to approve it for a custom Owner role.
+      cnpg: {}
+      velero-download:
+        owner: false
+      velero-delete:
+        owner: false
   # Create the default read grant for radar:system: Radar Cloud's alerts worker
   # and timeline puller. Includes view via a chart-owned aggregated role, the
   # cluster-read and integration-read add-ons, and cluster-wide Secret read
@@ -664,8 +680,14 @@ mcp:
   execTools: false
   # Independent Service HTTP opt-in. Requires services/proxy; does not enable exec.
   httpTools: false
-  # Set to false to disable the MCP server (useful when deployed behind authentication)
+  # Set to false to disable the MCP server.
   enabled: true
+  oauth:
+    # Browser-based MCP authorization for standalone OIDC deployments.
+    # Requires auth.mode=oidc, an HTTPS auth.oidc.redirectURL, and replicaCount=1.
+    # Uses Recreate rollouts: client registrations and tokens are held in memory,
+    # so clients must re-register and authorize again after a pod restart.
+    enabled: false
 
 # OpenCost/Kubecost display configuration
 cost:

@@ -297,3 +297,14 @@ describe('TrafficNode title', () => {
     expect(container.querySelector(`[title="${label}"]`)!.closest('[aria-hidden="true"]')).not.toBeNull()
   })
 })
+
+it('draws likely-overlay traffic between two nodes as its own edge', async () => {
+  const nodeA = { name: 'node-a', namespace: '', kind: 'External' }
+  const nodeB = { name: 'node-b', namespace: '', kind: 'External' }
+  const tcp: AggregatedFlow = { source: nodeA, destination: nodeB, protocol: 'tcp', port: 0, connections: 0, bytesSent: 10, bytesRecv: 0, flowCount: 1, lastSeen: '' }
+  const overlay: AggregatedFlow = { ...tcp, protocol: 'udp', bytesSent: 1000, likelyOverlay: true }
+  await act(async () => root.render(<TrafficGraph flows={[tcp, overlay]} trafficSource="beyla" onLayoutUnavailable={vi.fn()} windowSeconds={60} />))
+  const ids = [...container.querySelectorAll('[data-edge]')].map(e => e.getAttribute('data-edge'))
+  expect(ids).toContain('node-a->node-b:0')
+  expect(ids).toContain('node-a->node-b:0:overlay')
+})

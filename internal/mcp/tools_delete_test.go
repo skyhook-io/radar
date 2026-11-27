@@ -652,12 +652,12 @@ func TestDeleteResourcePreservesPendingPropagation(t *testing.T) {
 					t.Fatalf("preview hides finalizer management: %+v", preview)
 				}
 				input.Confirm = preview["confirm"].(string)
-				target, err := verifyMutationConfirmation(context.Background(), "delete_resource", input.Confirm)
+				confirmation, err := verifyMutationConfirmation(context.Background(), "delete_resource", input.Confirm)
 				if err != nil {
 					t.Fatal(err)
 				}
 				var approved deleteConfirmation
-				if err := json.Unmarshal([]byte(target), &approved); err != nil || string(approved.Propagation) != effectivePolicy {
+				if err := json.Unmarshal([]byte(confirmation.Target), &approved); err != nil || string(approved.Propagation) != effectivePolicy {
 					t.Fatalf("token policy: %+v, %v", approved, err)
 				}
 				input.DryRun = ptr.To(false)

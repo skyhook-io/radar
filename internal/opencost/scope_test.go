@@ -506,12 +506,12 @@ func TestAutoSelectionKeepsAWithheldStore(t *testing.T) {
 			`{"metric":{"namespace":"shop","cluster":"a"},"value":[1700000000,"1"]},` +
 			`{"metric":{"namespace":"shop","cluster":"b"},"value":[1700000000,"2"]}]}}`))
 	}))
-	prometheuspkg.Initialize(nil, nil, "test")
+	prometheuspkg.Initialize(nil, nil, "test", nil)
 	prometheuspkg.SetManualURL(promServer.URL)
 	t.Cleanup(func() {
 		promServer.Close()
 		prometheuspkg.Reset()
-		prometheuspkg.Initialize(nil, nil, "")
+		prometheuspkg.Initialize(nil, nil, "", nil)
 	})
 	useFakeResolver(t, modeWithheld)
 
@@ -581,10 +581,10 @@ func TestCostScopeCheckOnAMovedConnectionIsAQueryError(t *testing.T) {
 		}
 		return client
 	}
-	prometheuspkg.Initialize(nil, nil, "test")
+	prometheuspkg.Initialize(nil, nil, "test", nil)
 	t.Cleanup(func() {
 		prometheuspkg.Reset()
-		prometheuspkg.Initialize(nil, nil, "")
+		prometheuspkg.Initialize(nil, nil, "", nil)
 	})
 
 	for _, tc := range []struct {
@@ -647,11 +647,11 @@ func TestCostScopeCheckOnTheSameConnectionAnswers(t *testing.T) {
 	}
 	t.Cleanup(k8s.ResetTestState)
 	store, queries := recordingStore(t)
-	prometheuspkg.Initialize(nil, nil, "test")
+	prometheuspkg.Initialize(nil, nil, "test", nil)
 	prometheuspkg.SetManualURL(store.URL)
 	t.Cleanup(func() {
 		prometheuspkg.Reset()
-		prometheuspkg.Initialize(nil, nil, "")
+		prometheuspkg.Initialize(nil, nil, "", nil)
 	})
 	client, err := prometheuspkg.ClientForOperation()
 	if err != nil {

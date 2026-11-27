@@ -513,9 +513,12 @@ func TestCNPGWorkspace_AuditCoversEveryClusterRule(t *testing.T) {
 }
 
 // The workspace shows the same CNPG findings as Checks: a check disabled in
-// the audit settings, or a namespace they ignore, leaves the workspace too.
+// the audit settings, a namespace they ignore, or a Cluster's
+// radarhq.io/ignore-checks annotation leaves the workspace too.
 func TestCNPGWorkspace_AuditFollowsAuditSettings(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	quiet := cnpgObj("postgresql.cnpg.io/v1", "Cluster", "pg", "quiet", nil, nil)
+	quiet.SetAnnotations(map[string]string{"radarhq.io/ignore-checks": "cnpgNoBackupDestination"})
 	if _, err := settings.Update(func(s *settings.Settings) {
 		s.Audit = &settings.AuditConfig{DisabledChecks: []string{"cnpgSingleInstance"}, IgnoredNamespaces: []string{"scratch"}}
 	}); err != nil {
@@ -524,6 +527,7 @@ func TestCNPGWorkspace_AuditFollowsAuditSettings(t *testing.T) {
 	seedSyncedCNPGWorkspace(t, cnpgWorkspaceTestKinds,
 		cnpgObj("postgresql.cnpg.io/v1", "Cluster", "pg", "bare", nil, nil),
 		cnpgObj("postgresql.cnpg.io/v1", "Cluster", "scratch", "tmp", nil, nil),
+		quiet,
 	)
 	var got []string
 	for _, f := range getWorkspaceNoAuth(t, "").Audit {

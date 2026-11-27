@@ -93,6 +93,7 @@ func appPruningFixture() (typed []runtime.Object, dynamic []*unstructured.Unstru
 	)
 	api.ServiceAccountName = "api"
 	api.Containers = []corev1.Container{{Name: "api", Env: []corev1.EnvVar{{Name: "MODE", ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "api-flags"}, Key: "mode"}}}}}}
+	snapGroup := "snapshot.storage.k8s.io"
 	typed = append(testNamespaces("prod"),
 		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "prod", Name: "api", UID: "api"}, Spec: appsv1.DeploymentSpec{Selector: &metav1.LabelSelector{MatchLabels: labels}, Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: labels}, Spec: api}}},
 		&appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Namespace: "prod", Name: "api-1", UID: "api-1", Labels: labels, OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: "api", UID: "api", Controller: &controller}}}, Spec: appsv1.ReplicaSetSpec{Selector: &metav1.LabelSelector{MatchLabels: labels}, Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: labels}, Spec: mounts("api-config")}}},
@@ -107,6 +108,7 @@ func appPruningFixture() (typed []runtime.Object, dynamic []*unstructured.Unstru
 		&autoscalingv2.HorizontalPodAutoscaler{ObjectMeta: meta("api"), Spec: autoscalingv2.HorizontalPodAutoscalerSpec{ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{APIVersion: "apps/v1", Kind: "Deployment", Name: "api"}}},
 		&corev1.ServiceAccount{ObjectMeta: meta("api"), Secrets: []corev1.ObjectReference{{Name: "api-token"}}, ImagePullSecrets: []corev1.LocalObjectReference{{Name: "registry"}}},
 		&corev1.PersistentVolumeClaim{ObjectMeta: meta("api-data")},
+		&corev1.PersistentVolumeClaim{ObjectMeta: meta("api-restore"), Spec: corev1.PersistentVolumeClaimSpec{DataSource: &corev1.TypedLocalObjectReference{APIGroup: &snapGroup, Kind: "VolumeSnapshot", Name: "daily"}}},
 		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "prod", Name: "mirror-tls", Annotations: map[string]string{"reflector.v1.k8s.emberstack.com/reflects": "prod/edge-tls"}}},
 		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: "prod", Name: "mirror-config", Annotations: map[string]string{"reflector.v1.k8s.emberstack.com/reflects": "prod/api-config"}}},
 	)
@@ -179,6 +181,19 @@ func appPruningFixture() (typed []runtime.Object, dynamic []*unstructured.Unstru
 		object("argoproj.io/v1alpha1", "CronWorkflow", "nightly", map[string]any{"workflowSpec": map[string]any{"templates": []any{map[string]any{"name": "main", "steps": []any{[]any{map[string]any{"name": "tell", "templateRef": map[string]any{"name": "notify", "clusterScope": true}}}}}}}}),
 		object("argoproj.io/v1alpha1", "WorkflowTemplate", "build", map[string]any{}),
 		cluster("argoproj.io/v1alpha1", "ClusterWorkflowTemplate", "notify", map[string]any{}),
+		cluster("snapshot.storage.k8s.io/v1", "VolumeSnapshotClass", "csi-snapclass", map[string]any{}),
+		cluster("snapshot.storage.k8s.io/v1", "VolumeSnapshotContent", "snapcontent-1", map[string]any{
+			"volumeSnapshotClassName": "csi-snapclass",
+			"volumeSnapshotRef":       map[string]any{"namespace": "prod", "name": "daily", "uid": "uid-1"},
+		}),
+		withStatus(func() *unstructured.Unstructured {
+			u := object("snapshot.storage.k8s.io/v1", "VolumeSnapshot", "daily", map[string]any{
+				"volumeSnapshotClassName": "csi-snapclass",
+				"source":                  map[string]any{"persistentVolumeClaimName": "api-data"},
+			})
+			u.SetUID("uid-1")
+			return u
+		}(), map[string]any{"boundVolumeSnapshotContentName": "snapcontent-1"}),
 	}
 	for _, kind := range []string{"HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute", "UDPRoute"} {
 		dynamic = append(dynamic, object("gateway.networking.k8s.io/v1", kind, strings.ToLower(kind), map[string]any{"parentRefs": []any{map[string]any{"name": "gateway"}}, "rules": []any{map[string]any{"backendRefs": toAPI}}}))

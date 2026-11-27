@@ -3,12 +3,22 @@ package traffic
 
 import "time"
 
+// Flow.PortSource values. Empty means the port was observed.
+const (
+	PortSourceService         = "service"
+	PortSourceServiceMultiple = "serviceMultiple"
+)
+
 // Flow represents a single network flow between two endpoints.
 type Flow struct {
-	Source           Endpoint `json:"source"`
-	Destination      Endpoint `json:"destination"`
-	Protocol         string   `json:"protocol"` // tcp, udp, http, grpc
-	Port             int      `json:"port"`
+	Source      Endpoint `json:"source"`
+	Destination Endpoint `json:"destination"`
+	Protocol    string   `json:"protocol"` // tcp, udp, http, grpc
+	Port        int      `json:"port"`
+	// PortSource is set when Port was not observed but taken from the
+	// destination's Services: PortSourceService for their one port,
+	// PortSourceServiceMultiple (Port 0) when they declare several.
+	PortSource       string   `json:"portSource,omitempty"`
 	L7Protocol       string   `json:"l7Protocol,omitempty"` // HTTP, gRPC, DNS (if L7 visibility)
 	HTTPMethod       string   `json:"httpMethod,omitempty"`
 	HTTPPath         string   `json:"httpPath,omitempty"`
@@ -34,8 +44,12 @@ type Flow struct {
 	// BytesRecv follow that ordering rather than describing a caller and a callee.
 	// The graph draws these without an arrowhead: the traffic is real, only its
 	// direction is not known.
-	DirectionUnknown bool   `json:"directionUnknown,omitempty"`
-	Verdict          string `json:"verdict"` // forwarded, dropped, error; empty when the source reports none
+	DirectionUnknown bool `json:"directionUnknown,omitempty"`
+	// LikelyOverlay marks node-to-node UDP, which on a VXLAN overlay is pod
+	// traffic already on the map, encapsulated. A guess: without the port it
+	// cannot be confirmed, and WireGuard or DNS between nodes match too.
+	LikelyOverlay bool   `json:"likelyOverlay,omitempty"`
+	Verdict       string `json:"verdict"` // forwarded, dropped, error; empty when the source reports none
 	// PolicyVerdict is the network plugin's own account of which policies
 	// decided this flow, when it reports one (Hubble does). It is the ground
 	// truth a static evaluation can only approximate, and it names policy
@@ -188,12 +202,13 @@ func (r EndpointRef) matches(e Endpoint) bool {
 
 // EndpointPair is one edge of the aggregation, keyed as AggregateFlows keys
 // it: the two endpoints, the port (zero when the source reports none), and
-// whether the direction is known.
+// whether the direction is known and the traffic is likely overlay.
 type EndpointPair struct {
 	Source           EndpointRef `json:"source"`
 	Destination      EndpointRef `json:"destination"`
 	Port             int         `json:"port"`
 	DirectionUnknown bool        `json:"directionUnknown,omitempty"`
+	LikelyOverlay    bool        `json:"likelyOverlay,omitempty"`
 }
 
 // FlowMatch selects the flows behind a graph node or edge: those between one
@@ -212,7 +227,7 @@ func (m *FlowMatch) Matches(f Flow) bool {
 	}
 	for _, p := range m.Pairs {
 		if p.Source.matches(f.Source) && p.Destination.matches(f.Destination) &&
-			p.Port == f.Port && p.DirectionUnknown == f.DirectionUnknown {
+			p.Port == f.Port && p.DirectionUnknown == f.DirectionUnknown && p.LikelyOverlay == f.LikelyOverlay {
 			return true
 		}
 	}
@@ -296,6 +311,7 @@ type AggregatedFlow struct {
 	Destination     Endpoint                 `json:"destination"`
 	Protocol        string                   `json:"protocol"`
 	Port            int                      `json:"port"`
+	PortSource      string                   `json:"portSource,omitempty"`
 	FlowCount       int64                    `json:"flowCount"`
 	BytesByProtocol map[string]ProtocolBytes `json:"bytesByProtocol,omitempty"`
 	// BytesSent and BytesRecv are the cross-protocol sums kept for compatibility.
@@ -307,6 +323,9 @@ type AggregatedFlow struct {
 	// DirectionUnknown is set when the flows behind this edge could not be
 	// oriented; the graph then draws it without an arrowhead.
 	DirectionUnknown bool `json:"directionUnknown,omitempty"`
+	// LikelyOverlay edges hold only Flow.LikelyOverlay flows; the rest of the
+	// traffic between the same two ends is a separate edge.
+	LikelyOverlay bool `json:"likelyOverlay,omitempty"`
 	// L7 stats (if available)
 	L7Protocol   string `json:"l7Protocol,omitempty"` // HTTP, gRPC, DNS (from majority of flows)
 	RequestCount int64  `json:"requestCount,omitempty"`

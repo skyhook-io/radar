@@ -10,7 +10,7 @@ func Families(istioDomain string) []*Family {
 // does.
 func FamiliesIn(istioDomain func() string) []*Family {
 	return []*Family{
-		ConfigReferences, Storage, Reflections, SealedSecrets, FluxHelmOrigins, ArgoWorkflowCronWorkflows, ArgoPodWorkflows,
+		ConfigReferences, Storage, VolumeSnapshots, RestoredVolumeSnapshots, Reflections, SealedSecrets, FluxHelmOrigins, ArgoWorkflowCronWorkflows, ArgoPodWorkflows,
 		Autoscalers, KEDAAuthentication,
 		IngressBackends, RolloutServices, GatewayParents, GatewayBackends, GatewayClasses,
 		IstioGateways, IstioServiceHostsIn(istioDomain),

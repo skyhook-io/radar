@@ -65,6 +65,31 @@ func TestStandaloneClientReadsReleaseStorageOnItsOwnCluster(t *testing.T) {
 	}
 }
 
+func TestCloudInstallClientKeepsExplicitConfig(t *testing.T) {
+	cloud, cloudLists := countingHelmStorage(t)
+	other, otherLists := countingHelmStorage(t)
+	t.Cleanup(k8s.SnapshotTestConnection())
+	k8s.SetTestConfig(&rest.Config{Host: other.URL})
+	ctx := k8s.CaptureConnection(t.Context())
+	ResetTestClient()
+	t.Cleanup(ResetTestClient)
+	if err := InitializeWithRESTConfig(&rest.Config{Host: cloud.URL}); err != nil {
+		t.Fatal(err)
+	}
+	client := GetClient(ctx)
+	if _, err := client.ListReleases(ctx, "shop", nil); err != nil {
+		t.Fatal(err)
+	}
+	action, err := client.actionConfigForWrite(ctx, "shop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, err := action.RESTClientGetter.ToRESTConfig()
+	if err != nil || config.Host != cloud.URL || cloudLists.Load() != 1 || otherLists.Load() != 0 {
+		t.Fatalf("action config %v, err %v, release lists on explicit target %d, other %d", config, err, cloudLists.Load(), otherLists.Load())
+	}
+}
+
 // With no explicit rest.Config and Radar's client not set up yet, a release
 // read reports that instead of panicking on a nil client.
 func TestReleaseStorageReadWithoutAClusterClientFails(t *testing.T) {

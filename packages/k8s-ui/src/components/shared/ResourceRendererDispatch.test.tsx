@@ -1299,10 +1299,12 @@ describe('MetalLB exact group', () => {
   })
   it('leaves Calico BGPPeers and lookalike groups generic', () => {
     const calicoPeer = {apiVersion: 'crd.projectcalico.org/v1', kind: 'BGPPeer', metadata: {name: 'router'}, spec: {peerIP: '10.0.0.1', asNumber: 64512}}
-    expect(renderKind('bgppeers', calicoPeer)).not.toContain('My ASN')
-    expect(renderKind('bgppeers', {...calicoPeer, apiVersion: 'projectcalico.org/v3'})).not.toContain('My ASN')
+    // A marker only the curated MetalLB peer shows: the generic renderer also prints fields like myASN as "My ASN".
+    expect(renderKind('bgppeers', peer)).toContain('179 (default)')
+    expect(renderKind('bgppeers', calicoPeer)).not.toContain('179 (default)')
+    expect(renderKind('bgppeers', {...calicoPeer, apiVersion: 'projectcalico.org/v3'})).not.toContain('179 (default)')
     for (const apiVersion of ['fake.metallb.io/v1beta1', 'metallb.io.example.com/v1']) {
-      for (const [kind, data, marker] of [['ipaddresspools', pool, 'Auto assign'], ['l2advertisements', l2, 'IP address pools'], ['bgpadvertisements', bgpAdv, 'Aggregation length'], ['bgppeers', peer, 'My ASN'], ['configurationstates', state, 'Other failures leave the result Valid']] as const) {
+      for (const [kind, data, marker] of [['ipaddresspools', pool, 'Auto assign'], ['l2advertisements', l2, 'IP address pools'], ['bgpadvertisements', bgpAdv, 'Aggregation length'], ['bgppeers', peer, '179 (default)'], ['configurationstates', state, 'Other failures leave the result Valid']] as const) {
         expect(renderKind(kind, {...data, apiVersion})).not.toContain(marker)
       }
       expect(getResourceStatus('ipaddresspools', {...pool, apiVersion})?.text).not.toBe('Exhausted')
@@ -1405,6 +1407,24 @@ describe('Gateway API route plural collision', () => {
       expect(getResourceStatus(kind, { apiVersion: 'routes.example.io/v1', status: {} })).toBeNull()
       expect(getResourceStatus(kind, { apiVersion: 'gateway.networking.k8s.io/v1', status: {} })).not.toBeNull()
     }
+  })
+})
+
+describe('Traefik kind collisions', () => {
+  const draw = (kind: string, apiVersion: string, overrides?: RendererOverrides) => renderToString(
+    <ResourceRendererDispatch resource={{ kind, namespace: 'shop', name: 'x' }} rendererOverrides={overrides}
+      data={{ apiVersion, kind: 'Middleware', metadata: { name: 'x', namespace: 'shop' }, spec: { collisionProbe: COLLISION_PROBE, routes: [] } }}
+      onCopy={() => {}} copied={null} showCommonSections={false} />,
+  ).replace(/<!-- -->/g, '')
+  it('renders a foreign middlewares CRD generically', () => {
+    expect(draw('middlewares', 'example.com/v1')).toContain(COLLISION_PROBE)
+  })
+  it('uses the Traefik renderer for the legacy traefik.containo.us group', () => {
+    expect(draw('middlewares', 'traefik.containo.us/v1alpha1')).not.toContain(COLLISION_PROBE)
+  })
+  it('lets an override replace the IngressRoute renderer', () => {
+    const html = draw('ingressroutes', 'traefik.io/v1alpha1', { TraefikIngressRouteRenderer: () => <div>override-probe</div> })
+    expect(html).toContain('override-probe')
   })
 })
 

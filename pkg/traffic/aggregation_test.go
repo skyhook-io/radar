@@ -512,3 +512,35 @@ func TestAggregateFlows_RequestAndResponseRecordsAreOneRequest(t *testing.T) {
 		}
 	}
 }
+
+func TestAggregateFlowsReconcilesPortSource(t *testing.T) {
+	a := Endpoint{Name: "api", Namespace: "shop", Kind: "Workload"}
+	b := Endpoint{Name: "db", Namespace: "shop", Kind: "Workload"}
+	for _, order := range [][]Flow{
+		{{Source: a, Destination: b, Protocol: "tcp"}, {Source: a, Destination: b, Protocol: "udp", PortSource: PortSourceServiceMultiple}},
+		{{Source: a, Destination: b, Protocol: "udp", PortSource: PortSourceServiceMultiple}, {Source: a, Destination: b, Protocol: "tcp"}},
+	} {
+		if got := AggregateFlows(order); len(got) != 1 || got[0].PortSource != PortSourceServiceMultiple {
+			t.Errorf("port 0 with any Service ports reads multiple, whatever the order: %+v", got)
+		}
+	}
+	for _, order := range [][]Flow{
+		{{Source: a, Destination: b, Port: 80}, {Source: a, Destination: b, Port: 80, PortSource: PortSourceService}},
+		{{Source: a, Destination: b, Port: 80, PortSource: PortSourceService}, {Source: a, Destination: b, Port: 80}},
+	} {
+		if got := AggregateFlows(order); len(got) != 1 || got[0].PortSource != "" {
+			t.Errorf("an observed port outranks the same number from a Service: %+v", got)
+		}
+	}
+}
+
+func TestFlowMatchKeepsLikelyOverlayApart(t *testing.T) {
+	a := Endpoint{Name: "node-a", Kind: "Pod"}
+	b := Endpoint{Name: "node-b", Kind: "Pod"}
+	other := FlowMatch{Pairs: []EndpointPair{{Source: EndpointRef{Name: "node-a"}, Destination: EndpointRef{Name: "node-b"}}}}
+	overlay := FlowMatch{Pairs: []EndpointPair{{Source: EndpointRef{Name: "node-a"}, Destination: EndpointRef{Name: "node-b"}, LikelyOverlay: true}}}
+	f := Flow{Source: a, Destination: b, Protocol: "udp", LikelyOverlay: true}
+	if other.Matches(f) || !overlay.Matches(f) {
+		t.Errorf("an overlay record belongs to the overlay edge only: other=%t overlay=%t", other.Matches(f), overlay.Matches(f))
+	}
+}

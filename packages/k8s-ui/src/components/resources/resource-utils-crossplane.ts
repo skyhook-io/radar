@@ -109,10 +109,20 @@ export function getCompositionUpdatePolicy(data: any): string | null {
   return data?.spec?.crossplane?.compositionUpdatePolicy ?? data?.spec?.compositionUpdatePolicy ?? null
 }
 
+/**
+ * A namespaced XR (Crossplane v2) records its composed refs without a
+ * namespace, because they always live in the XR's own namespace. Fill it in so
+ * callers never read a namespace-less ref as cluster-scoped. A cluster-scoped
+ * XR (v1, or v2 Cluster / LegacyCluster) has no namespace to lend, so its
+ * namespace-less refs stay cluster-scoped.
+ */
 export function getCrossplaneResourceRefs(data: any): CrossplaneResourceRef[] {
   const refs = data?.spec?.crossplane?.resourceRefs ?? data?.spec?.resourceRefs
   if (!Array.isArray(refs)) return []
-  return refs.filter((r: any) => r?.kind && r?.name)
+  const ownNamespace: string | undefined = data?.metadata?.namespace || undefined
+  return refs
+    .filter((r: any) => r?.kind && r?.name)
+    .map((r: CrossplaneResourceRef) => (r.namespace || !ownNamespace ? r : { ...r, namespace: ownNamespace }))
 }
 
 /**

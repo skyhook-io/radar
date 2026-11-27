@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/skyhook-io/radar/internal/k8s"
+
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -331,7 +333,7 @@ func TestObservedReleaseHasNoFieldToGuessFrom(t *testing.T) {
 func TestAddObservedHealthDoesNotClaimHealthyOverAGap(t *testing.T) {
 	// Without a cache no status is read, so drive the rule through its result.
 	row := ObservedRelease{}
-	addObservedHealth(&row, []stampedObject{{kind: "ConfigMap", namespace: "apps", name: "c"}}, true)
+	addObservedHealth(k8s.Current(), &row, []stampedObject{{kind: "ConfigMap", namespace: "apps", name: "c"}}, true)
 	if row.ResourceHealth != "unknown" {
 		t.Fatalf("health = %q, want unknown", row.ResourceHealth)
 	}

@@ -324,7 +324,7 @@ func runPortForward(ctx context.Context, session *PortForwardSession) error {
 			Ports: []int32{int32(session.PodPort)},
 		}, scheme.ParameterCodec)
 
-	dialer, err := pfpkg.NewDialer(config, req.URL())
+	dialer, err := pfpkg.NewDialerWithContext(ctx, config, req.URL())
 	if err != nil {
 		return err
 	}

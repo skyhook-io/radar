@@ -94,7 +94,7 @@ func ResolveHelmNamespacesChecked(ctx context.Context, authz EvidenceAuthorizer,
 			// per-namespace SAR memoized on the user's perms (2-min TTL), so
 			// repeat scans don't re-probe. Falls through to the cluster-wide
 			// path (→ honest 403) when they can't read secrets anywhere.
-			all := k8s.AllNamespaceNames()
+			all := k8s.BoundOrCurrent(ctx).AllNamespaceNames()
 			allowed, complete := authz.FilterNamespacesByCanList("", "secrets", all)
 			if len(allowed) > 0 {
 				for _, ns := range all {
@@ -133,7 +133,7 @@ func resolveCachedEvidenceNamespaces(authz EvidenceAuthorizer, group, resource s
 // evidence-collection block of handleUpgradeReadiness; behavior must stay
 // byte-for-byte identical for the HTTP surface.
 func runUpgradeReadinessScan(ctx context.Context, authz EvidenceAuthorizer, namespaces []string, currentVersion, targetVersion string) (*upgradereadiness.ScanResults, error) {
-	cache := k8s.GetResourceCache()
+	cache := k8s.BoundOrCurrent(ctx).ResourceCache()
 	if cache == nil {
 		return nil, ErrScanNotReady
 	}

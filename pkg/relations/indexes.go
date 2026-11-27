@@ -92,6 +92,7 @@ var sourceResources = map[string]string{
 	"ApiServerSource": "apiserversources", "PingSource": "pingsources", "ContainerSource": "containersources", "SinkBinding": "sinkbindings",
 	"Certificate": "certificates", "CertificateRequest": "certificaterequests", "Order": "orders", "Challenge": "challenges",
 	"Cluster": "clusters", "ScaledObject": "scaledobjects", "ScaledJob": "scaledjobs", "NodePool": "nodepools", "NodeClaim": "nodeclaims", "Machine": "machines",
+	"VolumeSnapshot": "volumesnapshots", "VolumeSnapshotContent": "volumesnapshotcontents",
 }
 
 func istioHostCandidates(obj runtime.Object, visit func(Declaration)) error {

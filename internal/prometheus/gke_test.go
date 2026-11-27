@@ -335,9 +335,9 @@ func TestGKEMetricsCharts(t *testing.T) {
 
 func TestGKECuratedRoutesKeepRawStoreSeparate(t *testing.T) {
 	c := gkeFixture(t, fixtureIssuer, 1)
-	Initialize(c.k8sClient, c.k8sConfig, "fixture")
+	Initialize(c.k8sClient, c.k8sConfig, "fixture", nil)
 	GetClient().inCluster = false
-	t.Cleanup(func() { SetAuthGate(nil); Reset(); Initialize(nil, nil, "") })
+	t.Cleanup(func() { SetAuthGate(nil); Reset(); Initialize(nil, nil, "", nil) })
 	created := time.Now().Add(-20 * time.Minute).Truncate(time.Minute)
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "nginx-abc-111", Namespace: "default", UID: "current-pod", CreationTimestamp: metav1.NewTime(created)}}
 	if err := k8s.InitScopedTestResourceCache(fake.NewClientset(pod), map[string]k8score.ResourceScope{string(k8score.Pods): {Enabled: true}}); err != nil {
@@ -382,8 +382,8 @@ func TestGKECuratedRoutesKeepRawStoreSeparate(t *testing.T) {
 
 func TestGKEConfiguredFrontendWithoutScrapeTargets(t *testing.T) {
 	c := gkeFixture(t, fixtureIssuer, 1)
-	Initialize(c.k8sClient, c.k8sConfig, "fixture")
-	t.Cleanup(func() { Reset(); Initialize(nil, nil, "") })
+	Initialize(c.k8sClient, c.k8sConfig, "fixture", nil)
+	t.Cleanup(func() { Reset(); Initialize(nil, nil, "", nil) })
 	url := c.k8sConfig.Host + "/api/v1/namespaces/gmp-public/services/frontend:web/proxy"
 	SetManualURL(url)
 	client := GetClient()
@@ -445,8 +445,8 @@ func TestGKEConfiguredCapabilityRefresh(t *testing.T) {
 
 func TestGKEConfiguredWorkloadWithUnverifiedConventionalIdentity(t *testing.T) {
 	c := gkeFixture(t, fixtureIssuer, 1)
-	Initialize(c.k8sClient, c.k8sConfig, "fixture")
-	t.Cleanup(func() { SetAuthGate(nil); Reset(); Initialize(nil, nil, "") })
+	Initialize(c.k8sClient, c.k8sConfig, "fixture", nil)
+	t.Cleanup(func() { SetAuthGate(nil); Reset(); Initialize(nil, nil, "", nil) })
 	previous := k8s.GetConnectionStatus()
 	t.Cleanup(func() { k8s.SetConnectionStatus(previous) })
 	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
@@ -769,9 +769,9 @@ func TestGKEExplicitConnectRetriesNegativeAutomaticCapability(t *testing.T) {
 		}
 		return false
 	})
-	Initialize(c.k8sClient, c.k8sConfig, "fixture")
+	Initialize(c.k8sClient, c.k8sConfig, "fixture", nil)
 	GetClient().inCluster = false
-	t.Cleanup(func() { Reset(); Initialize(nil, nil, "") })
+	t.Cleanup(func() { Reset(); Initialize(nil, nil, "", nil) })
 	router := metricsRouter()
 	connect := func(path string) prom.Status {
 		t.Helper()
@@ -789,5 +789,32 @@ func TestGKEExplicitConnectRetriesNegativeAutomaticCapability(t *testing.T) {
 	present.Store(true)
 	if st := connect("/prometheus/connect"); !st.GKESystemMetrics || st.Connected {
 		t.Fatal("explicit Discover did not retry native capability independently of raw discovery")
+	}
+}
+
+func TestGKENativeChartsNeverServeWhileRelayActive(t *testing.T) {
+	c := gkeFixture(t, fixtureIssuer, 1)
+	c.findGKEChartStore(t.Context(), 0, ErrPrometheusNotFound)
+	if c.cachedNativeCharts() == nil {
+		t.Fatal("native reader not established")
+	}
+	f := &fakeRelayTransport{}
+	cfg := testRelayConfig(f, nil)
+	c.mu.Lock()
+	c.applyRelayLocked(&relayState{cfg: cfg, source: cfg.Source})
+	c.mu.Unlock()
+
+	if stores := c.chartStores(t.Context()); stores.native != nil || stores.supplement != nil {
+		t.Fatal("chart stores offered GKE's in-cluster store while the relay is active")
+	}
+	c.findGKEChartStore(t.Context(), c.DiscoveryGeneration(), ErrPrometheusNotFound)
+	if c.gkeChartStore() != nil || c.cachedNativeCharts() != nil {
+		t.Fatal("GKE native reader established while the relay is active")
+	}
+	c.mu.RLock()
+	probed := c.gkeGeneration == c.discoveryGen
+	c.mu.RUnlock()
+	if probed {
+		t.Fatal("GKE discovery ran while the relay is active")
 	}
 }

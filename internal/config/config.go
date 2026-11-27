@@ -95,6 +95,9 @@ type Config struct {
 	// namespaces, the kubeconfig context namespace included, Radar checks its
 	// access in. 0 keeps the default. The CLI reads only the flag and its env var.
 	MaxScopeCandidates int `json:"maxScopeCandidates,omitempty"`
+	// OpenObserve is one OpenObserve connection shared by every kubeconfig
+	// context of a local Radar. In-cluster Radar ignores it.
+	OpenObserve *OpenObserveConfig `json:"openobserve,omitempty"`
 }
 
 // AI-investigation consent disclosure versions, per surface. THE single source of

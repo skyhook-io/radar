@@ -214,9 +214,10 @@ func (c *Client) runRediscovery(verifyAddr, reason string, gen uint64) bool {
 	base := c.baseURL
 	manual := c.manualURL != ""
 	gated := c.headersRequireURLLocked()
+	relay := c.relay != nil
 	c.mu.RUnlock()
 	switch {
-	case retired, gated:
+	case retired, gated, relay:
 		return false
 	case currentGen != gen:
 		// The configuration changed after the signal (Reset, a new URL or
@@ -240,6 +241,7 @@ func (c *Client) runRediscovery(verifyAddr, reason string, gen uint64) bool {
 	case err == nil,
 		errors.Is(err, ErrPrometheusNotFound),
 		errors.Is(err, errDiscoverySuperseded),
+		errors.Is(err, portforward.ErrClosed),
 		errors.Is(err, prom.ErrHeadersRequireURL),
 		errors.Is(err, context.Canceled):
 		// Connected, or nothing to retry: no candidate exists (a new Service
@@ -263,23 +265,19 @@ func (c *Client) noteQueryFailure(addr string, err error) {
 // onForwardLost handles a port-forward that ended on its own. When it served
 // the connection, the connection is gone with it: drop it so no caller probes
 // a dead local port, and rediscover in the background.
-func (c *Client) onForwardLost(owner, address string) {
-	// The callback runs after the forward registry unlocked; if a replacement
-	// forward was published on the same local port meanwhile, the address is
-	// live again and the loss describes the old tunnel only.
-	if portforward.IsActiveAddress(address) {
-		return
-	}
+func (c *Client) onForwardLost(lost *portforward.Handle) {
 	c.mu.Lock()
-	if c.retired || c.baseURL != address {
+	if c.retired || lost == nil || c.forward != lost {
 		c.mu.Unlock()
 		return
 	}
+	address := c.baseURL
+	c.forward = nil
 	c.baseURL = ""
 	c.basePath = ""
 	c.prom = nil
 	c.mu.Unlock()
-	log.Printf("[prometheus] port-forward %s (owner=%s) serving the connection was lost, rediscovering in background", address, owner)
+	log.Printf("[prometheus] port-forward %s serving the connection was lost, rediscovering in background", address)
 	c.requestRediscovery(address, "port-forward "+address+" lost")
 }
 
@@ -288,9 +286,9 @@ func (c *Client) onForwardLost(owner, address string) {
 // client and resource cache are current when a signal fires.
 func RegisterRediscoverySignals() {
 	k8s.OnResourceObserved(observeResourceChange)
-	portforward.SetOnForwardLost(func(owner portforward.Owner, address string) {
+	portforward.SetOnForwardLost(func(lost *portforward.Handle) {
 		if c := GetClient(); c != nil {
-			c.onForwardLost(owner, address)
+			c.onForwardLost(lost)
 		}
 	})
 }
@@ -344,7 +342,7 @@ func (c *Client) observeResourceChange(source kubernetes.Interface, op string, o
 
 	c.mu.RLock()
 	sameCluster := c.k8sClient != nil && c.k8sClient == source
-	skip := c.retired || c.manualURL != ""
+	skip := c.retired || c.manualURL != "" || c.relay != nil
 	base := c.baseURL
 	var connected *prom.ServiceInfo
 	if base != "" && c.discoveryService != nil {
@@ -520,8 +518,12 @@ func isNoResponseError(err error) bool {
 // newConnectedPromClientLocked builds a prom.Client for the connected endpoint
 // whose transport reports unanswered requests. Caller holds c.mu.
 func (c *Client) newConnectedPromClientLocked(httpClient *http.Client) *prom.Client {
-	tr := prom.NewHTTPTransport(c.baseURL, c.basePath, httpClient)
-	tr.Headers = copyHeaders(c.headers)
+	tr := c.newTransportLocked(c.baseURL, c.basePath, httpClient, 0)
+	if c.relay != nil {
+		// No other endpoint can replace the relay, so a failure has nothing
+		// to rediscover.
+		return prom.NewClient(tr)
+	}
 	return prom.NewClient(failureReportingTransport{Transport: tr, addr: c.baseURL, report: c.noteQueryFailure})
 }
 

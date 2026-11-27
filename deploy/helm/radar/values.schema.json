@@ -43,7 +43,7 @@
     "replicaCount": {
       "type": "integer",
       "minimum": 1,
-      "description": "Number of Radar pod replicas. Note: backchannel logout requires single replica."
+      "description": "Number of Radar pod replicas. Note: backchannel logout and MCP OAuth require a single replica."
     },
     "image": {
       "type": "object",
@@ -377,7 +377,48 @@
                 "owner": { "type": "boolean" }
               }
             },
-            "nodeOps": { "type": "boolean" }
+            "nodeOps": { "type": "boolean" },
+            "integrationWrite": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "argocd": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "owner": { "type": "boolean" }
+                  }
+                },
+                "velero": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "owner": { "type": "boolean" }
+                  }
+                },
+                "cnpg": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "owner": { "type": "boolean" }
+                  }
+                },
+                "velero-download": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "owner": { "type": "boolean" }
+                  }
+                },
+                "velero-delete": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "owner": { "type": "boolean" }
+                  }
+                }
+              }
+            }
           }
         },
         "systemRbac": { "type": "boolean" },
@@ -415,7 +456,14 @@
       "properties": {
         "enabled": { "type": "boolean" },
         "execTools": { "type": "boolean" },
-        "httpTools": { "type": "boolean" }
+        "httpTools": { "type": "boolean" },
+        "oauth": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "description": "Enable MCP OAuth for a single-replica standalone OIDC deployment." }
+          }
+        }
       }
     },
     "cost": {

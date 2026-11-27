@@ -63,6 +63,10 @@ export interface WorkloadWritePermissions {
   workflows?: boolean
   /** Can create Argo Workflows (submit a WorkflowTemplate). Absent from an older Radar; treat absence as not allowed. */
   createWorkflows?: boolean
+  /** Can patch CronJobs (Suspend, Resume). Absent from an older Radar, which showed the actions to everyone. */
+  cronJobs?: boolean
+  /** Can create Jobs (Trigger a CronJob). Absent from an older Radar, which showed the action to everyone. */
+  createJobs?: boolean
 }
 
 export type WorkloadContainerType = 'container' | 'initContainer'
@@ -137,7 +141,7 @@ export interface Capabilities {
   secretsUpdate: boolean  // Update secrets (inline editing)
   helmWrite: boolean      // Helm write operations (install, upgrade, rollback, uninstall, apply values)
   nodeWrite: boolean      // Node write operations (cordon, uncordon, drain)
-  workloadWrites?: WorkloadWritePermissions // Workload patch permissions (restart/scale controls)
+  workloadWrites?: WorkloadWritePermissions
   mcpExecTools?: boolean // Full MCP registration; does not grant the caller exec permission
   mcpHelmTools?: boolean // Native Helm MCP tool registered; target Kubernetes permissions still required
   mcpHttpTools?: boolean // Effective in-cluster HTTP registration; services/proxy permission is still required
@@ -181,10 +185,13 @@ export interface CloudConnectCapability {
 
 export interface FeatureCapabilities {
   gitopsActionCapabilities?: boolean
+  ownerAccessGrantReview?: boolean
  helmSourceIdentity?: boolean
   helmInventory?: boolean
   datadogRightsizing?: boolean
   datadogAgentPresence?: boolean
+  openobserveCollectorPresence?: boolean
+  openobserveLocalSetup?: boolean
   resourceReadCoverage?: boolean
   searchCoverage?: boolean
  applicationEvidence?: boolean
@@ -204,6 +211,7 @@ export interface FeatureCapabilities {
   workloadHistory?: boolean
   cnpgWorkspace?: boolean
   cnpgProtectionSetup?: boolean
+  cnpgPostureChecks?: boolean
   veleroWorkspace?: boolean
   /** POST /api/velero/schedules/{namespace}/{name}/backup */
   veleroBackupNow?: boolean
@@ -241,6 +249,7 @@ export interface FeatureCapabilities {
   runtimeAdvisoryChecks?: boolean
   runtimeAdvisoryProgress?: boolean
   sealedSecretsController?: boolean // GET /api/sealedsecrets/controller
+  traefikRoutes?: boolean // GET /api/traefik/routes
   cronJobTriggerJobName?: boolean
   sealedSecretsCert?: boolean // GET /api/sealedsecrets/cert
   workflowStop?: boolean // POST /api/workflows/{namespace}/{name}/stop
@@ -1084,6 +1093,8 @@ export interface APIResource {
   definitionName?: string
   featured?: boolean
   verbs: string[]
+  /** kubectl short names from API discovery (e.g. "pdb"). Absent on older Radar. */
+  shortNames?: string[]
   observation?: DynamicResourceObservation
 }
 
@@ -1716,11 +1727,16 @@ export interface TrafficEndpoint {
 }
 
 // Traffic flow between two endpoints
+/** Set when a port was not observed but taken from the destination's Services:
+ *  `service` for their one port, `serviceMultiple` (port 0) for several. */
+export type TrafficPortSource = 'service' | 'serviceMultiple'
+
 export interface TrafficFlow {
   source: TrafficEndpoint
   destination: TrafficEndpoint
   protocol: string // tcp, udp, http, grpc
   port: number
+  portSource?: TrafficPortSource
   l7Protocol?: string // HTTP, gRPC, DNS
   httpMethod?: string
   httpPath?: string
@@ -1744,6 +1760,9 @@ export interface TrafficFlow {
   /** The conversation's initiator could not be established, so source and
    *  destination are ordered arbitrarily rather than describing a caller. */
   directionUnknown?: boolean
+  /** Node-to-node UDP, likely CNI overlay carrying pod traffic already on the
+   *  map. A guess unless the source reports the overlay port. */
+  likelyOverlay?: boolean
   /** 5xx responses per second. How a rate-based source reports failures: it
    *  measures a rate rather than observing individual responses, so it has a
    *  status code for no single flow. */
@@ -1784,6 +1803,7 @@ export interface AggregatedFlow {
   destination: TrafficEndpoint
   protocol: string
   port: number
+  portSource?: TrafficPortSource
   flowCount: number
   bytesByProtocol?: Record<string, { bytesSent: number; bytesRecv: number }>
   /** Cross-protocol sums kept for compatibility; display the breakdown when present. */
@@ -1794,6 +1814,9 @@ export interface AggregatedFlow {
   /** The conversation's initiator could not be established, so the endpoints are
    *  ordered arbitrarily and the edge is drawn without an arrowhead. */
   directionUnknown?: boolean
+  /** Node-to-node UDP, likely CNI overlay carrying pod traffic already on the
+   *  map. A guess unless the source reports the overlay port. */
+  likelyOverlay?: boolean
   l7Protocol?: string // HTTP, gRPC, DNS
   requestCount?: number
   errorCount?: number

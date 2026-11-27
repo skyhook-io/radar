@@ -157,6 +157,8 @@ The families so far:
 | `PodPlacement` | Pods → the Node they run on (a finished Pod runs nowhere); a Node's Pods are read from every Pod | `status_families.go` |
 | `Reflections` | Reflector mirrors (Secrets, ConfigMaps) → the source their `reflects` annotation names, in any namespace; a source's mirrors come from the family's index | `status_families.go` |
 | `Storage` | PersistentVolumeClaims → their PersistentVolume and StorageClass; PersistentVolumes → their claim and StorageClass | `status_families.go` |
+| `VolumeSnapshots` | CSI VolumeSnapshots → their observed bound VolumeSnapshotContent (`status.boundVolumeSnapshotContentName`), VolumeSnapshotClass, and source PersistentVolumeClaim; controller-bound VolumeSnapshotContents (`spec.volumeSnapshotRef.uid` set) → their VolumeSnapshot and VolumeSnapshotClass | `volumesnapshots.go` |
+| `RestoredVolumeSnapshots` | PersistentVolumeClaims → the CSI VolumeSnapshot named by `spec.dataSource` or `spec.dataSourceRef` (including cross-namespace `dataSourceRef`) | `volumesnapshots.go` |
 | `MachineNodes` | Karpenter NodeClaims and Cluster API Machines → the Node their status records | `status_families.go` |
 | `AnalysisRuns` | Argo Rollouts → the AnalysisRuns their status points at | `status_families.go` |
 | `FluxHelmOrigins` | Origin labels on Deployment, Service, StatefulSet, DaemonSet, Job, CronJob and Rollout → Flux HelmRelease; the dark projection uses these only for local releases with no readable inventory | `management_families.go` |
@@ -214,7 +216,11 @@ Applications builds no graph: its rows come from ownership and one request-local
 The drawer characterization pins the family answer. Its [accepted differences](../pkg/topology/testdata/characterization/drawer-relationships.md)
 explain every changed class, including the hand-made Crossplane claim/XR fixture without a backlink. New relations
 belong in a family with its field disposition and coverage, then in the family inventory and projection tests; adding
-a display edge alone does not add a drawer or agent relationship.
+a display edge alone does not add a drawer or agent relationship. The Topology screen draws a new family's edges
+through `drawFamilies` in `pkg/topology/builder.go` instead of reading the spec again. `TestDisplayEdgesAreFamilyAnswers`
+fails when a drawn edge has no family answer with the same type and direction, or when a family answer on its fixture
+isn't drawn. Older edges are still parsed in the builder, held to the same answers by that test; its `displayOnlyEdges`
+list names the few the screen draws that no family answers.
 
 The cache-source conformance tests check `Indexed` and both answers against the brute-force `Scan` of generated
 worlds whose objects declare references (`ownershiptest.Object.Declares`), and through histories of changes.

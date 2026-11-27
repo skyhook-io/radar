@@ -115,7 +115,7 @@ func TestFluxManagerListNamespaceScope(t *testing.T) {
 				name = tc.name + "/health-on"
 			}
 			t.Run(name, func(t *testing.T) {
-				rows, err := listReleasesAcrossNamespacesWithClient(context.Background(), client, "", []string{"team-a"}, health, tc.scope)
+				rows, err := listReleasesAcrossNamespacesWithClient(k8s.CaptureConnection(t.Context()), client, "", []string{"team-a"}, health, tc.scope)
 				if err != nil || len(rows) != 1 {
 					t.Fatalf("rows=%d err=%v", len(rows), err)
 				}

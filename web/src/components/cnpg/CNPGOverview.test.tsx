@@ -7,7 +7,8 @@ const sidebar = vi.hoisted(() => ({ data: undefined as CNPGWorkspaceResponse | u
 vi.mock('../../api/cnpg', () => ({ useCNPGWorkspace: () => ({ data: sidebar.data }) }))
 vi.mock('../../api/cnpg-storage', () => ({ useCNPGFleetDisk: () => ({}) }))
 vi.mock('../../api/cnpg-history', () => ({ useCNPGFleetMetrics: () => ({}) }))
-vi.mock('../../api/client', () => ({ useRadarFeature: () => ({ support: 'supported' }) }))
+const feature = vi.hoisted(() => ({ value: { support: 'supported', upgrade: null } as { support: string; upgrade: { feature: string; minimumVersion?: string } | null } }))
+vi.mock('../../api/client', () => ({ useRadarFeature: () => feature.value }))
 
 vi.mock('../../context/ConnectionContext', () => ({ useConnection: () => ({ connection: { context: 'kind-test' } }) }))
 vi.mock('./CNPGOperatorBanner', () => ({ CNPGOperatorBanner: () => null }))
@@ -23,8 +24,8 @@ const cluster = (namespace: string, name: string) => ({
   status: { phase: 'Cluster in healthy state', readyInstances: 1 },
 })
 
-function response(clusters: ReturnType<typeof cluster>[], coverage: CNPGKindCoverage = { state: 'full' }): CNPGWorkspaceResponse {
-  return { installed: true, context: 'kind-test', namespaces: null, coverage: { clusters: coverage }, objects: { clusters }, issues: [], audit: [], backupsOmitted: 0 }
+function response(clusters: ReturnType<typeof cluster>[], coverage: CNPGKindCoverage = { state: 'full' }, audit: CNPGWorkspaceResponse['audit'] = []): CNPGWorkspaceResponse {
+  return { installed: true, context: 'kind-test', namespaces: null, coverage: { clusters: coverage }, objects: { clusters }, issues: [], audit, backupsOmitted: 0 }
 }
 
 function render(resp: CNPGWorkspaceResponse, query = '', opts: { attention?: string[]; onCreate?: () => void; namespaces?: string[] } = {}) {
@@ -168,4 +169,75 @@ it('uses an unknown sidebar count and tooltip for zero over partial coverage', (
   renderToStaticMarkup(<MemoryRouter><Probe /></MemoryRouter>)
   expect(result.value!.CloudNativePG.destinations.find((d) => d.id === 'protection')!.count).toBe(0)
   sidebar.data = undefined
+})
+
+describe('CNPGOverview posture summary', () => {
+  const withSpec = (name: string, spec: { instances: number } & Record<string, unknown>) => ({ ...cluster('pg', name), spec })
+  const finding = (name: string, checkId: string) => ({ checkId, severity: 'warning', kind: 'Cluster', namespace: 'pg', name, message: checkId })
+  const count = (html: string, label: string) => html.match(new RegExp(`${label}</span><span[^>]*>([^<]+)<`))?.[1]
+  const bareAndIntree = () => response(
+    [withSpec('bare', { instances: 1 }), withSpec('intree', { instances: 3, backup: { barmanObjectStore: { destinationPath: 's3://b' } } })],
+    { state: 'full' },
+    [finding('bare', 'cnpgNoBackupDestination'), finding('bare', 'cnpgSingleInstance'), finding('intree', 'cnpgInTreeBackupDeprecated')],
+  )
+
+  it("counts the Checks' findings above the table, in neutral text", () => {
+    const html = render(bareAndIntree())
+    expect(count(html, 'No backup destination')).toBe('1')
+    expect(count(html, 'Single instance')).toBe('1')
+    expect(count(html, 'In-tree backup')).toBe('1')
+    expect(count(html, 'No WAL archiving')).toBe('0')
+    expect(html).toMatch(/<div role="group"[^>]*aria-label="Backup and availability configuration"/)
+    expect(html).toMatch(/Single instance<\/span><span class="font-mono">1</)
+    expect(html).not.toContain('With a destination')
+  })
+
+  it('does not count a single-instance spec that Checks reports nothing for', () => {
+    const html = render(response([withSpec('a', { instances: 1 }), withSpec('b', { instances: 1 })], { state: 'full' }, [finding('a', 'cnpgSingleInstance')]))
+    expect(count(html, 'Single instance')).toBe('1')
+  })
+
+  it('narrows the table to one posture value, with a chip to clear it', () => {
+    const html = render(bareAndIntree(), 'protect=none')
+    expect(html).toContain('bare')
+    expect(html).not.toContain('>intree<')
+    expect(html).toContain('Posture: No backup destination')
+    expect(html).toMatch(/aria-pressed="true"[^>]*><span>No backup destination/)
+  })
+
+  it('shows counts as lower bounds when Clusters were partly read', () => {
+    const html = render(response([withSpec('a', { instances: 1 }), withSpec('b', { instances: 1 })], { state: 'partial', allowedNamespaces: ['pg'] } as CNPGKindCoverage, [finding('a', 'cnpgSingleInstance'), finding('b', 'cnpgSingleInstance')]))
+    expect(count(html, 'Single instance')).toBe('≥2')
+    expect(count(html, 'No WAL archiving')).toBe('–')
+    expect(html).toContain('aria-label="No WAL archiving: unknown"')
+  })
+
+  it('ignores an unknown protect value', () => {
+    const html = render(bareAndIntree(), 'protect=bogus')
+    expect(html).toContain('bare')
+    expect(html).toContain('intree')
+    expect(html).not.toContain('Posture:')
+  })
+
+  it('says the filters, not attention, emptied the table when posture narrows it to nothing', () => {
+    const html = render(response([withSpec('a', { instances: 3 })]), 'filter=attention&protect=intree', { attention: ['a'] })
+    expect(html).toContain('No clusters match these filters')
+    expect(html).not.toContain('No clusters need attention')
+  })
+
+  it('replaces the counts with an upgrade note on a Radar that predates them, never a zero', () => {
+    feature.value = { support: 'unsupported', upgrade: { feature: 'CloudNativePG backup and availability counts', minimumVersion: 'v1.21.0' } }
+    try {
+      const html = render(bareAndIntree())
+      expect(html).toContain('CloudNativePG backup and availability counts')
+      expect(html).toContain('need Radar v1.21 or newer')
+      expect(html).not.toContain('Backup and availability configuration')
+      expect(render(bareAndIntree(), 'protect=none')).toContain('>intree<')
+      const loading = (feature.value = { support: 'unknown', upgrade: null }, render(bareAndIntree()))
+      expect(loading).not.toContain('Backup and availability configuration')
+      expect(loading).not.toContain('need Radar')
+    } finally {
+      feature.value = { support: 'supported', upgrade: null }
+    }
+  })
 })

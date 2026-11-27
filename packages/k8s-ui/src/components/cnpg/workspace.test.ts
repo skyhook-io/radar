@@ -1,6 +1,6 @@
 import { cnpgDimensions } from './ha'
 import { describe, it, expect } from 'vitest'
-import { buildCNPGFleet, cnpgReadyInstances, cnpgRecoveryMatchesCluster, getCNPGRestoreValidation, type CNPGWorkspaceResponse, type CNPGWorkspaceKey, CNPG_WORKSPACE_KEYS } from './workspace'
+import { applyCNPGDisk, buildCNPGFleet, CNPG_POSTURE_FILTERS, cnpgMatchesPostureFilter, cnpgReadyInstances, cnpgRecoveryMatchesCluster, getCNPGRestoreValidation, type CNPGPostureFilter, type CNPGWorkspaceResponse, type CNPGWorkspaceKey, CNPG_WORKSPACE_KEYS } from './workspace'
 
 const G = 'postgresql.cnpg.io/v1'
 
@@ -689,4 +689,49 @@ it('a single-instance replica cluster does not read its replication as calm', ()
   const solo = (replica?: any) => buildCNPGFleet(resp({ clusters: [cluster('pg', 'db', { spec: { instances: 1, ...(replica ? { replica } : {}) } })] })).rows[0].replication
   expect(solo()).toMatchObject({ text: 'Single instance', tone: 'neutral' })
   expect(solo({ enabled: true, source: 'origin' })).toMatchObject({ text: 'Single instance · upstream feed not assessed', tone: 'unknown' })
+})
+
+describe('fleet posture', () => {
+  const finding = (name: string, checkId: string, namespace = 'db') => ({ checkId, severity: 'warning', kind: 'Cluster', namespace, name, message: checkId })
+  const clusters = [
+    cluster('bare', 'db', { spec: { instances: 1 } }),
+    cluster('snap', 'db', { spec: { instances: 3, backup: { volumeSnapshot: {} } } }),
+    cluster('intree', 'db', { spec: { instances: 3, backup: { barmanObjectStore: { destinationPath: 's3://b' } } } }),
+    // Single instance by its spec, but Checks reports nothing: an ignored or annotated namespace, or a disabled Check.
+    cluster('quiet', 'scratch-system', { spec: { instances: 1 } }),
+  ]
+  const audit = [
+    finding('bare', 'cnpgNoBackupDestination'),
+    finding('bare', 'cnpgSingleInstance'),
+    finding('snap', 'cnpgNoWALArchiving'),
+    finding('intree', 'cnpgInTreeBackupDeprecated'),
+  ]
+  const fleet = buildCNPGFleet(resp({ clusters }, { audit }))
+  const names = (f: CNPGPostureFilter, rows = fleet.rows) => rows.filter((r) => cnpgMatchesPostureFilter(r, f)).map((r) => r.name).sort()
+
+  it("counts the Clusters with each Check's finding, never re-deciding from the spec", () => {
+    expect(fleet.posture).toEqual({ none: 1, nowal: 1, single: 1, intree: 1 })
+    expect(names('single')).toEqual(['bare'])
+  })
+
+  it('keeps exactly the Clusters it counts', () => {
+    for (const f of CNPG_POSTURE_FILTERS) expect(names(f)).toHaveLength(fleet.posture[f])
+    expect(names('none')).toEqual(['bare'])
+    expect(names('nowal')).toEqual(['snap'])
+    expect(names('intree')).toEqual(['intree'])
+  })
+
+  it('counts a missing destination that a blocked schedule already names on the row', () => {
+    const schedule = { apiVersion: G, kind: 'ScheduledBackup', metadata: { name: 'bare-nightly', namespace: 'db' }, spec: { cluster: { name: 'bare' } } }
+    const blocked = buildCNPGFleet(resp({ clusters, scheduledBackups: [schedule] }, { audit, issues: [serverProblem('CNPGScheduleDestinationMissing', 'Backup schedule bare-nightly cannot run: no backup destination', 'ScheduledBackup', 'bare-nightly')] }))
+    expect(blocked.rows.find((r) => r.name === 'bare')!.problems.map((p) => p.id)).not.toContain('audit:cnpgNoBackupDestination:db/bare')
+    expect(blocked.posture.none).toBe(1)
+    expect(names('none', blocked.rows)).toEqual(['bare'])
+  })
+
+  it('ignores findings on other kinds and keeps the counts after applyCNPGDisk rebuilds the fleet', () => {
+    const other = buildCNPGFleet(resp({ clusters }, { audit: [...audit, { ...finding('bare', 'cnpgSingleInstance'), kind: 'Pooler' }, finding('bare', 'cnpgSingleInstance', 'elsewhere')] }))
+    expect(other.posture.single).toBe(1)
+    expect(applyCNPGDisk(fleet, []).posture).toEqual(fleet.posture)
+  })
 })

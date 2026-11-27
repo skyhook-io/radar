@@ -75,3 +75,17 @@ describe('TrafficFilterSidebar verdict filter', () => {
     expect(container.textContent).not.toContain('Verdict')
   })
 })
+
+describe('TrafficFilterSidebar overlay toggle', () => {
+  it('is offered only when the source marked flows as likely overlay, off by default', () => {
+    act(() => root.render(<TrafficFilterSidebar {...props({ setHideOverlay: vi.fn() })} />))
+    expect(container.textContent).not.toContain('Hide node-to-node overlay')
+
+    const setHideOverlay = vi.fn()
+    act(() => root.render(<TrafficFilterSidebar {...props({ hasOverlayFlows: true, hideOverlay: false, setHideOverlay })} />))
+    expect(container.textContent).toContain('Hide node-to-node overlay')
+    const toggle = Array.from(container.querySelectorAll('button')).find(b => b.textContent?.includes('Hide node-to-node overlay'))!
+    act(() => toggle.click())
+    expect(setHideOverlay).toHaveBeenCalledWith(true)
+  })
+})

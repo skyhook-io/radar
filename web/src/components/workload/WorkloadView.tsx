@@ -30,6 +30,8 @@ import {
   canPauseDeployment,
   canSubmitWorkflowTemplate,
   type WorkflowTemplateSubmission,
+  canSuspendCronJob,
+  canTriggerCronJob,
   isCoreBatchJob,
   type SetImageOwnership,
   SET_IMAGE_WRITES,
@@ -392,6 +394,9 @@ function useActionsBarProps(
   const { support: deploymentPauseSupport } = useRadarFeature('deploymentPause')
   const canPauseDeployments = !workloadWritesPending &&
     canPauseDeployment({ name: kind, group }, workloadWrites, deploymentPauseSupport === 'supported')
+  const cronJobPermissionsReady = kind === 'cronjobs' && group === 'batch' && !workloadWritesPending
+  const allowCronJobTrigger = cronJobPermissionsReady && canTriggerCronJob(workloadWrites)
+  const allowCronJobSuspend = cronJobPermissionsReady && canSuspendCronJob(workloadWrites)
   const loadImages = useCallback(
     (params: { kind: string; namespace: string; name: string }) =>
       queryClient.fetchQuery({
@@ -525,15 +530,12 @@ function useActionsBarProps(
           rolloutDialogPromote.mutateAsync({ action: 'promote-full', ...params })
       : undefined,
     // mutateAsync, not mutate: the Job name dialog stays open when this rejects.
-    onTriggerCronJob: (params: Parameters<typeof triggerCronJobMutation.mutate>[0]) =>
-      triggerCronJobMutation.mutateAsync(params),
+    onTriggerCronJob: allowCronJobTrigger ? triggerCronJobMutation.mutateAsync : undefined,
     isTriggeringCronJob: triggerCronJobMutation.isPending,
     cronJobTriggerDialog: cronJobJobNameSupport === 'supported',
-    onSuspendCronJob: (params: Parameters<typeof suspendCronJobMutation.mutate>[0]) =>
-      suspendCronJobMutation.mutate(params),
+    onSuspendCronJob: allowCronJobSuspend ? suspendCronJobMutation.mutate : undefined,
     isSuspendingCronJob: suspendCronJobMutation.isPending,
-    onResumeCronJob: (params: Parameters<typeof resumeCronJobMutation.mutate>[0]) =>
-      resumeCronJobMutation.mutate(params),
+    onResumeCronJob: allowCronJobSuspend ? resumeCronJobMutation.mutate : undefined,
     isResumingCronJob: resumeCronJobMutation.isPending,
     // mutateAsync, not mutate: the submit dialog stays open when this rejects.
     onSubmitWorkflowTemplate: canSubmitTemplates

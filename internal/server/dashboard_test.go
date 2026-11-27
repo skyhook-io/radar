@@ -12,10 +12,12 @@ import (
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/settings"
 	"github.com/skyhook-io/radar/pkg/helmhistory"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -508,5 +510,95 @@ func TestDashboardCoverageUnknownUntilPolicyInformerSyncs(t *testing.T) {
 	got := (&Server{}).getDashboardNetworkPolicyCoverage(requestWithUser("GET", "/", nil), cache, nil)
 	if got == nil || got.TotalPolicies != 1 || got.CoveredWorkloads != 1 {
 		t.Fatalf("coverage after sync = %+v, want 1 policy covering 1 workload", got)
+	}
+}
+
+func TestDashboardNetworkPolicyCoverageSkipsIgnoredNamespaces(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	policy := &networkingv1.NetworkPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "shop-default", Namespace: "shop"},
+		Spec:       networkingv1.NetworkPolicySpec{PodSelector: metav1.LabelSelector{}},
+	}
+	core, err := k8score.NewResourceCache(k8score.CacheConfig{
+		Client: kubernetesfake.NewSimpleClientset(
+			policy,
+			dashboardTestDeployment("shop", "web", "web"),
+			dashboardTestDeployment("kube-system", "coredns", "coredns"),
+			dashboardTestDeployment("calico-system", "calico-kube-controllers", "calico"),
+			dashboardTestDeployment("tigera-operator", "tigera-operator", "tigera"),
+		),
+		ResourceTypes: map[string]bool{k8score.Deployments: true, k8score.NetworkPolicies: true},
+		DeferredTypes: map[string]bool{},
+		SyncTimeout:   2 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewResourceCache: %v", err)
+	}
+	t.Cleanup(core.Stop)
+	cache := &k8s.ResourceCache{ResourceCache: core}
+
+	coverage := func() *DashboardNetworkPolicyCoverage {
+		t.Helper()
+		got := (&Server{}).getDashboardNetworkPolicyCoverage(requestWithUser("GET", "/", nil), cache, nil)
+		if got == nil {
+			t.Fatal("coverage is nil")
+		}
+		return got
+	}
+
+	// The default list ignores kube-system and *-system.
+	if got := coverage(); got.TotalWorkloads != 2 || got.CoveredWorkloads != 1 || got.IgnoredNamespaceWorkloads != 2 {
+		t.Fatalf("default settings: coverage = %+v, want shop and tigera-operator counted, shop covered, 2 ignored", got)
+	}
+
+	if _, err := settings.Update(func(s *settings.Settings) {
+		s.Audit = &settings.AuditConfig{IgnoredNamespaces: []string{"kube-system", "*-system", "tigera-*"}, DisabledChecks: []string{}}
+	}); err != nil {
+		t.Fatalf("settings.Update: %v", err)
+	}
+	if got := coverage(); got.TotalWorkloads != 1 || got.CoveredWorkloads != 1 {
+		t.Fatalf("custom ignore list: coverage = %+v, want only shop counted", got)
+	}
+
+	if _, err := settings.Update(func(s *settings.Settings) {
+		s.Audit = &settings.AuditConfig{IgnoredNamespaces: []string{}, DisabledChecks: []string{}}
+	}); err != nil {
+		t.Fatalf("settings.Update: %v", err)
+	}
+	if got := coverage(); got.TotalWorkloads != 4 || got.CoveredWorkloads != 1 {
+		t.Fatalf("empty ignore list: coverage = %+v, want every workload counted", got)
+	}
+}
+
+func TestDashboardNetworkPolicyCoverageSkipsHostNetworkWorkloads(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	nodeExporter := &appsv1.DaemonSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "node-exporter", Namespace: "monitoring"},
+		Spec: appsv1.DaemonSetSpec{Template: corev1.PodTemplateSpec{
+			ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "node-exporter"}},
+			Spec:       corev1.PodSpec{HostNetwork: true},
+		}},
+	}
+	core, err := k8score.NewResourceCache(k8score.CacheConfig{
+		Client: kubernetesfake.NewSimpleClientset(
+			nodeExporter,
+			dashboardTestDeployment("monitoring", "grafana", "grafana"),
+		),
+		ResourceTypes: map[string]bool{k8score.Deployments: true, k8score.DaemonSets: true, k8score.NetworkPolicies: true},
+		DeferredTypes: map[string]bool{},
+		SyncTimeout:   2 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewResourceCache: %v", err)
+	}
+	t.Cleanup(core.Stop)
+	cache := &k8s.ResourceCache{ResourceCache: core}
+
+	got := (&Server{}).getDashboardNetworkPolicyCoverage(requestWithUser("GET", "/", nil), cache, nil)
+	if got == nil {
+		t.Fatal("coverage is nil")
+	}
+	if got.TotalWorkloads != 1 || got.CoveredWorkloads != 0 || got.HostNetworkWorkloads != 1 || got.IgnoredNamespaceWorkloads != 0 {
+		t.Fatalf("coverage = %+v, want only grafana counted and node-exporter reported as host network", got)
 	}
 }

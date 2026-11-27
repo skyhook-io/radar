@@ -8,7 +8,7 @@ import { SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-colors'
 import { Tooltip } from '../ui/Tooltip'
 import type { TrafficGraphSelection } from './TrafficGraph'
 import {
-  dataByProtocol, connectionRows, displayVolume, edgesOnPort, flowDrops, flowErrors, formatRate, graphEndpointId, hasStatusData, isExternalKind,
+  dataByProtocol, connectionRows, displayVolume, edgesOnPort, flowDrops, flowErrors, formatRate, graphEndpointId, hasStatusData, isExternalKind, portLabel,
   type GraphFlow, type TrafficFocus,
 } from './trafficFilters'
 
@@ -40,6 +40,7 @@ function rowSelection(flow: AggregatedFlow): TrafficGraphSelection {
     destId: graphEndpointId(flow.destination),
     port: flow.port,
     directionUnknown: !!flow.directionUnknown,
+    ...(flow.likelyOverlay && { likelyOverlay: true }),
   }
 }
 
@@ -47,7 +48,7 @@ function selectedRows(rows: GraphFlow[], selection: TrafficGraphSelection | null
   if (selection?.type !== 'edge' || selection.port === undefined) return new Set()
   const between = rows.filter(flow =>
     graphEndpointId(flow.source) === selection.sourceId && graphEndpointId(flow.destination) === selection.destId &&
-    !!flow.directionUnknown === !!selection.directionUnknown)
+    !!flow.directionUnknown === !!selection.directionUnknown && !!flow.likelyOverlay === !!selection.likelyOverlay)
   return new Set(edgesOnPort(between, f => f, selection.port))
 }
 
@@ -106,7 +107,7 @@ export function TrafficConnectionsTable({ flows, isRateBased, selection, onSelec
       <Virtuoso
         className="flex-1"
         data={rows}
-        computeItemKey={(_, flow) => `${graphEndpointId(flow.source)}->${graphEndpointId(flow.destination)}:${flow.port}${flow.directionUnknown ? ':u' : ''}`}
+        computeItemKey={(_, flow) => `${graphEndpointId(flow.source)}->${graphEndpointId(flow.destination)}:${flow.port}${flow.directionUnknown ? ':u' : ''}${flow.likelyOverlay ? ':v' : ''}`}
         itemContent={(_, flow) => {
           const sel = rowSelection(flow)
           const isSelected = selected.has(flow)
@@ -129,7 +130,7 @@ export function TrafficConnectionsTable({ flows, isRateBased, selection, onSelec
                 : <ArrowRight className="h-3 w-3 text-theme-text-tertiary" />}
               {endpoint(flow.destination)}
               <span className="truncate text-theme-text-secondary tabular-nums">
-                {flow.port > 0 ? flow.port : '—'}
+                {portLabel(flow.port, flow.portSource) ?? '—'}
                 {(flow.l7Protocol || flow.protocol) && (
                   <span className="ml-1 text-theme-text-tertiary">{flow.l7Protocol || flow.protocol.toUpperCase()}</span>
                 )}

@@ -25,6 +25,9 @@ const (
 	EndpointKindHost     = pkgtraffic.EndpointKindHost
 	EndpointKindUnknown  = pkgtraffic.EndpointKindUnknown
 	EndpointKindWorkload = pkgtraffic.EndpointKindWorkload
+
+	PortSourceService         = pkgtraffic.PortSourceService
+	PortSourceServiceMultiple = pkgtraffic.PortSourceServiceMultiple
 )
 
 type FlowsResponse = pkgtraffic.FlowsResponse

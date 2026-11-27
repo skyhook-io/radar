@@ -32,25 +32,22 @@ type CacheProvider struct {
 }
 
 // NewCacheProvider returns a Provider over the live radar caches.
-// Returns nil when the typed cache is unavailable or connection handles change
-// during capture.
+// Returns nil when the typed cache is unavailable.
 func NewCacheProvider() *CacheProvider {
-	cache := k8s.GetResourceCache()
+	return NewCacheProviderFor(k8s.Current())
+}
+
+// NewCacheProviderFor captures the connection's caches. It returns nil for a
+// nil connection or one without a typed resource cache.
+func NewCacheProviderFor(conn *k8s.Connection) *CacheProvider {
+	cache := conn.ResourceCache()
 	if cache == nil {
 		return nil
 	}
-	provider := &CacheProvider{
-		cache:     cache,
-		dynamic:   k8s.GetDynamicResourceCache(),
-		discovery: k8s.GetResourceDiscovery(),
+	return &CacheProvider{
+		cache: cache, dynamic: conn.DynamicResourceCache(),
+		discovery: conn.Discovery(), permissions: cache.PermissionResult(),
 	}
-	if result := cache.PermissionResult(); result != nil {
-		provider.permissions = result
-	}
-	if cache != k8s.GetResourceCache() || provider.dynamic != k8s.GetDynamicResourceCache() || provider.discovery != k8s.GetResourceDiscovery() {
-		return nil
-	}
-	return provider
 }
 
 func (p *CacheProvider) ListTyped(resource string, namespaces []string) ([]runtime.Object, error) {
@@ -165,6 +162,20 @@ func (p *CacheProvider) UnlistableKinds() []k8score.APIResource {
 	return out
 }
 
+// ShortNamedKinds returns the discovered APIs that declare kubectl short names.
+func (p *CacheProvider) ShortNamedKinds() []k8score.APIResource {
+	if p.discovery == nil {
+		return nil
+	}
+	var out []k8score.APIResource
+	for _, ar := range p.discovery.Catalog().Resources {
+		if len(ar.ShortNames) > 0 {
+			out = append(out, ar)
+		}
+	}
+	return out
+}
+
 func (p *CacheProvider) PlanTyped(kind string, namespaces []string) readplan.Plan {
 	return readplan.Typed(p.cache, p.permissions, k8s.CanonicalBuiltinKind(kind), namespaces, isClusterScopedKind(kind))
 }
@@ -183,7 +194,8 @@ func (p *CacheProvider) PlanDynamic(gvr schema.GroupVersionResource, namespaces 
 // Current reports whether the provider still reads the connection Radar is
 // on: a search whose caches were replaced mid-read mixes two clusters.
 func (p *CacheProvider) Current() bool {
-	return p.cache == k8s.GetResourceCache() && p.dynamic == k8s.GetDynamicResourceCache() && p.discovery == k8s.GetResourceDiscovery()
+	conn := k8s.Current()
+	return p.cache == conn.ResourceCache() && p.dynamic == conn.DynamicResourceCache() && p.discovery == conn.Discovery()
 }
 
 func (p *CacheProvider) DynamicCacheStopped() bool {

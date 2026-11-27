@@ -21,12 +21,16 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
 
+	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/k8s"
+	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 )
 
 // A release a Flux HelmRelease owns is refused for every write, before Helm
 // runs, including when the controller reference is hidden.
 func TestManageHelmRefusesFluxManagedRelease(t *testing.T) {
+	helm.Initialize()
+	t.Cleanup(helm.ResetTestClient)
 	setupFakeCacheForFilterTests(t)
 	gvr := schema.GroupVersionResource{Group: "helm.toolkit.fluxcd.io", Version: "v2", Resource: "helmreleases"}
 	owner := &unstructured.Unstructured{Object: map[string]any{
@@ -98,6 +102,7 @@ func TestManageHelmRefusesFluxManagedRelease(t *testing.T) {
 		{"admin", nil, true},
 	} {
 		ctx := withTestUserPerms(t, "helm-mcp-flux-"+caller.name, nil, caller.namespaces)
+		k8s.PermissionCacheFor(k8s.CaptureConnection(ctx), getPermCache()).Set("helm-mcp-flux-"+caller.name, nil, &pkgauth.UserPermissions{AllowedNamespaces: caller.namespaces})
 		for _, in := range []manageHelmInput{
 			{Action: "upgrade", Namespace: "team-a", Name: "demo", Values: map[string]any{"replicas": 2}},
 			{Action: "upgrade", Namespace: "team-a", Name: "demo", Values: map[string]any{"replicas": 2}, DryRun: true},

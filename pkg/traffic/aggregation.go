@@ -56,10 +56,12 @@ func AggregateFlows(flows []Flow) []AggregatedFlow {
 		// would otherwise land in a single aggregate, and any single answer about
 		// its direction is wrong for half of what it contains. Sources that always
 		// orient their flows contribute a constant here and are unaffected.
-		key := fmt.Sprintf("%s/%s|%s/%s|%d|%t",
+		// Likely-overlay traffic is its own edge for the same reason: merged into
+		// the other traffic between two nodes, it could not be hidden on its own.
+		key := fmt.Sprintf("%s/%s|%s/%s|%d|%t|%t",
 			f.Source.Namespace, f.Source.Name,
 			f.Destination.Namespace, f.Destination.Name,
-			f.Port, f.DirectionUnknown)
+			f.Port, f.DirectionUnknown, f.LikelyOverlay)
 
 		acc, ok := accumulators[key]
 		if !ok {
@@ -70,8 +72,10 @@ func AggregateFlows(flows []Flow) []AggregatedFlow {
 					Protocol:         f.Protocol,
 					BytesByProtocol:  make(map[string]ProtocolBytes),
 					Port:             f.Port,
+					PortSource:       f.PortSource,
 					LastSeen:         f.LastSeen,
 					DirectionUnknown: f.DirectionUnknown,
+					LikelyOverlay:    f.LikelyOverlay,
 				},
 				statusCount: make(map[string]int64),
 				pathStats:   make(map[string]*pathAcc),
@@ -84,6 +88,7 @@ func AggregateFlows(flows []Flow) []AggregatedFlow {
 		}
 
 		agg := acc.agg
+		agg.PortSource = mergedPortSource(agg.PortSource, f.PortSource, agg.FlowCount == 0)
 		agg.FlowCount++
 		agg.BytesSent += f.BytesSent
 		agg.BytesRecv += f.BytesRecv
@@ -347,4 +352,21 @@ func DefaultFlowOptions() FlowOptions {
 		Since: 5 * time.Minute,
 		Limit: 1000,
 	}
+}
+
+// mergedPortSource reconciles the markings of flows sharing one port, so the
+// answer does not depend on their order: on port 0 any "multiple" wins, and on
+// a real port an observed flow outranks the same number from a Service.
+func mergedPortSource(current, next string, first bool) string {
+	switch {
+	case first:
+		return next
+	case next == PortSourceServiceMultiple:
+		return next
+	case current == PortSourceServiceMultiple:
+		return current
+	case next == "" || current == "":
+		return ""
+	}
+	return current
 }

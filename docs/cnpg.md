@@ -27,6 +27,8 @@ CNPG stays inside **Resources**; there is no new global navigation item. When th
 | Pooling | `/cnpg/pooling` | Poolers and the clusters they front. | Pooler |
 | Operator | `/cnpg/operator` | Operator and plugin workloads, leader, watched namespaces, webhooks and reconcile errors, image catalogs, operator configuration. | ImageCatalog, ClusterImageCatalog |
 
+Above the Clusters table a summary counts the Clusters with each posture Check's finding: **No backup destination** (`cnpgNoBackupDestination`), **No WAL archiving** (`cnpgNoWALArchiving`), **Single instance** (`cnpgSingleInstance`) and **In-tree backup** (`cnpgInTreeBackupDeprecated`). The counts are the findings the workspace response carries, so they match Checks and the rows: a disabled Check, an ignored namespace and a `radarhq.io/ignore-checks` annotation on the Cluster or its Namespace take a Cluster out, and a Cluster whose missing destination the row folds into a blocked schedule still counts. Each count narrows the table (`?protect=none|nowal|single|intree`) to exactly the Clusters it counts. Like posture everywhere, the counts carry no warning colour. They become lower bounds (≥N), and a zero unknown (–), when Clusters were partly read. A Radar older than v1.21, whose findings lack these Checks, shows an upgrade note in place of the counts. They say what CNPG was told, not whether a backup exists: a dump job or snapshots outside CNPG aren't visible here.
+
 Destination badges count **affected clusters**, not findings, and follow the namespace filter. Outside the CloudNativePG views the Clusters badge counts without disk use or measured replication lag, so it reads as a lower bound (≥N) and its zero as unknown (–).
 
 **The Cluster kind's list is the Clusters view.** `/resources/clusters?apiGroup=postgresql.cnpg.io`, where the sidebar, favorites, search and links from Issues, Home, Checks and investigations land, renders the Clusters view in place of the generic table; its drawer, history and Back behave as for any kind. The sidebar treats **Clusters** as that kind's list: it is highlighted on that route, pins to Favorites as the kind, and the kind is not listed again under **Other kinds**. `/cnpg` stays the workspace's own home. A Radar without these views, or whose capabilities could not be read, keeps the generic table, and the sidebar lists the kind under **Other kinds**, where that table stays reachable; on the first capabilities load the page waits rather than flashing the table. Cluster API's `clusters` kind (`cluster.x-k8s.io`) is untouched. **Create**, on both routes, guides name, namespace, instances and volume size into a strict-create manifest, so it can never update an existing Cluster.
@@ -186,6 +188,9 @@ Certificate expiry is also an Issues-engine finding. A certificate you renew war
 **Access.** `get clusters`; CNPG series need the Prometheus pod-metrics grant (`get pods` in the namespace), and the volume chart `list persistentvolumeclaims` plus the PVC chart grant. Without Prometheus the response is `source: "none"` with the reason.
 
 ## Actions
+
+For Radar Cloud, see the [standard Owner grants](../deploy/helm/radar/README.md#cloud-owner-permissions)
+for administering existing CloudNativePG clusters.
 
 Capabilities (`GET .../capabilities` on Clusters, ScheduledBackups and Poolers) return the facts a confirmation is bound to and each action's verdict: allowed, or a reason naming the missing grant or the blocking state. Each action has its own state guard. There is deliberately no shared "no ready instance" refusal: lifting a fence, rehydrating and restarting are the way out of exactly that state. Actions are POSTs to `.../actions/{action}`, made with the caller's impersonated client.
 

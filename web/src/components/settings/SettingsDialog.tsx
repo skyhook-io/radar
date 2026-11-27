@@ -1,4 +1,4 @@
-import { hasPrometheusCharts } from '../../api/prometheusCharts'
+import { hasPrometheusCharts, metricsConnectionLabel, metricsSourceUnavailable } from '../../api/prometheusCharts'
 import { useState, useEffect, useRef, useCallback, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import {
@@ -39,6 +39,7 @@ import { costSourceApplyLabel, pendingSectionLabels, pendingSections, shouldShow
 import { PrometheusConfigField } from './PrometheusConfigField'
 import { LocalConnectionSettings, type IntegrationProfiles, type IntegrationKind } from './LocalConnectionSettings'
 import { LocalIntegrationStatus } from './LocalIntegrationStatus'
+import { MetricsBackendSwitch } from './MetricsBackendSwitch'
 import { LocalConfigurationDetails, SavedClusterConnections, PreviousIntegrationSettingsNotice } from './LocalConfigurationDetails'
 import { useContextSwitch } from '../../context/ContextSwitchContext'
 import { previousIntegrationSettingsKey, type IntegrationSettingsResponse } from '../../hooks/usePreviousIntegrationSettings'
@@ -185,6 +186,10 @@ export function SettingsDialog({
     void queryClient.resetQueries({ queryKey: [previousIntegrationSettingsKey] })
     void queryClient.invalidateQueries({ predicate: query => typeof query.queryKey[0] === 'string' && /^(prometheus|opencost|gitops|argo)/.test(query.queryKey[0]) })
   }, [queryClient])
+  const openObserveChanged = useCallback(() => {
+    setConnectionsChangedAt(Date.now())
+    void queryClient.invalidateQueries({ predicate: query => typeof query.queryKey[0] === 'string' && /^(prometheus|opencost)/.test(query.queryKey[0]) })
+  }, [queryClient])
 
   const [configData, setConfigData] = useState<ConfigResponse | null>(null)
   const operatorManaged = configData?.management === 'operator'
@@ -269,6 +274,10 @@ export function SettingsDialog({
   const settingsScope = `${settingsApiBase}:${settingsCluster?.context}`
   const targetChangedWithDraft = open && metricsDraft.current.open && metricsDraft.current.dirty && (isSwitching || metricsDraft.current.scope !== settingsScope)
   const showLocalStatus = open && !draftFrozen && !targetChangedWithDraft && !isSwitching
+  const metricsProfile = configData?.integrationProfiles?.metrics
+  const metricsStatus = metricsProfile && showLocalStatus && section === 'prometheus' && !['error', 'target_changed'].includes(metricsProfile.state)
+    ? <LocalIntegrationStatus kind="metrics" profile={metricsProfile} argo={argoStatusQuery} busy={integrationBusy} changedAt={connectionsChangedAt} />
+    : undefined
   useEffect(() => {
     if (!open) {
       setDraftFrozen(false)
@@ -763,9 +772,11 @@ export function SettingsDialog({
               caption={configData?.integrationProfiles ? localIntegrationCaption : 'Connect and manage your metrics backend.'}
               live
               locked={!canEditConfig}
+              lockedContent={configData?.integrationProfiles ? <MetricsBackendSwitch key={`${discardGeneration}:${JSON.stringify(configData.integrationProfiles.metrics.target)}`} locked onChanged={openObserveChanged} status={metricsStatus} prometheus={() => null} /> : undefined}
             >
-              {configData?.integrationProfiles ? <LocalConnectionSettings key={`${discardGeneration}:${JSON.stringify(configData.integrationProfiles.metrics.target)}`} kind="metrics" profiles={configData.integrationProfiles} onChange={connectionsChanged} onDirtyChange={metricsDirtyChange} onBusyChange={metricsBusyChange}
-                status={showLocalStatus && section === 'prometheus' && !['error', 'target_changed'].includes(configData.integrationProfiles.metrics.state) ? <LocalIntegrationStatus kind="metrics" profile={configData.integrationProfiles.metrics} argo={argoStatusQuery} busy={integrationBusy} changedAt={connectionsChangedAt} /> : undefined} /> : <PrometheusConfigField
+              {configData?.integrationProfiles ? <MetricsBackendSwitch key={`${discardGeneration}:${JSON.stringify(configData.integrationProfiles.metrics.target)}`} onChanged={openObserveChanged} onDirtyChange={metricsDirtyChange} onBusyChange={metricsBusyChange}
+                status={metricsStatus}
+                prometheus={({ status, onDirtyChange, onBusyChange }) => <LocalConnectionSettings kind="metrics" profiles={configData.integrationProfiles!} onChange={connectionsChanged} onDirtyChange={onDirtyChange} onBusyChange={onBusyChange} status={status} />} /> : <PrometheusConfigField
                 key={`${settingsApiBase}:${discardGeneration}`}
                 onBusyChange={metricsBusyChange}
                 onDirtyChange={setPrometheusCredentialDirty}
@@ -1157,6 +1168,7 @@ function SectionPane({
   caption,
   live,
   locked,
+  lockedContent,
   managed,
   children,
 }: {
@@ -1166,6 +1178,7 @@ function SectionPane({
   caption?: string
   live?: boolean
   locked?: boolean
+  lockedContent?: ReactNode
   managed?: ReactNode
   children: ReactNode
 }) {
@@ -1175,7 +1188,7 @@ function SectionPane({
         <h3 className="text-base font-semibold text-theme-text-primary">{title}</h3>
         {!locked && caption && <SectionCaption live={live}>{caption}</SectionCaption>}
       </div>
-      {managed ?? (locked ? <LockWall /> : <div className="space-y-4">{children}</div>)}
+      {managed ?? (locked ? <div className="space-y-4"><LockWall />{lockedContent}</div> : <div className="space-y-4">{children}</div>)}
     </div>
   )
 }
@@ -1209,7 +1222,7 @@ function OperatorSettingsSummary({ section, config }: { section: SettingsSection
       break
     case 'prometheus':
       rows = [
-        ['Status', promError ? 'Status unavailable' : !prom ? 'Checking…' : prom.connected ? 'Connected' : prom.gkeSystemMetrics ? 'GKE system metrics' : prom.discovering ? 'Discovering…' : 'Not connected'],
+        ['Status', promError ? 'Status unavailable' : metricsConnectionLabel(prom)],
         ['Endpoint', prom?.address || c.prometheusUrl || 'Auto-discovery'],
         ['Headers', config.prometheusHeaderKeys?.join(', ') || 'None configured'],
       ]
@@ -1328,9 +1341,9 @@ function OverviewPanel({ active, onNavigate }: { active: boolean; onNavigate: (s
     },
     {
       id: 'prometheus', icon: Activity, label: 'Metrics',
-      tone: hasPrometheusCharts(prom) ? 'ok' : prom?.discovering ? 'unknown' : prom?.error ? 'warn' : 'off',
-      value: prom?.connected ? 'Connected' : prom?.gkeSystemMetrics ? 'GKE system metrics' : prom?.discovering ? 'Discovering…' : 'Not connected',
-      detail: prom?.connected ? prom.address : prom?.gkeSystemMetrics || prom?.discovering ? undefined : prom?.error ? 'Open Metrics for connection details.' : undefined,
+      tone: hasPrometheusCharts(prom) ? 'ok' : metricsSourceUnavailable(prom) ? 'warn' : prom?.discovering ? 'unknown' : prom?.error ? 'warn' : 'off',
+      value: prom ? metricsConnectionLabel(prom) : 'Not connected',
+      detail: hasPrometheusCharts(prom) && prom?.connected ? prom.address : prom?.gkeSystemMetrics || prom?.discovering ? undefined : prom?.error || metricsSourceUnavailable(prom) ? 'Open Metrics for connection details.' : undefined,
     },
     {
       id: costConfigurationAction(cost?.reason).section, icon: Coins, label: 'Cost',

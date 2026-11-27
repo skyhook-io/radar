@@ -49,3 +49,11 @@ describe('describeTrafficNode', () => {
     expect(describeTrafficNode({ id: 'addon-internet', type: 'traffic', data: { kind: 'AddonInternet', label: 'Internet' } })?.shape).toBe('internet')
   })
 })
+
+describe('describeTrafficNode ports taken from a Service', () => {
+  it('marks them as on the card', () => {
+    const ports = [{ port: 5432, connections: 3, portSource: 'service' }, { port: 0, connections: 1, portSource: 'serviceMultiple' }, { port: 80, connections: 2 }]
+    const node = describeTrafficNode({ id: 'shop/db', type: 'traffic', data: { kind: 'Pod', label: 'db', ports } })
+    expect(node?.rows?.map(r => r.text)).toEqual([':5432 (from Service)', ':multiple (from Service)', ':80'])
+  })
+})
