@@ -64,8 +64,8 @@ export const RELEASE_NOTES: ReleaseNotes[] = [
       {
         id: 'new-integration-views',
         icon: Boxes,
-        title: 'MetalLB, Longhorn, k3s, Traefik and Flux views',
-        description: 'New views and Issues for MetalLB, Longhorn Volumes and k3s HelmCharts, plus Traefik live request paths and Flux revision chains and history.',
+        title: 'New integrations: MetalLB, Longhorn and k3s',
+        description: 'Dedicated views and Issues for MetalLB pools and peers, Longhorn Volumes with live replicas and PV links, and k3s/RKE2 HelmChart releases.',
         importance: 7,
       },
       {
@@ -80,7 +80,7 @@ export const RELEASE_NOTES: ReleaseNotes[] = [
       {
         id: 'vulnerabilities-exposure-csv',
         icon: ShieldAlert,
-        title: 'Prioritize exposed vulnerabilities and export CSV',
+        title: 'Prioritize exposed CVEs and export CSV',
         description: 'Sort CVEs by severity then external exposure, filter exposed workloads in UI or MCP, export CSVs, and see CVEs in workload drawers.',
         importance: 7,
         path: '/checks/vulnerabilities',
@@ -112,13 +112,13 @@ export const RELEASE_NOTES: ReleaseNotes[] = [
     ],
     improvements: [
       // The grid fills row by row: pair lines of similar length.
+      'Flux revision chains flag pending sources, plus status.history Activity, ArtifactGenerators and dependsOn',
+      'Traefik IngressRoute drawers trace live request paths with ready pods, cert expiry and Middleware usage',
       'Stop or terminate Argo Workflows and submit WorkflowTemplates right from Radar',
       'GitOps actions check missing permissions upfront and explain RBAC or admission failures',
       'Remote MCP clients can sign in with OAuth on standalone OIDC installs (--mcp-oauth)',
       'Match kubectl short names in the kind filter and Cmd-K, and show counts in other namespaces',
-      'Beyla Live Traffic infers destination ports from Services when dst.port is not exported',
-      'Honor radarhq.io/ignore-checks on Namespaces and exclude system workloads from Policy Coverage',
-      'Choose the Job name when triggering a CronJob, and inspect Sealed Secrets keys',
+      'Beyla Live Traffic infers ports from Services; Policy Coverage skips ignored namespaces',
       'Radar on macOS now requires macOS 13 or later, including the desktop app',
     ],
   },
