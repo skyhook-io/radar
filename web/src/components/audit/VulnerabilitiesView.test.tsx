@@ -144,7 +144,7 @@ describe('VulnerabilitiesView', () => {
 
   it('shows the route, nothing, or Exposure unknown per workload', () => {
     render('/checks/vulnerabilities?by=workload')
-    const rows = Array.from(container.querySelectorAll<HTMLButtonElement>('button[aria-expanded]'))
+    const rows = Array.from(container.querySelectorAll<HTMLButtonElement>('button[aria-expanded]:not([aria-haspopup])'))
     const cell = (i: number) => rows[i].querySelector('div.grid')!.children[2].textContent
     expect(cell(0)).toBe('LoadBalancer shop/web and 1 more')
     expect(cell(1)).toBe('Exposure unknown')

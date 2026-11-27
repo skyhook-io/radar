@@ -193,6 +193,12 @@ type Image struct {
 	// read every route kind (Exposure.Gaps): no route seen there is not
 	// "not exposed".
 	ExposureUnknown bool `json:"exposureUnknown,omitempty"`
+	// RunningSince is the earliest start of a container, in any of its
+	// workloads, that reports running this image's digest. A restart or a
+	// rescheduled Pod resets it, so the build has run at least this long.
+	// Absent when no running container reports the digest, or the report
+	// names none.
+	RunningSince *time.Time `json:"runningSince,omitempty"`
 }
 
 // CVE is one vulnerability across every image that carries it.
@@ -215,6 +221,10 @@ type CVE struct {
 	PublishedAt *time.Time `json:"publishedAt,omitempty"`
 	// lastModified is the latest of its findings', for the CSV.
 	lastModified time.Time
+	// RunningSince is the earliest Image.RunningSince among the images with
+	// it: the longest any affected container has run the exact build, so the
+	// vulnerable code has been in the cluster at least that long.
+	RunningSince *time.Time `json:"runningSince,omitempty"`
 	// Images and Workloads count every image and distinct workload with it.
 	Images    int `json:"images"`
 	Workloads int `json:"workloads"`
@@ -268,6 +278,9 @@ type Workload struct {
 	// ExposureUnknown is true when it has no route Radar sees and runs in a
 	// namespace where Radar couldn't read every route kind (Exposure.Gaps).
 	ExposureUnknown bool `json:"exposureUnknown,omitempty"`
+	// RunningSince is the earliest RunningSince of its containers that
+	// carry findings.
+	RunningSince *time.Time `json:"runningSince,omitempty"`
 }
 
 // WorkloadContainer is one container of a workload and an image it runs:
@@ -284,6 +297,9 @@ type WorkloadContainer struct {
 	FindingsUnread bool    `json:"findingsUnread,omitempty"`
 	Counts         *Counts `json:"counts,omitempty"`
 	Fixable        *Counts `json:"fixable,omitempty"`
+	// RunningSince is the earliest start of this container, across the
+	// workload's Pods, running the scanned digest (see Image.RunningSince).
+	RunningSince *time.Time `json:"runningSince,omitempty"`
 }
 
 // CleanImage is a running image whose report has no findings.
