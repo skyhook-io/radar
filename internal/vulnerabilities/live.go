@@ -39,6 +39,10 @@ type target struct {
 	container    string
 	// routes are the routes from outside the cluster to its Pod.
 	routes []Route
+	// exposedPorts are the Pod's ports those routes reach, and
+	// exposedServices the Services behind them.
+	exposedPorts    []int32
+	exposedServices []string
 }
 
 // targetKey identifies the scanned object and container; image and digest
@@ -150,6 +154,11 @@ func liveTargets(ctx context.Context, cache *k8s.ResourceCache, namespaces []str
 			if err != nil {
 				return liveSet{}, false, err
 			}
+			var exposedPorts []int32
+			var exposedServices []string
+			if len(routes) > 0 {
+				exposedPorts, exposedServices = exposure.exposedPorts(pod)
+			}
 			for _, c := range podContainers(pod.Spec) {
 				// What the kubelet reports runs wins over the spec: a Pod's
 				// image can change in place before its container restarts.
@@ -160,15 +169,17 @@ func liveTargets(ctx context.Context, cache *k8s.ResourceCache, namespaces []str
 					digest = pinnedDigest(c.Image)
 				}
 				add(target{
-					key:          targetKey{namespace: pod.Namespace, kind: kind, name: name, container: c.Name, image: c.Image, digest: digest, unresolved: unresolved[c.Name]},
-					uid:          uid,
-					image:        c.Image,
-					digest:       digest,
-					unresolved:   unresolved[c.Name],
-					scannedGroup: group,
-					workload:     workload,
-					container:    c.Name,
-					routes:       routes,
+					key:             targetKey{namespace: pod.Namespace, kind: kind, name: name, container: c.Name, image: c.Image, digest: digest, unresolved: unresolved[c.Name]},
+					uid:             uid,
+					image:           c.Image,
+					digest:          digest,
+					unresolved:      unresolved[c.Name],
+					scannedGroup:    group,
+					workload:        workload,
+					container:       c.Name,
+					routes:          routes,
+					exposedPorts:    exposedPorts,
+					exposedServices: exposedServices,
 				})
 			}
 		}

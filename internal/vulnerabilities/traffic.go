@@ -48,10 +48,10 @@ type TrafficEvidence struct {
 	HistoryLimited bool
 	// At is when the source was read.
 	At time.Time
-	// seen holds, by namespace/name, the lower-cased kinds seen receiving;
-	// "" when the source named no kind (metrics sources name a workload
-	// only).
-	seen map[string]map[string]bool
+	// seen holds, by namespace/name and lower-cased kind ("" when the source
+	// named no kind: metrics sources name a workload only), where the
+	// connections it received arrived.
+	seen map[string]map[string]*arrivals
 	// shared holds the namespace/names more than one workload kind in the
 	// cluster has: a match by name alone can't say which was seen.
 	shared map[string]bool
@@ -66,7 +66,7 @@ func (e *TrafficEvidence) MarkSharedNames(shared func(namespace, name string) bo
 		return
 	}
 	for key, kinds := range e.seen {
-		if !kinds[""] {
+		if kinds[""] == nil {
 			continue
 		}
 		ns, name, _ := strings.Cut(key, "/")
@@ -90,20 +90,61 @@ var trafficFromOutsideSources = map[string]bool{"hubble": true}
 func NewTrafficEvidence(source string, window time.Duration, historyLimited bool, flows []pkgtraffic.Flow, isNode func(pkgtraffic.Endpoint) bool) *TrafficEvidence {
 	e := &TrafficEvidence{
 		Source: source, FromOutside: trafficFromOutsideSources[source], Window: window, HistoryLimited: historyLimited, At: time.Now(),
-		seen: map[string]map[string]bool{},
+		seen: map[string]map[string]*arrivals{},
 	}
 	for _, f := range flows {
 		ns, name, kind, ok := receiver(f, e.FromOutside, isNode)
 		if !ok {
 			continue
 		}
+		// Where it arrived: the port, or the Service a source that reports
+		// no port names. A flow that says neither can't be matched to a
+		// route, so it doesn't count.
+		port, service := cmp.Or(f.Port, f.Destination.Port), f.DestService
+		if port <= 0 && service == "" {
+			continue
+		}
 		key := ns + "/" + name
 		if e.seen[key] == nil {
-			e.seen[key] = map[string]bool{}
+			e.seen[key] = map[string]*arrivals{}
 		}
-		e.seen[key][strings.ToLower(kind)] = true
+		a := e.seen[key][strings.ToLower(kind)]
+		if a == nil {
+			a = &arrivals{ports: map[int32]bool{}, services: map[string]bool{}}
+			e.seen[key][strings.ToLower(kind)] = a
+		}
+		if port > 0 {
+			a.ports[int32(port)] = true
+		} else {
+			a.services[service] = true
+		}
 	}
 	return e
+}
+
+// arrivals are where connections a workload received arrived: the ports,
+// or for a source that reports none, the Services the requests went to.
+type arrivals struct {
+	ports    map[int32]bool
+	services map[string]bool
+}
+
+// within is whether any arrived on one of the exposed ports or Services.
+func (a *arrivals) within(exposed *arrivals) bool {
+	if a == nil || exposed == nil {
+		return false
+	}
+	for p := range a.ports {
+		if exposed.ports[p] {
+			return true
+		}
+	}
+	for s := range a.services {
+		if exposed.services[s] {
+			return true
+		}
+	}
+	return false
 }
 
 // Len is how many workloads it saw receive connections.
@@ -218,13 +259,17 @@ type trafficIndex struct {
 	// namespace/name: a source that names no kind matches a name only when
 	// one workload has it.
 	kinds map[string]int
+	// exposed holds each workload's ports and Services its routes from
+	// outside reach; only connections to those count, so a DNS lookup or a
+	// metrics scrape on another port doesn't mark it.
+	exposed map[WorkloadRef]*arrivals
 }
 
 func newTrafficIndex(ev *TrafficEvidence, targets []target) *trafficIndex {
 	if ev == nil {
 		return nil
 	}
-	ix := &trafficIndex{ev: ev, kinds: map[string]int{}}
+	ix := &trafficIndex{ev: ev, kinds: map[string]int{}, exposed: map[WorkloadRef]*arrivals{}}
 	seen := map[WorkloadRef]bool{}
 	for _, t := range targets {
 		w := t.workload
@@ -232,6 +277,20 @@ func newTrafficIndex(ev *TrafficEvidence, targets []target) *trafficIndex {
 		if !seen[w] {
 			seen[w] = true
 			ix.kinds[w.Namespace+"/"+w.Name]++
+		}
+		if len(t.exposedPorts) == 0 && len(t.exposedServices) == 0 {
+			continue
+		}
+		exp := ix.exposed[w]
+		if exp == nil {
+			exp = &arrivals{ports: map[int32]bool{}, services: map[string]bool{}}
+			ix.exposed[w] = exp
+		}
+		for _, p := range t.exposedPorts {
+			exp.ports[p] = true
+		}
+		for _, s := range t.exposedServices {
+			exp.services[s] = true
 		}
 	}
 	return ix
@@ -243,10 +302,14 @@ func (ix *trafficIndex) seen(w WorkloadRef) bool {
 	}
 	key := w.Namespace + "/" + w.Name
 	kinds := ix.ev.seen[key]
-	if kinds == nil {
+	exposed := ix.exposed[w]
+	if kinds == nil || exposed == nil {
 		return false
 	}
-	return kinds[strings.ToLower(w.Kind)] || (kinds[""] && ix.kinds[key] == 1 && !ix.ev.shared[key])
+	if kinds[strings.ToLower(w.Kind)].within(exposed) {
+		return true
+	}
+	return ix.kinds[key] == 1 && !ix.ev.shared[key] && kinds[""].within(exposed)
 }
 
 // answer is the wire Traffic for the workloads in targets, at most n listed.

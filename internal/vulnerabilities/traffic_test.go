@@ -19,8 +19,10 @@ var (
 	nodeHost = pkgtraffic.Endpoint{Name: "remote-node", Kind: pkgtraffic.EndpointKindHost, IP: "10.0.0.5"}
 )
 
+// flow is a connection to the app's port 8080, the one the fixture's routes
+// expose.
 func flow(src, dst pkgtraffic.Endpoint) pkgtraffic.Flow {
-	return pkgtraffic.Flow{Source: src, Destination: dst, Connections: 1, Verdict: "forwarded"}
+	return pkgtraffic.Flow{Source: src, Destination: dst, Connections: 1, Verdict: "forwarded", Port: 8080}
 }
 
 // What counts as seen, per source. Hubble counts only its world and CIDR
@@ -96,7 +98,7 @@ func TestTrafficAnswerListsExposedFirst(t *testing.T) {
 	a := WorkloadRef{Kind: "Deployment", Namespace: "shop", Name: "a"}
 	z := WorkloadRef{Kind: "Deployment", Namespace: "shop", Name: "z"}
 	ev := trafficFixture(t, "hubble", flow(world, flowPod("shop", "a-1", "a", "Deployment")), flow(world, flowPod("shop", "z-1", "z", "Deployment")))
-	targets := []target{{workload: a}, {workload: z}}
+	targets := []target{{workload: a, exposedPorts: []int32{8080}}, {workload: z, exposedPorts: []int32{8080}}}
 	got := newTrafficIndex(ev, targets).answer(targets, 1, func(w WorkloadRef) bool { return w == z })
 	if got.WorkloadsTotal != 2 || !slices.Equal(got.Workloads, []WorkloadRef{z}) {
 		t.Fatalf("capped at one: %+v of %d", got.Workloads, got.WorkloadsTotal)
@@ -131,10 +133,10 @@ func mustBuildTraffic(t *testing.T, view View, f Filter, export bool, ev *Traffi
 // filter keeps the rows a seen workload runs. Without a source there is no
 // answer and the filter keeps everything: nothing seen is not "no traffic".
 func TestTrafficSeenInTheAnswer(t *testing.T) {
-	ev := trafficFixture(t, "hubble", flow(world, flowPod("shop", "worker-1-abc", "worker", "Deployment")))
+	ev := trafficFixture(t, "hubble", flow(world, flowPod("shop", "frontend-1-abc", "frontend", "Deployment")))
 	resp := mustBuildTraffic(t, ViewImage, Filter{}, false, ev)
 	if resp.Traffic == nil || resp.Traffic.Source != "hubble" || !resp.Traffic.FromOutside || resp.Traffic.WindowSeconds != 900 || !resp.Traffic.HistoryLimited ||
-		!slices.Equal(resp.Traffic.Workloads, []WorkloadRef{worker}) || resp.Traffic.WorkloadsTotal != 1 {
+		!slices.Equal(resp.Traffic.Workloads, []WorkloadRef{frontend}) || resp.Traffic.WorkloadsTotal != 1 {
 		t.Fatalf("traffic: %+v", resp.Traffic)
 	}
 	images := mustBuildTraffic(t, ViewImage, Filter{TrafficSeenOnly: true}, false, ev).Images
@@ -143,11 +145,11 @@ func TestTrafficSeenInTheAnswer(t *testing.T) {
 	}
 	workloads := mustBuildTraffic(t, ViewWorkload, Filter{}, false, ev).Workloads
 	for _, w := range workloads {
-		if w.TrafficSeen != (w.Name == "worker") {
+		if w.TrafficSeen != (w.Name == "frontend") {
 			t.Errorf("workload %s: TrafficSeen %v", w.Name, w.TrafficSeen)
 		}
 	}
-	if got := mustBuildTraffic(t, ViewWorkload, Filter{TrafficSeenOnly: true}, false, ev).Workloads; len(got) != 1 || got[0].Name != "worker" {
+	if got := mustBuildTraffic(t, ViewWorkload, Filter{TrafficSeenOnly: true}, false, ev).Workloads; len(got) != 1 || got[0].Name != "frontend" {
 		t.Fatalf("filtered workloads: %+v", got)
 	}
 	if got := mustBuildTraffic(t, ViewCVE, Filter{TrafficSeenOnly: true, Severities: []Severity{SeverityCritical}}, false, ev).CVEs; len(got) != 0 {
@@ -161,6 +163,45 @@ func TestTrafficSeenInTheAnswer(t *testing.T) {
 	empty := mustBuildTraffic(t, ViewImage, Filter{}, false, trafficFixture(t, "caretta"))
 	if empty.Traffic == nil || empty.Traffic.WorkloadsTotal != 0 || empty.Traffic.Workloads == nil {
 		t.Fatalf("a source that saw nothing still answered: %+v", empty.Traffic)
+	}
+}
+
+// Only connections to the ports the routes from outside reach count: a
+// metrics scrape or a DNS lookup on another port doesn't mark a workload,
+// and an unexposed workload is never marked. A source that reports no port
+// counts a request to a Service behind the routes; with neither, nothing.
+func TestTrafficCountsOnlyTheRoutesPorts(t *testing.T) {
+	onPort := func(dst pkgtraffic.Endpoint, port int) pkgtraffic.Flow {
+		f := flow(world, dst)
+		f.Port = port
+		return f
+	}
+	front := flowPod("shop", "frontend-1-abc", "frontend", "Deployment")
+	seen := func(ev *TrafficEvidence) []WorkloadRef {
+		return mustBuildTraffic(t, ViewImage, Filter{}, false, ev).Traffic.Workloads
+	}
+	if got := seen(trafficFixture(t, "hubble", onPort(front, 9090))); len(got) != 0 {
+		t.Fatalf("a scrape on 9090: %+v", got)
+	}
+	if got := seen(trafficFixture(t, "hubble", flow(world, flowPod("shop", "worker-1-abc", "worker", "Deployment")))); len(got) != 0 {
+		t.Fatalf("an unexposed workload: %+v", got)
+	}
+	viaService := onPort(front, 0)
+	viaService.DestService = "frontend"
+	exposed := func(targets []target) []target {
+		targets[0].exposedServices = []string{"frontend"}
+		return targets
+	}
+	items, targets := exposureFixture()
+	resp, err := buildWith(context.Background(), items, exposed(targets), ViewImage, Filter{}, false, nil, trafficFixture(t, "istio", viaService))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(resp.Traffic.Workloads, []WorkloadRef{frontend}) {
+		t.Fatalf("istio, by the exposed Service: %+v", resp.Traffic.Workloads)
+	}
+	if got := seen(trafficFixture(t, "istio", onPort(front, 0))); len(got) != 0 {
+		t.Fatalf("no port and no Service: %+v", got)
 	}
 }
 

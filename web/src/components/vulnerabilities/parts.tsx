@@ -218,9 +218,9 @@ export function trafficSentence(t: VulnerabilityTraffic): string {
   const window = trafficWindowPhrase(t, source)
   const read = readAt(t)
   if (t.fromOutside) {
-    return `Live Traffic (${source}) saw connections to it from outside the cluster ${window}. A client whose address a node rewrote (SNAT) reads as that node and isn't counted.${read}`
+    return `Live Traffic (${source}) saw connections to it from outside the cluster ${window}, on the ports its routes expose. A client whose address a node rewrote (SNAT) reads as that node and isn't counted.${read}`
   }
-  return `Live Traffic (${source}) saw connections to it ${window}. ${source} can't tell callers outside the cluster from nodes, so this counts callers inside the cluster too. Connections from nodes, such as health checks, aren't counted.${read}`
+  return `Live Traffic (${source}) saw connections to it ${window}, on the ports its routes expose. ${source} can't tell callers outside the cluster from nodes, so this counts callers inside the cluster too. Connections from nodes, such as health checks, and to other ports, such as metrics scrapes, aren't counted.${read}`
 }
 
 /** " Read at 10:42 PM." when the answer says when the source was read: the window ends there, not when the page is looked at. */
@@ -232,13 +232,14 @@ function readAt(t: VulnerabilityTraffic): string {
 
 /**
  * The optional Traffic seen filter, off until turned on from the page's menu.
- * It keeps rows with a workload Live Traffic saw, routed or not, and says
- * nothing about the rest.
+ * It keeps rows with an exposed workload Live Traffic saw receive
+ * connections on the ports its routes expose, and says nothing about the
+ * rest.
  */
 export const TRAFFIC_FILTER = {
   chip: (t: VulnerabilityTraffic) => (t.fromOutside ? 'Traffic from outside' : 'Traffic seen'),
   chipTip(t: VulnerabilityTraffic): string {
-    const what = t.fromOutside ? 'receive connections from outside the cluster' : 'receive connections'
+    const what = t.fromOutside ? 'receive connections from outside the cluster on the ports its routes expose' : 'receive connections on the ports its routes expose'
     const source = TRAFFIC_SOURCES[t.source] ?? t.source
     return `Only rows affecting a workload Live Traffic (${source}) saw ${what} ${trafficWindowPhrase(t, source)}. A workload it didn't see may still be reachable.${readAt(t)}`
   },

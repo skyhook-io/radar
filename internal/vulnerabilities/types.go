@@ -268,8 +268,9 @@ type Workload struct {
 	// ExposureUnknown is true when it has no route Radar sees and runs in a
 	// namespace where Radar couldn't read every route kind (Exposure.Gaps).
 	ExposureUnknown bool `json:"exposureUnknown,omitempty"`
-	// TrafficSeen is true when Live Traffic saw it receive connections in
-	// its window (Response.Traffic). False says nothing.
+	// TrafficSeen is true when Live Traffic saw it receive connections on
+	// the ports its routes from outside reach, in its window
+	// (Response.Traffic). False says nothing.
 	TrafficSeen bool `json:"trafficSeen,omitempty"`
 }
 
@@ -416,8 +417,9 @@ type Response struct {
 	// Exposure says where Radar looked for routes from outside the cluster;
 	// set on every answer.
 	Exposure *Exposure `json:"exposure,omitempty"`
-	// Traffic lists the workloads Live Traffic saw receive connections; set
-	// only when a traffic source answered.
+	// Traffic lists the exposed workloads Live Traffic saw receive
+	// connections on the ports their routes reach; set only when a traffic
+	// source answered.
 	Traffic *Traffic `json:"traffic,omitempty"`
 	// WorkloadRuns is whether Filter.Workload names something that runs in
 	// the answer's scope, so an empty answer can't pass for "no CVEs". Not
@@ -449,8 +451,9 @@ type Filter struct {
 	// as end of life (By workload: the workloads that run one). Unscanned
 	// images stay, as under a severity filter: their OS is unknown.
 	OSEndOfLifeOnly bool
-	// TrafficSeenOnly keeps the images a workload Live Traffic saw receive
-	// connections runs (By workload: those workloads), still listing every
+	// TrafficSeenOnly keeps the images an exposed workload Live Traffic saw
+	// receive connections on its routes' ports runs (By workload: those
+	// workloads), still listing every
 	// workload that runs them. Without a traffic answer it keeps everything:
 	// nothing seen there is not "no traffic".
 	TrafficSeenOnly bool
