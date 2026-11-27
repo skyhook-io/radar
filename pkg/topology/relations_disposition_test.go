@@ -198,7 +198,7 @@ func TestRelationshipFamilyInventoryHasBothDirections(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const wantFamilies = 74
+	const wantFamilies = 76
 	if len(rows)-1 != wantFamilies {
 		t.Fatalf("inventory has %d families; want %d", len(rows)-1, wantFamilies)
 	}

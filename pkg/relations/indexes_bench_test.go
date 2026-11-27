@@ -52,6 +52,8 @@ func indexExamples() []indexExample {
 		{MachineNodes, &unstructured.Unstructured{Object: map[string]any{"apiVersion": "karpenter.sh/v1", "kind": "NodeClaim", "metadata": map[string]any{"name": "example"}, "status": map[string]any{"nodeName": "node"}}}},
 		{Storage, &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "example"}, Spec: corev1.PersistentVolumeClaimSpec{VolumeName: "pv", StorageClassName: &class}}},
 		{Storage, &corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "example"}, Spec: corev1.PersistentVolumeSpec{StorageClassName: class, ClaimRef: &corev1.ObjectReference{Name: "claim", Namespace: "shop"}}}},
+		{VolumeSnapshots, vsObject("shop", "example", map[string]any{"volumeSnapshotClassName": "csi-snapclass", "source": map[string]any{"persistentVolumeClaimName": "data"}}, map[string]any{"boundVolumeSnapshotContentName": "snapcontent-1"})},
+		{VolumeSnapshots, vscObject("example", map[string]any{"volumeSnapshotClassName": "csi-snapclass", "volumeSnapshotRef": map[string]any{"namespace": "shop", "name": "daily", "uid": "uid-1"}})},
 		{Reflections, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "example", Annotations: map[string]string{"reflector.v1.k8s.emberstack.com/reflects": "shared/source"}}}},
 	}
 	for i := range examples {
