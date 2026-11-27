@@ -190,6 +190,8 @@ export interface VulnerabilitySummary {
 export interface VulnerabilityOwnerSource {
   repo: string
   path?: string
+  /** A Helm source's chart in a multi-source Argo CD Application, where the manager names no single chart. */
+  chart?: string
 }
 
 /**

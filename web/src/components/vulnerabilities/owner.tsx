@@ -54,7 +54,7 @@ function OwnerDetail({ owner, teamLabel }: { owner: VulnerabilityWorkloadOwner; 
           <span>{managerLabel(m)} <span className="font-mono">{m.namespace}/{m.name}</span></span>
           {m.chart && <span>Chart <span className="font-mono">{m.chart}</span></span>}
           {(m.sources ?? []).map((s) => (
-            <span key={`${s.repo}/${s.path ?? ''}`} className="break-all font-mono">{s.repo}{s.path ? ` (${s.path})` : ''}</span>
+            <span key={`${s.repo}/${s.path ?? ''}`} className="break-all font-mono">{s.repo}{s.path ? ` (${s.path})` : ''}{s.chart ? `, chart ${s.chart}` : ''}</span>
           ))}
           {m.tool === 'helm' && <span>Helm records no source repository.</span>}
           {m.shared && <span>Another Argo CD or Flux object lists it too; this is the one its own metadata names.</span>}

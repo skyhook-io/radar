@@ -82,6 +82,10 @@ type OwnerManager struct {
 type OwnerSource struct {
 	Repo string `json:"repo"`
 	Path string `json:"path,omitempty"`
+	// Chart is the chart this source names, when it is a Helm source of a
+	// multi-source Argo CD Application: which source a workload came from
+	// is unknown there, so the manager's Chart stays empty.
+	Chart string `json:"chart,omitempty"`
 }
 
 const helmChartLabel = "helm.sh/chart"
@@ -120,6 +124,11 @@ func resolveOwners(ctx context.Context, cache *k8s.ResourceCache, refs []Workloa
 		}
 		ref := resourceid.NewRef(w.Group, w.Kind, w.Namespace, w.Name)
 		obj, read := rs.Borrow(ref)
+		if read.State == ownership.Unavailable {
+			// Its store couldn't say: unknown, not "nothing found".
+			out = append(out, WorkloadOwner{WorkloadRef: w, ManagerUnknown: true})
+			continue
+		}
 		if read.State != ownership.Present || obj == nil {
 			continue
 		}
@@ -226,31 +235,36 @@ func (r *ownerReader) manager(ref resourceid.Ref, labels map[string]string) *Own
 func argoSources(app *unstructured.Unstructured) (sources []OwnerSource, chart string) {
 	add := func(raw any) {
 		src, _ := raw.(map[string]any)
-		repo := gitops.StringValue(src["repoURL"])
+		repo := safeRepo(gitops.StringValue(src["repoURL"]))
 		if repo == "" {
 			return
 		}
-		sources = append(sources, OwnerSource{Repo: safeRepo(repo), Path: gitops.StringValue(src["path"])})
-		if c := gitops.StringValue(src["chart"]); c != "" && chart == "" {
-			chart = c
+		sources = append(sources, OwnerSource{Repo: repo, Path: gitops.StringValue(src["path"]), Chart: gitops.StringValue(src["chart"])})
+	}
+	// One source's chart is the workload's; with several, which one made
+	// the workload is unknown, so each source keeps its own.
+	single := func() ([]OwnerSource, string) {
+		if len(sources) == 1 {
+			chart, sources[0].Chart = sources[0].Chart, ""
 		}
+		return sources, chart
 	}
 	if dry, _, _ := unstructured.NestedFieldNoCopy(app.Object, "spec", "sourceHydrator", "drySource"); dry != nil {
 		add(dry)
-		return sources, chart
+		return single()
 	}
 	if list, _, _ := unstructured.NestedFieldNoCopy(app.Object, "spec", "sources"); list != nil {
 		if items, _ := list.([]any); len(items) > 0 {
 			for _, src := range items {
 				add(src)
 			}
-			return sources, chart
+			return single()
 		}
 	}
 	if src, _, _ := unstructured.NestedFieldNoCopy(app.Object, "spec", "source"); src != nil {
 		add(src)
 	}
-	return sources, chart
+	return single()
 }
 
 // fluxSources follow a Kustomization's or HelmRelease's source reference to
@@ -285,7 +299,11 @@ func (r *ownerReader) fluxSources(root *unstructured.Unstructured) (sources []Ow
 		if (src.GetKind() == "GitRepository" || src.GetKind() == "Bucket") && path == "" && chart != "" && root.GetKind() == "HelmRelease" {
 			path, chart = chart, ""
 		}
-		return []OwnerSource{{Repo: safeRepo(repo), Path: path}}, chart
+		safe := safeRepo(repo)
+		if safe == "" {
+			return nil, chart
+		}
+		return []OwnerSource{{Repo: safe, Path: path}}, chart
 	}
 	return nil, chart
 }
@@ -312,19 +330,15 @@ func fluxSourceURL(src *unstructured.Unstructured) string {
 // query, fragment and any other user the same way.
 func safeRepo(repo string) string {
 	if !strings.Contains(repo, "://") {
-		// The user part ends at the last @ before the path, whatever
-		// characters it holds, so it goes before the query is cut.
-		head, path, hasPath := strings.Cut(repo, "/")
-		if i := strings.LastIndex(head, "@"); i >= 0 && head[:i] != "git" {
-			head = head[i+1:]
+		// No scheme to parse by, so a ? or # can't be told from part of a
+		// credential: such an address is left out. Everything up to the
+		// last @ is a user, kept only when it is git.
+		if strings.ContainsAny(repo, "?#") {
+			return ""
 		}
-		if hasPath {
-			repo = head + "/" + path
-		} else {
-			repo = head
+		if i := strings.LastIndex(repo, "@"); i >= 0 && repo[:i] != "git" {
+			repo = repo[i+1:]
 		}
-		repo, _, _ = strings.Cut(repo, "#")
-		repo, _, _ = strings.Cut(repo, "?")
 		return repo
 	}
 	if u, err := url.Parse(repo); err == nil && u.Scheme == "ssh" && u.User != nil && u.User.Username() == "git" {

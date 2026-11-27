@@ -239,10 +239,12 @@ func TestSafeRepo(t *testing.T) {
 		"ssh://git:pw@github.com/a/b":               "ssh://git@github.com/a/b",
 		"ssh://ghp_token@github.com/a/b":            "ssh://github.com/a/b",
 		"token@github.com:a/b.git":                  "github.com:a/b.git",
-		"git@github.com:a/b.git?private_token=x#y":  "git@github.com:a/b.git",
+		"git@github.com:a/b.git?private_token=x#y":  "",
+		"minio.example:9000?token=left@right/b":     "",
+		"user:pa/ss@host:repo":                      "host:repo",
 		"key:secret@minio.local:9000/bucket":        "minio.local:9000/bucket",
 		"minio.local:9000/bucket":                   "minio.local:9000/bucket",
-		"us?er:pa#ss@github.com:a/b.git":            "github.com:a/b.git",
+		"us?er:pa#ss@github.com:a/b.git":            "",
 	} {
 		if got := safeRepo(in); got != want {
 			t.Errorf("safeRepo(%q) = %q, want %q", in, got, want)
@@ -305,8 +307,32 @@ func TestArgoSourcesPrefersSources(t *testing.T) {
 		"source":  map[string]any{"repoURL": "https://github.com/acme/old.git", "path": "old"},
 		"sources": []any{map[string]any{"repoURL": "https://charts.example.com", "chart": "shop"}, map[string]any{"repoURL": "https://github.com/acme/deploy.git", "path": "apps"}},
 	}, nil)
+	// Which of the two sources made a workload is unknown, so the chart
+	// stays on its source.
 	sources, chart := argoSources(app)
-	if want := []OwnerSource{{Repo: "https://charts.example.com"}, {Repo: "https://github.com/acme/deploy.git", Path: "apps"}}; !slices.Equal(sources, want) || chart != "shop" {
-		t.Errorf("argoSources = %+v, %q; want %+v, shop", sources, chart, want)
+	if want := []OwnerSource{{Repo: "https://charts.example.com", Chart: "shop"}, {Repo: "https://github.com/acme/deploy.git", Path: "apps"}}; !slices.Equal(sources, want) || chart != "" {
+		t.Errorf("argoSources = %+v, %q; want %+v, no chart", sources, chart, want)
+	}
+	single := ownerObject("argoproj.io/v1alpha1", "Application", "argocd", "one", map[string]any{
+		"source": map[string]any{"repoURL": "https://charts.example.com", "chart": "shop"},
+	}, nil)
+	if sources, chart := argoSources(single); chart != "shop" || len(sources) != 1 || sources[0].Chart != "" {
+		t.Errorf("single source = %+v, %q", sources, chart)
+	}
+}
+
+// A workload whose store can't say whether it exists reads as unknown,
+// never as "no owner found"; one the store has loaded without it is left
+// out.
+func TestResolveOwnersUnreadWorkloadIsUnknown(t *testing.T) {
+	cache := ownerCluster(t)
+	unread := WorkloadRef{Kind: "Rollout", Group: "argoproj.io", Namespace: "shop", Name: "canary"}
+	gone := WorkloadRef{Kind: "Deployment", Group: "apps", Namespace: "shop", Name: "gone"}
+	owners, _, err := resolveOwners(context.Background(), cache, []WorkloadRef{unread, gone}, nil, TeamLabel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(owners) != 1 || owners[0].WorkloadRef != unread || !owners[0].ManagerUnknown || owners[0].Manager != nil {
+		t.Errorf("owners = %+v, want only the Rollout, unknown", owners)
 	}
 }
