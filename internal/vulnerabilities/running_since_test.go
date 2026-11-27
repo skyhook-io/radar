@@ -129,6 +129,14 @@ func TestRunningSinceRollsUp(t *testing.T) {
 		t.Fatalf("worker has no running Pod: %+v", w)
 	}
 
+	// Under a High filter only sha256:b's findings match, so checkout is
+	// dated by that container, not sha256:a's older Critical one.
+	for _, w := range mustBuild(t, items, targets, ViewWorkload, Filter{Severities: []Severity{SeverityHigh}}).Workloads {
+		if w.Name == "checkout" && !sameTime(w.RunningSince, &day3) {
+			t.Fatalf("checkout under High: %v, want %v", w.RunningSince, day3)
+		}
+	}
+
 	// Narrowed to checkout, sha256:a's date is checkout's own, not db's
 	// older start, in the image row and the CVE rows alike.
 	narrowed := Filter{Workload: &WorkloadRef{Kind: co.Kind, Group: co.Group, Namespace: co.Namespace, Name: co.Name}}

@@ -98,6 +98,9 @@ type unreadImage struct {
 	scanned   time.Time
 	workloads []WorkloadRef
 	exposed   []ExposedWorkload
+	// since is its Running since across the workloads the filters ask
+	// about, as an image row's.
+	since *time.Time
 }
 
 func (j *rollup) imageMetas() map[string]imageMeta {
@@ -178,7 +181,7 @@ func (j *rollup) unreadRows(f Filter) []unreadImage {
 		if !ok {
 			return rows
 		}
-		rows = append(rows, unreadImage{id: agg.report.imageID, image: cmp.Or(agg.report.image, agg.report.digest), scanned: agg.oldestScan(), workloads: workloads, exposed: exposed})
+		rows = append(rows, unreadImage{id: agg.report.imageID, image: cmp.Or(agg.report.image, agg.report.digest), scanned: agg.oldestScan(), workloads: workloads, exposed: exposed, since: j.imageRunningSince(agg.report.imageID, m.inScope(workloads))})
 	}
 	return rows
 }
@@ -341,7 +344,7 @@ func WriteCSV(ctx context.Context, resp Response, f Filter, cluster string) ([]b
 				continue
 			}
 			meta := x.images[u.id]
-			if err := put(meta.scanned, StatusNotRead, slices.Concat([]string{u.image, meta.digest, meta.os}, blank(6), []string{join(workloadCells(u.workloads, true)), exposedCell(u.exposed, u.workloads)}, meta.imageTail(), []string{x.sinceCell(u.id, u.workloads)})...); err != nil {
+			if err := put(meta.scanned, StatusNotRead, slices.Concat([]string{u.image, meta.digest, meta.os}, blank(6), []string{join(workloadCells(u.workloads, true)), exposedCell(u.exposed, u.workloads)}, meta.imageTail(), []string{timePtrCell(u.since)})...); err != nil {
 				return nil, err
 			}
 		}

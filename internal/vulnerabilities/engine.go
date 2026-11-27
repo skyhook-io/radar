@@ -1320,18 +1320,26 @@ func (j *rollup) workloads(f Filter) (rows, clean, unscanned []Workload) {
 		a.row.ExposureUnknown = len(routes) == 0 && j.exposureUnknownIn(ref.Namespace)
 		images := make([]string, 0, len(a.row.Containers))
 		allClean := true
-		var since time.Time
 		for _, c := range a.row.Containers {
 			images = append(images, c.Image)
 			if !c.Scanned || c.FindingsUnread || c.Counts == nil || totalCount(*c.Counts) > 0 {
 				allClean = false
 			}
-			if c.RunningSince != nil && c.Counts != nil && totalCount(*c.Counts) > 0 {
+		}
+		rowMatched := m.rowMatches(strings.Join(images, " "), []WorkloadRef{ref})
+		// The workload's date is its containers' that hold a finding the
+		// filters keep, so a Critical filter doesn't date the row by a
+		// sidecar with only Low findings.
+		var since time.Time
+		for _, c := range a.row.Containers {
+			if c.RunningSince == nil || c.Counts == nil || totalCount(*c.Counts) == 0 {
+				continue
+			}
+			if slices.ContainsFunc(j.images[c.ImageID].report.findings, func(fd Finding) bool { return m.findingMatches(fd, rowMatched) }) {
 				since = oldest(since, *c.RunningSince)
 			}
 		}
 		a.row.RunningSince = timePtr(since)
-		rowMatched := m.rowMatches(strings.Join(images, " "), []WorkloadRef{ref})
 		slices.SortFunc(a.row.Containers, func(x, y WorkloadContainer) int {
 			return cmp.Or(cmp.Compare(x.Name, y.Name), cmp.Compare(x.Image, y.Image))
 		})
