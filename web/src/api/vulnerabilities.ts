@@ -169,6 +169,25 @@ export interface VulnerabilityWorkload {
   routesTotal?: number
   /** No route seen, but Radar couldn't read every route kind that could reach it. */
   exposureUnknown?: boolean
+  /** Live Traffic saw it receive connections in its window (see VulnerabilityTraffic). Absent says nothing. */
+  trafficSeen?: boolean
+}
+
+/**
+ * The workloads Live Traffic saw receive connections. Present only when a
+ * traffic source answered; a workload it doesn't list is not "no traffic".
+ */
+export interface VulnerabilityTraffic {
+  source: string
+  /** Only callers the source identifies as outside the cluster count (Hubble). False: any caller but a node counts. */
+  fromOutside: boolean
+  windowSeconds: number
+  /** The source keeps a bounded history, so it may reach back less far than the window. */
+  historyLimited?: boolean
+  /** When the source was read; the window ends there. */
+  observedAt?: string
+  workloads: VulnerabilityWorkloadRef[]
+  workloadsTotal: number
 }
 
 export interface VulnerabilitySummary {
@@ -212,6 +231,8 @@ export interface VulnerabilitiesResponse {
     /** Route kinds this cluster serves that Radar doesn't follow (Istio, Traefik IngressRoute, Contour, Knative). */
     unchecked?: { kind: string; group?: string }[]
   }
+  /** Absent when no Live Traffic source answered, and from an older Radar. */
+  traffic?: VulnerabilityTraffic
   coverage: {
     complete: boolean
     gaps: VulnerabilityGap[]
@@ -232,6 +253,8 @@ export interface VulnerabilitiesParams {
   exposed?: boolean
   /** Only images whose OS the scanner reports as end of life. */
   osEndOfLife?: boolean
+  /** Only rows affecting a workload Live Traffic saw receive connections. */
+  trafficSeen?: boolean
   query?: string
   workload?: { kind: string; group?: string; namespace: string; name: string }
 }
@@ -403,6 +426,7 @@ export function vulnerabilitiesPath(p: VulnerabilitiesParams): string {
   if (p.fixableOnly) params.set('fixable', '1')
   if (p.exposed) params.set('exposed', '1')
   if (p.osEndOfLife) params.set('eol', '1')
+  if (p.trafficSeen) params.set('traffic', '1')
   if (p.query?.trim()) params.set('q', p.query.trim())
   if (p.workload) {
     params.set('workloadKind', p.workload.kind)

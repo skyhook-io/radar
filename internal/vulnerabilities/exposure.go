@@ -14,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/intstr"
 
 	"github.com/skyhook-io/radar/internal/ingressstatus"
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -94,7 +95,13 @@ func servedUncheckedKinds(served func(kind, group string) bool) []resourceapi.Ki
 type exposingService struct {
 	namespace string
 	selection relations.Selection
-	routes    []Route
+	svc       *corev1.Service
+	// ports are the Service's ports a route reaches: every port of a
+	// LoadBalancer or NodePort Service, the backend port of an Ingress or
+	// Gateway API route (every port when the route names none Radar can
+	// match). Live Traffic counts only connections to these.
+	ports  map[int32]bool
+	routes []Route
 	// has is routes as a set, for adding each route once.
 	has map[Route]bool
 	// id tells exposing Services apart in a memo key.
@@ -156,18 +163,24 @@ func indexExposure(ctx context.Context, src routeSources, may func(group, kind, 
 		if !ok || err != nil {
 			continue
 		}
-		s := &exposingService{namespace: svc.Namespace, selection: selection, has: map[Route]bool{}}
+		s := &exposingService{namespace: svc.Namespace, selection: selection, svc: svc, ports: map[int32]bool{}, has: map[Route]bool{}}
 		if via, ok := serviceRoute(svc); ok {
 			r := Route{Via: via, Namespace: svc.Namespace, Name: svc.Name}
 			s.routes, s.has[r] = append(s.routes, r), true
+			s.expose(0, "")
 		}
 		services[svc.Namespace+"/"+svc.Name] = s
 	}
 	grantGaps := map[readreason.Code]map[string]bool{}
-	reach := func(namespace, name string, r Route) {
-		if s := services[namespace+"/"+name]; s != nil && !s.has[r] {
+	reach := func(namespace, name string, r Route, port int32, portName string) {
+		s := services[namespace+"/"+name]
+		if s == nil {
+			return
+		}
+		if !s.has[r] {
 			s.routes, s.has[r] = append(s.routes, r), true
 		}
+		s.expose(port, portName)
 	}
 	for _, ing := range src.ingresses {
 		if err := ctx.Err(); err != nil {
@@ -178,9 +191,10 @@ func indexExposure(ctx context.Context, src routeSources, may func(group, kind, 
 		if !allowed("networking.k8s.io", "Ingress", ing.Namespace) || !ingressstatus.HasAssignedAddress(ing) {
 			continue
 		}
-		for _, name := range configrefs.IngressBackendServices(ing) {
-			reach(ing.Namespace, name, Route{Via: "Ingress", Namespace: ing.Namespace, Name: ing.Name})
-		}
+		r := Route{Via: "Ingress", Namespace: ing.Namespace, Name: ing.Name}
+		visitIngressBackends(ing, func(name string, port int32, portName string) {
+			reach(ing.Namespace, name, r, port, portName)
+		})
 	}
 	addressed := map[string]bool{}
 	for _, gw := range src.gateways {
@@ -201,7 +215,7 @@ func indexExposure(ctx context.Context, src routeSources, may func(group, kind, 
 		// checked against the grants; where they couldn't be read, its
 		// workloads' exposure is unknown.
 		refused := refNotPermitted(route)
-		visitForwardingBackends(route, func(namespace, name string) {
+		visitForwardingBackends(route, func(namespace, name string, port int32) {
 			unknown := func(code readreason.Code) {
 				if allowed("", "Service", namespace) {
 					if grantGaps[code] == nil {
@@ -212,7 +226,7 @@ func indexExposure(ctx context.Context, src routeSources, may func(group, kind, 
 			}
 			switch {
 			case !refused || namespace == route.GetNamespace():
-				reach(namespace, name, r)
+				reach(namespace, name, r, port, "")
 			case !allowed(configrefs.GatewayAPIGroup, "ReferenceGrant", namespace):
 				// The caller may not read the grants there: what they allow
 				// mustn't show through, so the backend is unknown whatever
@@ -221,7 +235,7 @@ func indexExposure(ctx context.Context, src routeSources, may func(group, kind, 
 			case src.grantsUnread != "":
 				unknown(src.grantsUnread)
 			case grantAllows(src.grants, route.GetKind(), route.GetNamespace(), namespace, name):
-				reach(namespace, name, r)
+				reach(namespace, name, r, port, "")
 			}
 		})
 	}
@@ -234,6 +248,84 @@ func indexExposure(ctx context.Context, src routeSources, may func(group, kind, 
 		}
 	}
 	return x, nil
+}
+
+// expose records a Service port a route reaches: by number, by name, or
+// every port when the route names neither. A port the Service doesn't have
+// (a stale reference) records nothing: the route still counts as a way in,
+// but no traffic counts through it.
+func (s *exposingService) expose(port int32, name string) {
+	for _, p := range s.svc.Spec.Ports {
+		if (port == 0 && name == "") || (port != 0 && p.Port == port) || (name != "" && p.Name == name) {
+			s.ports[p.Port] = true
+		}
+	}
+}
+
+// visitIngressBackends visits each Service an Ingress sends to, with the
+// port its backend names (a number or a name).
+func visitIngressBackends(ing *networkingv1.Ingress, visit func(name string, port int32, portName string)) {
+	add := func(b *networkingv1.IngressBackend) {
+		if b == nil || b.Service == nil || b.Service.Name == "" {
+			return
+		}
+		visit(b.Service.Name, b.Service.Port.Number, b.Service.Port.Name)
+	}
+	add(ing.Spec.DefaultBackend)
+	for _, rule := range ing.Spec.Rules {
+		if rule.HTTP == nil {
+			continue
+		}
+		for i := range rule.HTTP.Paths {
+			add(&rule.HTTP.Paths[i].Backend)
+		}
+	}
+}
+
+// exposedPorts are the Pod's ports the routes from outside reach: each
+// exposed Service port's target port, a named one resolved on the Pod's own
+// containers, and the names of those Services whose every port is exposed,
+// for a source that names the Service a request went to rather than a port.
+// Live Traffic counts only connections to these.
+func (x exposureIndex) exposedPorts(pod *corev1.Pod) (out []int32, services []string) {
+	add := func(p int32) {
+		if p > 0 && !slices.Contains(out, p) {
+			out = append(out, p)
+		}
+	}
+	candidate := relations.Candidate{Labels: labels.Set(pod.Labels)}
+	for _, s := range x.byNamespace[pod.Namespace] {
+		if ok, _ := s.selection.Matches(candidate, nil); !ok || len(s.routes) == 0 {
+			continue
+		}
+		// A source that names only the Service (Istio) can't say which port
+		// a request reached, so the Service counts only when every one of
+		// its ports is exposed.
+		if !slices.ContainsFunc(s.svc.Spec.Ports, func(p corev1.ServicePort) bool { return !s.ports[p.Port] }) {
+			services = append(services, s.svc.Name)
+		}
+		for _, sp := range s.svc.Spec.Ports {
+			if !s.ports[sp.Port] {
+				continue
+			}
+			switch {
+			case sp.TargetPort.Type == intstr.String:
+				for _, c := range pod.Spec.Containers {
+					for _, cp := range c.Ports {
+						if cp.Name == sp.TargetPort.StrVal {
+							add(cp.ContainerPort)
+						}
+					}
+				}
+			case sp.TargetPort.IntVal > 0:
+				add(sp.TargetPort.IntVal)
+			default:
+				add(sp.Port)
+			}
+		}
+	}
+	slices.Sort(out)
+	return out, services
 }
 
 // routesFor are the routes from outside to a Pod the caller may see,
@@ -502,11 +594,12 @@ func conditionFalse(status map[string]any, conditionType string) bool {
 // its Service backendRefs, except those weighted 0, which get none, and the
 // backends its requestMirror filters copy requests to (unless set to copy
 // none).
-func visitForwardingBackends(route *unstructured.Unstructured, visit func(namespace, name string)) {
+func visitForwardingBackends(route *unstructured.Unstructured, visit func(namespace, name string, port int32)) {
 	service := func(m map[string]any) {
 		name, _ := m["name"].(string)
 		if m != nil && name != "" && configrefs.GatewayBackendIsService(m) {
-			visit(configrefs.GatewayRefNamespace(m, route.GetNamespace()), name)
+			port, _ := number(m["port"])
+			visit(configrefs.GatewayRefNamespace(m, route.GetNamespace()), name, int32(port))
 		}
 	}
 	mirrors := func(filters []any) {

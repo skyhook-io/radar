@@ -17,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 	k8stypes "k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -211,6 +212,8 @@ var (
 
 func exposedTarget(t target, routes ...Route) target {
 	t.routes = routes
+	// The fixture's routes reach the app's port 8080 (exposedPorts).
+	t.exposedPorts = []int32{8080}
 	return t
 }
 
@@ -411,7 +414,7 @@ func TestFindingsBudgetReadsExposedImagesFirst(t *testing.T) {
 func TestExportExposedWorkloads(t *testing.T) {
 	items, targets := exposureFixture()
 	resp := mustExport(t, items, targets, ViewFix, Filter{})
-	if cols := ExportColumns[ViewFix]; cols[len(cols)-1] != "exposed_workloads" {
+	if cols := ExportColumns[ViewFix]; !slices.Contains(cols, "exposed_workloads") {
 		t.Fatalf("header: %v", cols)
 	}
 	// libxml's Critical sorts first, openssl's exposed High second.
@@ -1155,5 +1158,50 @@ func TestUncheckedRouteKinds(t *testing.T) {
 	if len(every) != 10 || !slices.Contains(every, resourceapi.KindRef{Kind: "Service", Group: "serving.knative.dev"}) ||
 		!slices.Contains(every, resourceapi.KindRef{Kind: "IngressRouteUDP", Group: "traefik.containo.us"}) || !slices.Contains(every, resourceapi.KindRef{Kind: "HTTPProxy", Group: "projectcontour.io"}) {
 		t.Fatalf("every kind: %+v", every)
+	}
+}
+
+// The ports a route reaches on the Pod: every port of a NodePort Service,
+// a named target port resolved on the Pod's containers; for an Ingress only
+// the backend port it names, so a metrics port on the same Service isn't
+// one.
+func TestExposedPorts(t *testing.T) {
+	pod := appPod("shop", "web")
+	pod.Spec.Containers = []corev1.Container{{Name: "app", Ports: []corev1.ContainerPort{{Name: "http", ContainerPort: 8080}, {Name: "metrics", ContainerPort: 9090}}}}
+	np := service("shop", "web-np", corev1.ServiceTypeNodePort, map[string]string{"app": "web"})
+	np.Spec.Ports = []corev1.ServicePort{{Port: 80, NodePort: 31000, TargetPort: intstr.FromString("http")}}
+	backend := service("shop", "web", corev1.ServiceTypeClusterIP, map[string]string{"app": "web"})
+	backend.Spec.Ports = []corev1.ServicePort{{Name: "http", Port: 80, TargetPort: intstr.FromInt32(8080)}, {Name: "metrics", Port: 9090}}
+	ing := ingress("shop", "web", "web", true)
+	ing.Spec.DefaultBackend.Service.Port = networkingv1.ServiceBackendPort{Name: "http"}
+
+	x, err := indexExposure(context.Background(), routeSources{services: []*corev1.Service{np}}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ports, services := x.exposedPorts(pod); !slices.Equal(ports, []int32{8080}) || !slices.Equal(services, []string{"web-np"}) {
+		t.Fatalf("NodePort: %v %v", ports, services)
+	}
+	x, err = indexExposure(context.Background(), routeSources{services: []*corev1.Service{backend}, ingresses: []*networkingv1.Ingress{ing}}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Its metrics port isn't exposed, so the Service alone (Istio) can't
+	// say a request reached the app.
+	if ports, services := x.exposedPorts(pod); !slices.Equal(ports, []int32{8080}) || len(services) != 0 {
+		t.Fatalf("Ingress to the http port: %v %v", ports, services)
+	}
+	// A stale backend port: still a way in, but no port counts.
+	ing.Spec.DefaultBackend.Service.Port = networkingv1.ServiceBackendPort{Name: "gone"}
+	x, err = indexExposure(context.Background(), routeSources{services: []*corev1.Service{backend}, ingresses: []*networkingv1.Ingress{ing}}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	routes, err := x.routesFor(context.Background(), pod)
+	if err != nil || len(routes) != 1 {
+		t.Fatalf("routes: %v %v", routes, err)
+	}
+	if ports, services := x.exposedPorts(pod); len(ports) != 0 || len(services) != 0 {
+		t.Fatalf("a stale backend port: %v %v", ports, services)
 	}
 }

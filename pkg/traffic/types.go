@@ -148,6 +148,16 @@ type FlowOptions struct {
 	// A source may use it to fetch less; the result still has to be filtered
 	// with Match.Matches, since a source's own filters can be coarser.
 	Match *FlowMatch
+	// FromOutsideOnly asks for flows whose source the plugin identifies as
+	// outside the cluster. A source that can filter on that natively may, so
+	// the rest of the traffic doesn't use up its limits; one that can't
+	// ignores it. Callers still check Source.Kind themselves.
+	FromOutsideOnly bool
+	// RecentOnly asks for traffic seen within Since. A source whose metric
+	// counts since it started (Caretta's links) otherwise reports every
+	// connection it ever saw, whatever Since says; the others already
+	// answer for the window.
+	RecentOnly bool
 }
 
 // Excludes reports whether a flow falls under ExcludeNamespaces or ExcludeHost.

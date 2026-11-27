@@ -188,7 +188,7 @@ func TestVulnerabilitiesExport(t *testing.T) {
 	env.srv.permCache.Set("carol", nil, carol)
 	resp = env.authGet(t, "/api/vulnerabilities/export?view=workload", "carol", "")
 	body = readBody(t, resp)
-	if resp.StatusCode != http.StatusOK || body != "cluster,scanned,status,kind,namespace,workload,critical,high,medium,low,unrated,with_a_fix,containers,exposed_workloads\r\n"+k8s.GetClusterName()+",,no access,,*,,,,,,,,,\r\n" {
+	if resp.StatusCode != http.StatusOK || body != "cluster,scanned,status,kind,namespace,workload,critical,high,medium,low,unrated,with_a_fix,containers,exposed_workloads,traffic_seen,traffic_window,traffic_from\r\n"+k8s.GetClusterName()+",,no access,,*,,,,,,,,,,,,\r\n" {
 		t.Fatalf("carol: %d %q", resp.StatusCode, body)
 	}
 

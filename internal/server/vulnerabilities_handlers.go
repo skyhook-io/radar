@@ -19,7 +19,7 @@ import (
 // rolled up to the images that run now, by image, CVE, workload or fix.
 //
 // Query: view=image|cve|workload|fix|summary, severity=critical,high,
-// fixable=1, exposed=1, q=, namespaces=, and workloadKind + workloadNamespace +
+// fixable=1, exposed=1, eol=1, traffic=1, q=, namespaces=, and workloadKind + workloadNamespace +
 // workloadName (+ optional workloadGroup) to narrow to one workload (the
 // workload drawer).
 //
@@ -39,6 +39,14 @@ import (
 // Gateway API routes across the caller's whole namespace ceiling, which
 // namespace access covers for those kinds; the view's narrower picker
 // scope would otherwise drop a shared Gateway and change the answer.
+//
+// Traffic (the workloads Live Traffic saw receive connections) comes from
+// one fetch of the active traffic source, shared across callers (see
+// vulnerabilityTraffic) and read with Radar's identity as the Traffic view
+// is; the answer lists only workloads this caller's read returned. Without
+// an answer, traffic=1 keeps every row on a page, whose chip then says the
+// filter isn't applied; an export with traffic=1 is a 503 instead, since a
+// file can't say so.
 func (s *Server) handleVulnerabilities(w http.ResponseWriter, r *http.Request) {
 	resp, ok := s.readVulnerabilities(w, r, false)
 	if ok {
@@ -134,6 +142,7 @@ func vulnerabilityFilter(r *http.Request) vulnerabilities.Filter {
 		Severities: severities, FixableOnly: q.Get("fixable") == "1" || q.Get("fixable") == "true", Query: q.Get("q"),
 		ExposedOnly:     q.Get("exposed") == "1" || q.Get("exposed") == "true",
 		OSEndOfLifeOnly: q.Get("eol") == "1" || q.Get("eol") == "true",
+		TrafficSeenOnly: q.Get("traffic") == "1" || q.Get("traffic") == "true",
 	}
 	if kind, ns, name := q.Get("workloadKind"), q.Get("workloadNamespace"), q.Get("workloadName"); kind != "" && ns != "" && name != "" {
 		filter.Workload = &vulnerabilities.WorkloadRef{Kind: kind, Group: q.Get("workloadGroup"), Namespace: ns, Name: name}
@@ -168,6 +177,24 @@ func (s *Server) readVulnerabilities(w http.ResponseWriter, r *http.Request, exp
 		}
 	}
 
+	filter := vulnerabilityFilter(r)
+	// A filtered export's rows depend on the traffic answer, so it waits for
+	// a fetch to finish; a page loads without the marks rather than wait.
+	trafficWait := vulnTrafficWait
+	if export && filter.TrafficSeenOnly {
+		trafficWait = vulnTrafficFetchTimeout
+	}
+	// The traffic answer is read before the reports: a context switch between
+	// the two would mark one cluster's workloads with another's traffic.
+	connection := k8s.GetResourceCache()
+	traffic := trafficFor(r.Context(), view, trafficWait)
+	if export && filter.TrafficSeenOnly && traffic == nil && view != vulnerabilities.ViewSummary {
+		if r.Context().Err() == nil {
+			s.writeError(w, http.StatusServiceUnavailable, "Live Traffic didn't answer, so the Traffic seen filter can't be applied. Try again, or export without it.")
+		}
+		return vulnerabilities.Response{}, false
+	}
+
 	namespaces, checkFailed := s.parseNamespacesForUserWithStatus(r)
 	routeNamespaces, routeCheckFailed := s.routeNamespacesForUser(r)
 	resp, err := vulnerabilities.Read(r.Context(), k8s.GetResourceCache(), vulnerabilities.Request{
@@ -177,8 +204,9 @@ func (s *Server) readVulnerabilities(w http.ResponseWriter, r *http.Request, exp
 		RouteCeiling:         !routeCheckFailed,
 		ReportAccess:         s.searchKindAccess(r, s.computeSearchKindRBAC(r)),
 		View:                 view,
-		Filter:               vulnerabilityFilter(r),
+		Filter:               filter,
 		Export:               export,
+		Traffic:              traffic,
 	})
 	if err != nil {
 		if r.Context().Err() != nil {
@@ -204,6 +232,10 @@ func (s *Server) readVulnerabilities(w http.ResponseWriter, r *http.Request, exp
 			log.Printf("[vulnerabilities] Failed to read vulnerability reports %s/%s: %v", scope, "vulnerabilityreports", err)
 			s.writeError(w, http.StatusInternalServerError, err.Error())
 		}
+		return vulnerabilities.Response{}, false
+	}
+	if traffic != nil && (k8s.GetResourceCache() != connection || trafficSourceSwitched(traffic)) {
+		s.writeErrorCode(w, http.StatusConflict, string(readreason.ConnectionChanged), vulnerabilities.ErrConnectionChanged.Error())
 		return vulnerabilities.Response{}, false
 	}
 	return resp, true

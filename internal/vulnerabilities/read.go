@@ -70,6 +70,8 @@ type Request struct {
 	// every namespace. MaxFindings still applies. The Response then carries
 	// what WriteCSV needs.
 	Export bool
+	// Traffic is what Live Traffic saw; nil when no source answered.
+	Traffic *TrafficEvidence
 }
 
 // Served is whether the connected cluster serves the report kind the rollup
@@ -355,7 +357,7 @@ func Read(ctx context.Context, cache *k8s.ResourceCache, req Request) (Response,
 	exposureGaps = append(exposureGaps, exposure.gaps()...)
 	// Every namespace named, before a list read caps them: a row's exposure
 	// is unknown only where a gap covers its namespace.
-	resp, err := buildWithExposure(ctx, items, targets, req.View, req.Filter, req.Export, &Exposure{Gaps: slices.Clone(exposureGaps)})
+	resp, err := buildWith(ctx, items, targets, req.View, req.Filter, req.Export, &Exposure{Gaps: slices.Clone(exposureGaps)}, req.Traffic)
 	if err != nil {
 		return Response{}, err
 	}
