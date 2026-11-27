@@ -5,6 +5,7 @@ import { InClusterConsentDialog, consentRequestRows, inClusterConsentGiven } fro
 import { SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-colors'
 import { WithTooltip } from '../ui/Tooltip'
 import { getApiBase } from '../../api/config'
+import { ApiError } from '../../api/client'
 import {
   fetchVulnerabilityReachabilityPlan,
   normalizeReachability,
@@ -62,10 +63,10 @@ function saveKept() {
 const results = loadKept()
 const listeners = new Set<() => void>()
 
-function setEntry(key: string, entry: Entry) {
+function setEntry(key: string, entry: Entry | undefined) {
   results.delete(key)
-  results.set(key, entry)
-  if (entry.state !== 'running') saveKept()
+  if (entry) results.set(key, entry)
+  if (entry?.state !== 'running') saveKept()
   for (const l of listeners) l()
 }
 
@@ -205,7 +206,12 @@ export function ReachabilityCheck({ workload, routes, routesTotal }: {
 
   // clusterKey is the cluster the user confirmed (or chose not to be asked
   // about again): the run is refused if Radar has switched since.
+  // A check refused because one is already running (429) isn't a result:
+  // the last one stays, and the refusal shows here only.
+  const [busy, setBusy] = useState<string>()
   const run = useCallback(async (clusterKey: string | undefined, requests?: string[]) => {
+    const previous = results.get(key)
+    setBusy(undefined)
     setEntry(key, { state: 'running' })
     try {
       const result = await runVulnerabilityReachability(workload, routes, clusterKey, requests)
@@ -213,6 +219,11 @@ export function ReachabilityCheck({ workload, routes, routesTotal }: {
       // with the result, so its summary never reads as the whole workload.
       setEntry(key, { state: 'done', result: { ...result, routesTotal: Math.max(routesTotal ?? routes.length, routes.length) } })
     } catch (e) {
+      if (e instanceof ApiError && e.status === 429) {
+        setEntry(key, previous?.state === 'running' ? undefined : previous)
+        setBusy(e.message)
+        return
+      }
       setEntry(key, { state: 'failed', error: e instanceof Error ? e.message : String(e) })
     }
   }, [key, workload, routes, routesTotal])
@@ -266,6 +277,7 @@ export function ReachabilityCheck({ workload, routes, routesTotal }: {
           Nothing to probe: {(plan.plan.routes ?? []).map((r) => r.note).filter(Boolean).join(' ') || 'Radar found no Service port behind these routes.'}
         </span>
       )}
+      {busy && !running && <span className="text-theme-text-secondary">{busy}</span>}
       {entry?.state === 'failed' && <span className="text-warning-text">The check didn't run: {entry.error}</span>}
       {entry?.state === 'done' && <ReachabilityResult result={entry.result} />}
       {plan?.state === 'ready' && (
