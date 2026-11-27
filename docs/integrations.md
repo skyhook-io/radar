@@ -802,7 +802,7 @@ Within each severity, rows with a KEV CVE among the findings the filters keep so
 | Flag | `--kev-feed` | `--epss-feed` |
 | Env | `RADAR_KEV_FEED` | `RADAR_EPSS_FEED` |
 
-Each takes an https URL (for example a generic repository in Artifactory or Nexus that mirrors the two files), a file path, or `off`. A file is re-read daily, so it can be updated in place. KEV is about 2 MB, over a ConfigMap's 1 MiB limit, so to use files in the Helm chart, put them on a volume and set `vulnerabilities.feedVolume` (for example a `persistentVolumeClaim`); it is mounted read-only at `/etc/radar/vulnerability-feeds`.
+Each takes a URL (for example a generic repository in Artifactory or Nexus that mirrors the two files; plain http is fine for an internal mirror), a file path, or `off`. Radar never follows a redirect from https to http. A file is re-read daily, so it can be updated in place. KEV is about 2 MB, over a ConfigMap's 1 MiB limit, so to use files in the Helm chart, put them on a volume and set `vulnerabilities.feedVolume` (for example a `persistentVolumeClaim`); it is mounted read-only at `/etc/radar/vulnerability-feeds`.
 
 ```yaml
 vulnerabilities:
