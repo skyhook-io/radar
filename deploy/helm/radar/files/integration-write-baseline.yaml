@@ -1,5 +1,5 @@
 # Extra Kubernetes permissions created by the chart for Radar Cloud Owners.
-# Each capability has a separate owner switch. Rules apply to the full object.
+# Helm approves each grant. Hub uses one switch per integration. Rules apply to the full object.
 capabilities:
   argocd:
     # Used when cloud.defaultRbac.integrationWrite.argocd.owner is absent (e.g. --reuse-values).
@@ -10,8 +10,6 @@ capabilities:
     # The default applies to built-in Owner roles. Custom roles can opt in.
     default: true
   velero-download:
-    default: false
-  velero-delete:
     default: false
 entries:
   - group: "argoproj.io"
@@ -34,11 +32,6 @@ entries:
     verbs: ["get", "create"]
     collection: "velero"
     capability: velero
-  - group: "velero.io"
-    resources: ["deletebackuprequests"]
-    verbs: ["list", "create"]
-    collection: "velero"
-    capability: velero-delete
   - group: "postgresql.cnpg.io"
     resources: ["clusters"]
     verbs: ["get", "patch"]

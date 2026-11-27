@@ -279,8 +279,8 @@ func TestIntegrationWriteDoesNotChangeExistingManifests(t *testing.T) {
 				t.Fatal("deployment must advertise all three approved default grants")
 			}
 			rendered = strings.Replace(rendered, advertised, `value: "cnpg,velero"`, 1)
-			const onSetup = `{"blocked":{"velero-delete":"helm","velero-download":"helm"},"mode":"standard"}`
-			const offSetup = `{"blocked":{"argocd":"helm","velero-delete":"helm","velero-download":"helm"},"mode":"standard"}`
+			const onSetup = `{"blocked":{"velero-download":"helm"},"mode":"standard"}`
+			const offSetup = `{"blocked":{"argocd":"helm","velero-download":"helm"},"mode":"standard"}`
 			if !strings.Contains(rendered, fmt.Sprintf("%q", onSetup)) {
 				t.Fatal("deployment must advertise standard Owner setup")
 			}
@@ -300,11 +300,11 @@ func TestIntegrationWriteInstallGuidance(t *testing.T) {
 		{name: "custom Kubernetes RBAC", overrides: "cloud.defaultRbac.create=false", mode: "kubernetes", blocked: map[string]string{}},
 		{name: "Owner role disabled", overrides: "cloud.defaultRbac.owner=false", mode: "owner-disabled", blocked: map[string]string{}},
 		{name: "custom Owner base role", overrides: "cloud.defaultRbac.ownerClusterRole=platform-owner",
-			mode: "custom-owner", blocked: map[string]string{"cnpg": "helm", "velero": "velero-scope", "velero-download": "velero-scope", "velero-delete": "velero-scope"}},
+			mode: "custom-owner", blocked: map[string]string{"cnpg": "helm", "velero": "velero-scope", "velero-download": "velero-scope"}},
 		{name: "Argo collection disabled", overrides: "rbac.crdGroups.argo=false",
-			mode: "standard", blocked: map[string]string{"argocd": "collection", "velero-delete": "helm", "velero-download": "helm"}},
+			mode: "standard", blocked: map[string]string{"argocd": "collection", "velero-download": "helm"}},
 		{name: "scoped Velero", overrides: "rbac.namespaces={databases}",
-			mode: "standard", blocked: map[string]string{"velero": "velero-scope", "velero-download": "velero-scope", "velero-delete": "velero-scope"}},
+			mode: "standard", blocked: map[string]string{"velero": "velero-scope", "velero-download": "velero-scope"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			setup, err := json.Marshal(map[string]interface{}{"mode": tc.mode, "blocked": tc.blocked})

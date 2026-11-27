@@ -64,9 +64,6 @@ var ownerAccessReviewPermissions = map[string]ownerGrantPermissions{
 	"velero-download": {group: "velero.io", permissions: []ownerGrantPermission{
 		{resource: "downloadrequests", verbs: []string{"create", "get", "delete"}},
 	}},
-	"velero-delete": {group: "velero.io", permissions: []ownerGrantPermission{
-		{resource: "deletebackuprequests", verbs: []string{"list", "create"}},
-	}},
 }
 
 type ownerAccessReviewResult struct {
@@ -179,6 +176,12 @@ func reviewOwnerAccess(ctx context.Context, client kubernetes.Interface, user *a
 		votes  []ownerAccessVerdict
 	}
 	pending := make(map[string]*scopeReview, len(approved))
+	veleroGroups := make([]string, 0, 2)
+	for _, id := range approved {
+		if id == "velero" || id == "velero-download" {
+			veleroGroups = append(veleroGroups, pkgauth.OwnerAccessGroupPrefix+id)
+		}
+	}
 	var checks errgroup.Group
 	checks.SetLimit(6)
 	for _, id := range approved {
@@ -215,13 +218,17 @@ func reviewOwnerAccess(ctx context.Context, client kubernetes.Interface, user *a
 		var without []string
 		if user != nil {
 			username = user.Username
+			switchGroups := []string{group}
+			if id == "velero" || id == "velero-download" {
+				switchGroups = veleroGroups
+			}
 			without = slices.DeleteFunc(slices.Clone(user.Groups), func(value string) bool {
-				return value == group
+				return slices.Contains(switchGroups, value)
 			})
 			if !slices.Contains(without, "system:authenticated") {
 				without = append(without, "system:authenticated")
 			}
-			with = append(slices.Clone(without), group)
+			with = append(slices.Clone(without), switchGroups...)
 		}
 		entry.votes = make([]ownerAccessVerdict, len(scopes))
 		for index, namespace := range scopes {

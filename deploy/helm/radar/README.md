@@ -319,7 +319,8 @@ before upgrading if the added visibility is unwanted.
 ### Cloud Owner permissions
 
 Helm approves the grants available on each cluster. Organization Owners turn
-those grants on or off in **Settings → Access**. Changes apply on the next
+the approved permissions for each integration on or off in **Settings → Access**.
+Changes apply on the next
 request without a Helm upgrade. Access verifies the permissions of each grant
 in its reported scope. **Check my access** previews the effect for the signed-in
 Owner. Turning a grant off leaves access from other Kubernetes role bindings
@@ -331,13 +332,18 @@ serves the Velero API separately from whether the install approves Velero grants
 | Argo CD (`argocd`) | On | Refresh, sync and edit Argo CD Applications |
 | CloudNativePG (`cnpg`) | On for built-in Owners | Administer existing clusters, backups, schedules and poolers. Creating a cluster for a restore requires separate permission |
 | Velero backups and schedules (`velero`) | On for cluster-wide built-in Owners | Start backups and manage schedules |
-| Velero backup data (`velero-download`) | Off | Read logs and full backup contents, which can include Secrets |
-| Velero backup deletion (`velero-delete`) | Off | Request permanent deletion of stored backup data |
+| Velero backup data (`velero-download`) | Helm opt-in | Read logs and full backup archives, which can include Secrets |
 
 **Approve or remove a grant.** Set
 `cloud.defaultRbac.integrationWrite.<grant>.owner` to `true` or `false` and
-apply the chart. For Velero data access and deletion, also turn on the grant
-in **Settings → Access**. If Access says the cluster does not accept a
+apply the chart. The Velero switch controls both backups and schedules and any
+approved backup data access. If the switch is already on, approving
+`velero-download` lets Owners read backup archives after the Helm update.
+To allow stored backup deletion, grant `get` on `backups.velero.io`
+and `list` and `create` on `deletebackuprequests.velero.io` in the
+Velero namespace. Bind the role to the users or identity provider groups who
+should be able to delete backups.
+If Access says the cluster does not accept a
 permission, check that chart-managed Owner RBAC and the matching collection
 (`rbac.crdGroups.argo`, `rbac.crdGroups.cloudnativePg` or
 `rbac.crdGroups.velero`) are enabled. `rbac.crdGroups.all=true` also enables them.

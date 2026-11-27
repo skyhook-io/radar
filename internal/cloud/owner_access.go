@@ -8,7 +8,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/auth"
 )
 
-var ownerAccessIDs = []string{"argocd", "cnpg", "velero", "velero-delete", "velero-download"}
+var ownerAccessIDs = []string{"argocd", "cnpg", "velero", "velero-download"}
 
 // OwnerAccessConfigured reports whether this installation advertises managed grants.
 func OwnerAccessConfigured() bool {

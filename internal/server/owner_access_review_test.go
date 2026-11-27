@@ -125,6 +125,33 @@ func TestOwnerAccessReviewReportsEffectInEachScope(t *testing.T) {
 	}
 }
 
+func TestOwnerAccessReviewComparesBothVeleroGroupsForTheOwner(t *testing.T) {
+	const backups = pkgauth.OwnerAccessGroupPrefix + "velero"
+	const downloads = pkgauth.OwnerAccessGroupPrefix + "velero-download"
+	client := fake.NewSimpleClientset()
+	client.PrependReactor("create", "selfsubjectaccessreviews", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		review := action.(clienttesting.CreateAction).GetObject().(*authv1.SelfSubjectAccessReview)
+		review.Status.Allowed = true
+		return true, review, nil
+	})
+	client.PrependReactor("create", "subjectaccessreviews", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		review := action.(clienttesting.CreateAction).GetObject().(*authv1.SubjectAccessReview)
+		groups := review.Spec.Groups
+		if !slices.Contains(groups, "radar:idp:ops") || slices.Contains(groups, backups) != slices.Contains(groups, downloads) {
+			return true, nil, errors.New("the switch must preserve independent groups and add or remove both managed Velero groups together")
+		}
+		review.Status.Allowed = slices.Contains(groups, backups)
+		return true, review, nil
+	})
+	owner := &auth.User{Username: "owner", Groups: []string{"radar:owner", "radar:idp:ops", backups, downloads}}
+	result := reviewOwnerAccess(context.Background(), client, owner, []string{"velero", "velero-download"}, nil, nil)
+	for _, id := range []string{"velero", "velero-download"} {
+		if got := result.Account[id]; got != (ownerAccountAccessReview{Added: 1}) {
+			t.Errorf("switch effect for %s = %+v; want added", id, got)
+		}
+	}
+}
+
 func TestOwnerAccessReviewReportsVeleroAPIWithoutApprovedGrants(t *testing.T) {
 	client := fake.NewSimpleClientset()
 	for _, test := range []struct {
