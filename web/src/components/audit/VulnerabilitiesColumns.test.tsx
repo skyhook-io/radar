@@ -287,14 +287,14 @@ describe('No data', () => {
 
 describe('Owner column', () => {
   const workload = (name: string) => ({ kind: 'Deployment', group: 'apps', namespace: 'shop', name, counts: { ...zero, high: 1 }, fixable: zero, containers: [] })
-  function renderWorkloads(ownership: boolean, owners = true) {
+  function renderWorkloads(ownership: boolean, owners: boolean | 'fold' = true) {
     vi.mocked(useVulnerabilities).mockImplementation((p) => ({
       data: {
         ...response(p.view, 0),
         workloads: [workload('web'), workload('plain')],
         ...(ownership ? {
           ownership: { teamLabel: 'team' },
-          owners: !owners ? [] : [{ kind: 'Deployment', group: 'apps', namespace: 'shop', name: 'web', manager: { tool: 'helm', kind: 'HelmRelease', namespace: 'shop', name: 'web-release', chart: 'web-1.2.0' }, team: 'payments', teamFrom: 'workload' }],
+          owners: !owners ? [] : [{ kind: 'Deployment', group: 'apps', namespace: 'shop', name: owners === 'fold' ? 'folded' : 'web', manager: { tool: 'helm', kind: 'HelmRelease', namespace: 'shop', name: 'web-release', chart: 'web-1.2.0' }, team: 'payments', teamFrom: 'workload' }],
         } : {}),
       },
       isLoading: false, isFetching: false, isPlaceholderData: false, error: null, dataUpdatedAt: 0, refetch: vi.fn(),
@@ -335,6 +335,12 @@ describe('Owner column', () => {
     expect(heads().some((h) => h.includes('Owner'))).toBe(false)
     expect(container.querySelector('[role="table"], table')?.textContent ?? '').not.toContain('none found')
     expect(container.textContent).not.toContain('No owner found')
+  })
+
+  it('says none found when only a workload outside the table has an owner', () => {
+    renderWorkloads(true, 'fold')
+    act(() => menuButton()!.click())
+    expect(menuItems().find((b) => b.textContent?.startsWith('Show Owner'))!.textContent).toBe('Show Ownernone found')
   })
 
   it('has no menu note when some workload has an owner', () => {

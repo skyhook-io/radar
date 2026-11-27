@@ -233,18 +233,20 @@ func TestOwnerCells(t *testing.T) {
 
 func TestSafeRepo(t *testing.T) {
 	for in, want := range map[string]string{
-		"https://user:token@github.com/a/b.git?x=1": "https://github.com/a/b.git",
-		"git@github.com:a/b.git":                    "git@github.com:a/b.git",
-		"oci://ghcr.io/a/charts":                    "oci://ghcr.io/a/charts",
-		"ssh://git:pw@github.com/a/b":               "ssh://git@github.com/a/b",
-		"ssh://ghp_token@github.com/a/b":            "ssh://github.com/a/b",
-		"token@github.com:a/b.git":                  "github.com:a/b.git",
-		"git@github.com:a/b.git?private_token=x#y":  "",
-		"minio.example:9000?token=left@right/b":     "",
-		"user:pa/ss@host:repo":                      "host:repo",
-		"key:secret@minio.local:9000/bucket":        "minio.local:9000/bucket",
-		"minio.local:9000/bucket":                   "minio.local:9000/bucket",
-		"us?er:pa#ss@github.com:a/b.git":            "",
+		"https://user:token@github.com/a/b.git?x=1":  "https://github.com/a/b.git",
+		"git@github.com:a/b.git":                     "git@github.com:a/b.git",
+		"oci://ghcr.io/a/charts":                     "oci://ghcr.io/a/charts",
+		"ssh://git:pw@github.com/a/b":                "ssh://git@github.com/a/b",
+		"ssh://ghp_token@github.com/a/b":             "ssh://github.com/a/b",
+		"token@github.com:a/b.git":                   "github.com:a/b.git",
+		"git@github.com:a/b.git?private_token=x#y":   "",
+		"minio.example:9000?token=left@right/b":      "",
+		"user:pa/ss@host:repo":                       "host:repo",
+		"git@git.example.com:teams/platform@ops.git": "git@git.example.com:teams/platform@ops.git",
+		"us@er:pass@host:repo":                       "",
+		"key:secret@minio.local:9000/bucket":         "minio.local:9000/bucket",
+		"minio.local:9000/bucket":                    "minio.local:9000/bucket",
+		"us?er:pa#ss@github.com:a/b.git":             "",
 	} {
 		if got := safeRepo(in); got != want {
 			t.Errorf("safeRepo(%q) = %q, want %q", in, got, want)
@@ -321,9 +323,9 @@ func TestArgoSourcesPrefersSources(t *testing.T) {
 	}
 }
 
-// A workload whose store can't say whether it exists reads as unknown,
-// never as "no owner found"; one the store has loaded without it is left
-// out.
+// A workload whose store can't say whether it exists, or whose object is
+// gone while its Pods still run, reads as unknown, never as "no owner
+// found".
 func TestResolveOwnersUnreadWorkloadIsUnknown(t *testing.T) {
 	cache := ownerCluster(t)
 	unread := WorkloadRef{Kind: "Rollout", Group: "argoproj.io", Namespace: "shop", Name: "canary"}
@@ -332,8 +334,8 @@ func TestResolveOwnersUnreadWorkloadIsUnknown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(owners) != 1 || owners[0].WorkloadRef != unread || !owners[0].ManagerUnknown || owners[0].Manager != nil {
-		t.Errorf("owners = %+v, want only the Rollout, unknown", owners)
+	if len(owners) != 2 || !owners[0].ManagerUnknown || !owners[1].ManagerUnknown || owners[0].Manager != nil || owners[1].Manager != nil {
+		t.Errorf("owners = %+v, want both unknown", owners)
 	}
 }
 

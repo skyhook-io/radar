@@ -124,8 +124,9 @@ func resolveOwners(ctx context.Context, cache *k8s.ResourceCache, refs []Workloa
 		}
 		ref := resourceid.NewRef(w.Group, w.Kind, w.Namespace, w.Name)
 		obj, read := rs.Borrow(ref)
-		if read.State == ownership.Unavailable {
-			// Its store couldn't say: unknown, not "nothing found".
+		if read.State == ownership.Unavailable || read.State == ownership.Absent {
+			// Its store couldn't say, or Pods still name a controller that
+			// is gone: unknown, not "nothing found".
 			out = append(out, WorkloadOwner{WorkloadRef: w, ManagerUnknown: true})
 			continue
 		}
@@ -335,15 +336,25 @@ func fluxSourceURL(src *unstructured.Unstructured) string {
 func safeRepo(repo string) string {
 	if !strings.Contains(repo, "://") {
 		// No scheme to parse by, so a ? or # can't be told from part of a
-		// credential: such an address is left out. Everything up to the
-		// last @ is a user, kept only when it is git.
+		// credential: such an address is left out. A git@ address keeps
+		// its path whole (an @ there is part of it); any other user is
+		// dropped when one @ marks it, and with several @ the address is
+		// ambiguous and left out.
 		if strings.ContainsAny(repo, "?#") {
 			return ""
 		}
-		if i := strings.LastIndex(repo, "@"); i >= 0 && repo[:i] != "git" {
-			repo = repo[i+1:]
+		if strings.HasPrefix(repo, "git@") {
+			return repo
 		}
-		return repo
+		switch strings.Count(repo, "@") {
+		case 0:
+			return repo
+		case 1:
+			_, rest, _ := strings.Cut(repo, "@")
+			return rest
+		default:
+			return ""
+		}
 	}
 	if u, err := url.Parse(repo); err == nil && u.Scheme == "ssh" && u.User != nil && u.User.Username() == "git" {
 		if v, err := url.Parse(prom.SafeAddress(repo)); err == nil {

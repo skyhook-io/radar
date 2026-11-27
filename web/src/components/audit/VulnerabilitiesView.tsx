@@ -51,6 +51,7 @@ import {
   type VulnerabilityWorkload,
   type VulnerabilityWorkloadRef,
   type VulnerableImage,
+  ownerLookup,
 } from '../../api/vulnerabilities'
 import type { SelectedResource } from '../../types'
 import { OwnerCell, OwnerProvider, ownerInfo, ownerTip, useOwners } from '../vulnerabilities/owner'
@@ -228,9 +229,11 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
   // Every filter lives in the URL; the view and the namespace scope aren't filters.
   const clearFilters = () => update((p) => { for (const key of [...p.keys()]) if (!KEEP_ON_CLEAR.has(key)) p.delete(key) }, true)
   const pageKey = JSON.stringify([view, namespaces, severities, fixableOnly, exposedOnly, eolOnly, query, workload])
-  // Owners were read and none of these workloads has one: a column of blanks
-  // would look broken, so the menu item says so instead.
-  const ownerNone = !!data.ownership && !data.ownership.unavailable && (data.owners ?? []).length === 0
+  const findOwner = ownerLookup(data.owners)
+  // Owners were read and none of the table's workloads has one: a column of
+  // blanks would look broken, so the menu item says so instead. Owners of
+  // workloads only in the folds don't count; they show on hover there.
+  const ownerNone = !!data.ownership && !data.ownership.unavailable && !(data.workloads ?? []).some((w) => !!findOwner(w))
   const fixChip = known && view !== 'fix'
   return (
     <div aria-busy={isFetching} className="flex-1 flex flex-col min-h-0 p-4 gap-4 overflow-auto">
