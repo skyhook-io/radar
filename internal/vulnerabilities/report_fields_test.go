@@ -234,4 +234,14 @@ func TestExportReportFields(t *testing.T) {
 	if len(rows) != 2 {
 		t.Fatalf("eol only: %v", rows)
 	}
+
+	// By workload keeps a workload whose images aren't scanned yet, as every
+	// other view keeps their images; one on a current OS drops out.
+	workloads := map[string]string{}
+	for _, r := range exportRows(t, mustExport(t, items, targets, ViewWorkload, f), f) {
+		workloads[r["workload"]] = r["status"]
+	}
+	if len(workloads) != 2 || workloads["checkout"] != StatusOK || workloads["pending"] != StatusNotScanned {
+		t.Fatalf("workloads, eol only: %v", workloads)
+	}
 }
