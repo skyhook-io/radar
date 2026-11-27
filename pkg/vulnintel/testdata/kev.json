@@ -1,0 +1,55 @@
+{
+  "title": "CISA Catalog of Known Exploited Vulnerabilities",
+  "catalogVersion": "2026.11.20",
+  "dateReleased": "2026-11-20T17:48:39.1516Z",
+  "count": 3,
+  "vulnerabilities": [
+    {
+      "cveID": "CVE-2023-44487",
+      "vendorProject": "IETF",
+      "product": "HTTP/2",
+      "vulnerabilityName": "HTTP/2 Rapid Reset Attack Vulnerability",
+      "dateAdded": "2023-10-10",
+      "shortDescription": "HTTP/2 contains a rapid reset vulnerability that allows for a distributed denial-of-service attack (DDoS).",
+      "requiredAction": "Apply mitigations per vendor instructions, follow applicable BOD 22-01 guidance for cloud services, or discontinue use of the product if mitigations are unavailable.",
+      "dueDate": "2023-10-31",
+      "knownRansomwareCampaignUse": "Unknown",
+      "notes": "This vulnerability affects a common open-source component, third-party library, or protocol used by different products. For more information, please see: HTTP/2 Rapid Reset Vulnerability, CVE-2023-44487 | CISA: https://www.cisa.gov/news-events/alerts/2023/10/10/http2-rapid-reset-vulnerability-cve-2023-44487; https://blog.cloudflare.com/technical-breakdown-http2-rapid-reset-ddos-attack/;  https://nvd.nist.gov/vuln/detail/CVE-2023-44487",
+      "cwes": [
+        "CWE-400"
+      ]
+    },
+    {
+      "cveID": "CVE-2021-44228",
+      "vendorProject": "Apache",
+      "product": "Log4j2",
+      "vulnerabilityName": "Apache Log4j2 Remote Code Execution Vulnerability",
+      "dateAdded": "2021-12-10",
+      "shortDescription": "Apache Log4j2 contains a vulnerability where JNDI features do not protect against attacker-controlled JNDI-related endpoints, allowing for remote code execution.",
+      "requiredAction": "For all affected software assets for which updates exist, the only acceptable remediation actions are: 1) Apply updates; OR 2) remove affected assets from agency networks. Temporary mitigations using one of the measures provided at https://www.cisa.gov/uscert/ed-22-02-apache-log4j-recommended-mitigation-measures are only acceptable until updates are available.",
+      "dueDate": "2021-12-24",
+      "knownRansomwareCampaignUse": "Known",
+      "notes": "https://nvd.nist.gov/vuln/detail/CVE-2021-44228",
+      "cwes": [
+        "CWE-20",
+        "CWE-400",
+        "CWE-502"
+      ]
+    },
+    {
+      "cveID": "CVE-2020-15999",
+      "vendorProject": "Google",
+      "product": "Chrome FreeType",
+      "vulnerabilityName": "Google Chrome FreeType Heap Buffer Overflow Vulnerability",
+      "dateAdded": "2021-11-03",
+      "shortDescription": "Google Chrome uses FreeType, an open-source software library to render fonts, which contains a heap buffer overflow vulnerability in the function Load_SBit_Png when processing PNG images embedded into fonts. This vulnerability is part of an exploit chain with CVE-2020-17087 on Windows and CVE-2020-16010 on Android.",
+      "requiredAction": "Apply updates per vendor instructions.",
+      "dueDate": "2021-11-17",
+      "knownRansomwareCampaignUse": "Unknown",
+      "notes": "https://nvd.nist.gov/vuln/detail/CVE-2020-15999",
+      "cwes": [
+        "CWE-787"
+      ]
+    }
+  ]
+}
