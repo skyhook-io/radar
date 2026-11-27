@@ -324,7 +324,7 @@ func WriteCSV(ctx context.Context, resp Response, f Filter, cluster string) ([]b
 		if unfiltered {
 			for _, c := range resp.Clean {
 				meta := x.images[c.ID]
-				if err := put(meta.scanned, StatusOK, slices.Concat([]string{c.Image, meta.digest, meta.os}, countCells(Counts{}, Counts{}), []string{join(workloadCells(c.Workloads, true)), exposedCell(c.Exposed, c.Workloads)}, meta.imageTail(), blank(1))...); err != nil {
+				if err := put(meta.scanned, StatusOK, slices.Concat([]string{c.Image, meta.digest, meta.os}, countCells(Counts{}, Counts{}), []string{join(workloadCells(c.Workloads, true)), exposedCell(c.Exposed, c.Workloads)}, meta.imageTail(), []string{x.sinceCell(c.ID, c.Workloads)})...); err != nil {
 					return nil, err
 				}
 			}

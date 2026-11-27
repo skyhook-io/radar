@@ -2,6 +2,7 @@ package vulnerabilities
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
@@ -183,6 +184,23 @@ func TestExportRunningSince(t *testing.T) {
 			t.Fatalf("workload %s: %q, want %q", r["workload"], r["running_since"], want)
 		}
 	}
+	// An image with no findings still has the date its build started.
+	cache := WorkloadRef{Kind: "Deployment", Group: "apps", Namespace: "shop", Name: "cache"}
+	withClean := append(slices.Clone(items), vulnReport(reportSpec{name: "c", ns: "shop", ownerKind: "ReplicaSet", ownerName: "cache-1", container: "app", repo: "acme/cache", tag: "1", digest: "sha256:c", scanned: "2026-11-20T00:00:00Z"}))
+	cleanTargets := append(slices.Clone(targets), since(running(liveTarget("shop", "ReplicaSet", "cache-1", "app", "acme/cache:1", "", cache), "sha256:c"), day1))
+	found := false
+	for _, r := range exportRows(t, mustExport(t, withClean, cleanTargets, ViewImage, Filter{}), Filter{}) {
+		if r["digest"] == "sha256:c" {
+			found = true
+			if r["running_since"] != cell(day1) {
+				t.Fatalf("clean image: %q, want %q", r["running_since"], cell(day1))
+			}
+		}
+	}
+	if !found {
+		t.Fatal("no clean image row")
+	}
+
 	rows := exportRows(t, mustExport(t, items, targets, ViewFindings, Filter{}), Filter{})
 	if len(rows) != 4 {
 		t.Fatalf("rows %v", rows)
