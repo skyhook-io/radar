@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -100,24 +101,26 @@ type Store struct {
 	// loaded fires after the first load attempt of both feeds.
 	loaded chan struct{}
 
-	// kick asks the loader to reload now (RefreshNow); lastManual is when
-	// someone last did, for the rate limit.
-	kick       chan struct{}
+	// kick asks the loader to reload now (RefreshNow), carrying when it was
+	// asked; lastManual is when someone last did, for the rate limit.
+	kick       chan time.Time
 	manualMu   sync.Mutex
 	lastManual time.Time
 	clock      func() time.Time
 }
 
 // feed is one feed's source, copy and schedule. status and data are guarded
-// by Store.mu; due is the loader's alone.
+// by Store.mu; due and checked (when the last attempt ended) are the
+// loader's alone.
 type feed struct {
 	source    string
 	cacheName string
 	parse     func([]byte) (any, FeedStatus, error)
 	status    FeedStatus
 	// data is the parsed copy in use: *KEVCatalog or *EPSSScores.
-	data any
-	due  time.Time
+	data    any
+	due     time.Time
+	checked time.Time
 }
 
 func (f *feed) on() bool { return !off(f.source) }
@@ -152,7 +155,7 @@ func (s *Store) RefreshNow() (wait time.Duration, err error) {
 	}
 	s.lastManual = now
 	select {
-	case s.kick <- struct{}{}:
+	case s.kick <- time.Now():
 	default:
 		// A reload is already queued.
 	}
@@ -170,7 +173,7 @@ func NewStore(cfg Config) *Store {
 	if cfg.Client == nil {
 		cfg.Client = &http.Client{Timeout: 2 * time.Minute}
 	}
-	s := &Store{cfg: cfg, loaded: make(chan struct{}), done: make(chan struct{}), kick: make(chan struct{}, 1), clock: time.Now}
+	s := &Store{cfg: cfg, loaded: make(chan struct{}), done: make(chan struct{}), kick: make(chan time.Time, 1), clock: time.Now}
 	s.kev = newFeed(cfg.KEVSource, DefaultKEVURL, cfg.NoDownloads, "kev.json", func(b []byte) (any, FeedStatus, error) {
 		c, err := ParseKEV(bytes.NewReader(b))
 		if err != nil {
@@ -296,9 +299,14 @@ func (s *Store) run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-time.After(time.Until(next)):
-		case <-s.kick:
+		case asked := <-s.kick:
+			// An attempt that ended after the request answers it: a reload
+			// asked for while one runs, or as the first one starts, isn't
+			// downloaded twice.
 			for _, f := range feeds {
-				f.due = time.Time{}
+				if f.checked.Before(asked) {
+					f.due = time.Time{}
+				}
 			}
 		}
 	}
@@ -320,6 +328,7 @@ func (s *Store) refreshOne(ctx context.Context, f *feed) {
 		data, st, err = f.parse(body)
 	}
 	now := time.Now()
+	f.checked = now
 	s.mu.Lock()
 	f.status.CheckedAt = &now
 	if err != nil {
@@ -335,7 +344,9 @@ func (s *Store) refreshOne(ctx context.Context, f *feed) {
 	}
 	s.mu.Unlock()
 	if err == nil && s.cfg.CacheDir != "" && isURL(f.source) {
-		writeCache(filepath.Join(s.cfg.CacheDir, f.cacheName), body)
+		if err := writeCache(filepath.Join(s.cfg.CacheDir, f.cacheName), body); err != nil {
+			log.Printf("[vulnintel] Failed to keep a copy of %s for restarts: %v", f.cacheName, err)
+		}
 	}
 }
 
@@ -370,15 +381,27 @@ func (s *Store) loadCached(f *feed) {
 	f.due = at.Add(s.cfg.Refresh)
 }
 
-func writeCache(path string, body []byte) {
+// writeCache replaces path atomically. Two Radars on one machine share the
+// directory, so each writes its own temporary file.
+func writeCache(path string, body []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return
+		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, body, 0o644); err != nil {
-		return
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return err
 	}
-	_ = os.Rename(tmp, path)
+	_, err = tmp.Write(body)
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp.Name(), path)
+	}
+	if err != nil {
+		_ = os.Remove(tmp.Name())
+	}
+	return err
 }
 
 func (s *Store) read(ctx context.Context, source string) ([]byte, error) {
