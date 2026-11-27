@@ -501,7 +501,7 @@ func TestMemoryCauseRemedies(t *testing.T) {
 	c := find(t, NeedsAttention(Inputs{Actors: actors, ActorsRead: true, Now: now}), RuleCrashedActors)
 	for _, grp := range c.Groups {
 		memory := grp.Subject.Name == "big"
-		if (grp.Cause == CauseMemoryLimit) != memory || (grp.NextStep == CrashedMemoryNextStep) != memory || (grp.Command == retemplateCommand) != memory || (grp.ThenCommand == revertCommand) != memory {
+		if (grp.Cause == CauseMemoryLimit) != memory || (grp.NextStep == CrashedMemoryNextStep) != memory || (grp.Command == revertCommand) != memory || (grp.ThenCommand == retemplateCommand) != memory {
 			t.Errorf("group %s = %+v", grp.Subject.Name, grp)
 		}
 	}
@@ -604,20 +604,36 @@ func TestWorkerAttentionExcludesSuspendedActors(t *testing.T) {
 	}
 }
 
-func TestPoolFullCheckRequiresCompleteWorkersOrService(t *testing.T) {
+func TestPoolFullCheckRequiresCompleteWorkersOrPoolVerdicts(t *testing.T) {
 	for _, tc := range []struct {
-		in  Inputs
-		ran bool
+		name    string
+		in      Inputs
+		ranFull bool
+		ranPool bool
 	}{
-		{Inputs{PoolsUsable: true}, false},
-		{Inputs{WorkersRead: true}, false},
-		{Inputs{WorkersRead: true, WorkersComplete: true}, true},
-		{Inputs{Service: &Service{Read: true}}, true},
+		{name: "only Kubernetes pools", in: Inputs{PoolsUsable: true}},
+		{name: "incomplete workers", in: Inputs{WorkersRead: true}},
+		{name: "complete workers", in: Inputs{WorkersRead: true, WorkersComplete: true}, ranFull: true},
+		{name: "node-only Prometheus", in: Inputs{Service: &Service{Read: true, Nodes: map[string]NodeService{
+			"node": {Verdict: ServiceNoUploadsOverdue},
+		}}}},
+		{name: "unknown pool verdict", in: Inputs{Service: &Service{Read: true, Pools: map[string]PoolService{
+			"ns/pool": {Verdict: ServiceFreeActorSlots}, "ns/other": {Verdict: ServiceUnknown},
+		}}}},
+		{name: "all pool verdicts", in: Inputs{Service: &Service{Read: true, Pools: map[string]PoolService{
+			"ns/pool": {Verdict: ServiceFreeActorSlots}, "ns/other": {Verdict: ServiceNoFreeActorSlots},
+		}}}, ranFull: true, ranPool: true},
 	} {
-		for _, c := range Checks(tc.in) {
-			if c.Rule == RulePoolFull && c.Ran != tc.ran {
-				t.Errorf("poolFull for %+v: %+v, want Ran %v", tc.in, c, tc.ran)
+		t.Run(tc.name, func(t *testing.T) {
+			want := map[string]bool{RulePoolFull: tc.ranFull, CheckPoolService: tc.ranPool}
+			for _, c := range Checks(tc.in) {
+				if ran, ok := want[c.Rule]; ok && c.Ran != ran {
+					t.Errorf("%+v, want Ran %v", c, ran)
+				}
+				if tc.name == "node-only Prometheus" && c.Rule == RuleNodeUploadsOverdue && !c.Ran {
+					t.Errorf("node-only Prometheus should still check uploads: %+v", c)
+				}
 			}
-		}
+		})
 	}
 }

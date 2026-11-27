@@ -12,6 +12,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"math/big"
 	"net"
 	"net/http"
@@ -1057,7 +1058,8 @@ func TestSubstrateActorDetailFromColdSnapshot(t *testing.T) {
 	rec := call(t, s, s.handleSubstrateActor, substrateCall{path: "/api/substrate/actors/research/lit-0193", params: map[string]string{"atespace": "research", "name": "lit-0193"}}, &detail)
 	if rec.Code != http.StatusOK || detail.APITier.State != substrateapi.TierConnected || detail.Template == nil ||
 		detail.Row.Cause != model.CauseMemoryLimit || len(detail.Attention) != 1 || detail.Attention[0].Rule != model.RuleCrashedActors ||
-		!strings.Contains(detail.Attention[0].Command, "--template") {
+		detail.Attention[0].Command != "kubectl ate revert actor lit-0193 -a research" ||
+		detail.Attention[0].ThenCommand != "kubectl ate update actor lit-0193 -a research --template <new-template>" {
 		t.Fatalf("a cold read supplies the actor's own evidence and recovery: %d %+v", rec.Code, detail)
 	}
 	if detail.Coverage.Actors.State == substrateapi.CoverageFull || detail.Coverage.Workers.State == substrateapi.CoverageFull ||
@@ -1525,6 +1527,20 @@ func TestSubstrateActorLogsWorkerPodGone(t *testing.T) {
 	}
 }
 
+func TestSubstrateAssignedWorkerLogsDenialHasDefinitiveCode(t *testing.T) {
+	s := substrateTestServer(t, substrateapi.Kube{})
+	connectFake(t, s, defaultFake(), fullToken)
+	prevClient := k8s.SetTestClient(podLogsClient(t, nil))
+	t.Cleanup(func() { k8s.SetTestClient(prevClient) })
+	prev := substratePodLogAllowed
+	substratePodLogAllowed = func(*Server, *http.Request, string) bool { return false }
+	t.Cleanup(func() { substratePodLogAllowed = prev })
+	rec := call(t, s, s.handleSubstrateActorLogs, substrateCall{path: "/logs", params: map[string]string{"atespace": "research", "name": "lit-0201"}}, nil)
+	if rec.Code != http.StatusForbidden || substrateErrorCode(t, rec) != substrateapi.CodeDenied {
+		t.Errorf("assigned worker logs denied: %d %s", rec.Code, rec.Body)
+	}
+}
+
 func TestSubstrateActorDetailWorkerImpact(t *testing.T) {
 	s := substrateTestServer(t, substrateapi.Kube{})
 	f := defaultFake()
@@ -1940,7 +1956,7 @@ func TestSubstrateMemoryKillIsTiedToTheCurrentCrash(t *testing.T) {
 	}
 	for _, tc := range tests {
 		got := memoryKillOf(tc.actor, tc.lines)
-		if got == nil || got.Current != tc.current || (got.NextStep == model.CrashedMemoryActorStep(tc.actor)) != tc.current || (got.Command == "kubectl ate update actor lit -a research --template <new-template>") != tc.current || (got.ThenCommand == "kubectl ate revert actor lit -a research") != tc.current {
+		if got == nil || got.Current != tc.current || (got.NextStep == model.CrashedMemoryActorStep(tc.actor)) != tc.current || (got.Command == "kubectl ate revert actor lit -a research") != tc.current || (got.ThenCommand == "kubectl ate update actor lit -a research --template <new-template>") != tc.current {
 			t.Errorf("%s: %+v", tc.name, got)
 		}
 	}
@@ -2187,6 +2203,51 @@ func TestSubstrateActorDetailRefreshesStaleWorker(t *testing.T) {
 	if rec.Code != http.StatusOK || f.workerCalls.Load() != 1 || detail.Worker == nil || detail.Worker.WorkerState == nil ||
 		(detail.Worker.WorkerState.Assigned != nil || detail.Worker.WorkerState.Lost != nil) || detail.Row.WorkerImpact == nil || detail.Row.WorkerImpact.Kind != model.ImpactRestarted {
 		t.Errorf("stale worker facts need a point read with qualified assignment counts: %d %+v", rec.Code, detail)
+	}
+}
+
+func TestSubstrateActorDetailExcludesAStaleWorkerConfirmedGone(t *testing.T) {
+	s := substrateTestServer(t, substrateapi.Kube{})
+	f := defaultFake()
+	f.getWorkerErr = status.Error(codes.NotFound, "worker not found")
+	s.substrate.Now = func() time.Time { return time.Now().Add(-2 * substrateapi.Freshness) }
+	connectFake(t, s, f, fullToken)
+	settledStatus(t, s)
+	var detail substrateActorDetail
+	rec := call(t, s, s.handleSubstrateActor, substrateCall{path: "/a", params: map[string]string{"atespace": "research", "name": "lit-0201"}}, &detail)
+	if rec.Code != http.StatusOK || f.workerCalls.Load() != 1 || detail.Coverage.Workers.Code != substrateapi.CodeNotFound {
+		t.Fatalf("point worker read: %d %s", rec.Code, rec.Body)
+	}
+	if detail.Worker != nil || len(detail.MatchingPools) != 0 || detail.Template == nil || len(detail.Template.MatchingPools) != 0 {
+		t.Errorf("a worker confirmed gone must not supply matching pools: %s", rec.Body)
+	}
+}
+
+func TestSubstrateLogUnavailableNoticeIsAReadFailure(t *testing.T) {
+	for _, retry := range []bool{false, true} {
+		t.Run(fmt.Sprintf("retry=%t", retry), func(t *testing.T) {
+			var requests atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				if requests.Add(1) == 1 && retry {
+					_, _ = io.WriteString(w, strings.Repeat(strings.Repeat("x", 1023)+"\n", substrateLogMaxBytes/1024))
+					return
+				}
+				_, _ = io.WriteString(w, "unable to retrieve container logs for container-id\n")
+			}))
+			t.Cleanup(srv.Close)
+			client, err := kubernetes.NewForConfig(&rest.Config{Host: srv.URL})
+			if err != nil {
+				t.Fatal(err)
+			}
+			filter, err := model.NewLogFilter(model.Ref{Atespace: "research", Name: "lit"}, model.LogSourceAll, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := (&Server{}).searchSubstratePod(httptest.NewRequest(http.MethodGet, "/logs", nil), client, "agents", "worker", filter, 8)
+			if got.pod.Outcome != "failed" || got.pod.Scanned != 0 || len(got.lines) != 0 {
+				t.Errorf("notice counted as a log read: %+v", got)
+			}
+		})
 	}
 }
 

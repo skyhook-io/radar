@@ -332,7 +332,7 @@ export function When({ iso, hint, prefix, held }: { iso: string; hint?: string; 
 }
 
 type KubectlTarget =
-  | { context: string; kubeconfig: string; endpoint?: string }
+  | { context: string; kubeconfig: string; endpoint?: string; tokenFile?: string }
   | { guidance: string }
 
 export const KubectlTargetContext = createContext<KubectlTarget | undefined>(undefined)
@@ -361,7 +361,12 @@ export function substrateKubectlTarget(view: SubstrateConnection | undefined, ac
   if (!target.inFileName || !target.source || !/^(?:\/|[A-Za-z]:[\\/]|\\\\)/.test(target.source)) {
     return { guidance: 'Use kubectl ate with a kubeconfig and context for the cluster shown here.' }
   }
-  return { context: target.inFileName, kubeconfig: target.source, endpoint: settings.endpoint }
+  return {
+    context: target.inFileName,
+    kubeconfig: target.source,
+    endpoint: settings.endpoint,
+    tokenFile: settings.identity === 'tokenFile' ? settings.tokenFile : undefined,
+  }
 }
 
 const KUBECTL_ATE = /^kubectl ate /
@@ -371,6 +376,7 @@ function withKubectlTarget(command: string, target: Extract<KubectlTarget, { con
     `--kubeconfig ${shellWord(target.kubeconfig)}`,
     `--context ${shellWord(target.context)}`,
     ...(target.endpoint ? [`--endpoint ${shellWord(target.endpoint)}`] : []),
+    ...(target.tokenFile ? [`--token-file ${shellWord(target.tokenFile)}`] : []),
   ]
   return `${command} ${flags.join(' ')}`
 }

@@ -17,6 +17,7 @@ const state = vi.hoisted(() => ({
   template: undefined as unknown as Read<SubstrateTemplate>,
   actor: undefined as unknown as Read<SubstrateActorDetail>,
   logs: undefined as SubstrateActorLogs | undefined,
+  logOptions: undefined as { tailLines?: number; pollMs?: number | false } | undefined,
   reads: [] as string[],
   workspace: undefined as unknown,
 }))
@@ -39,7 +40,10 @@ vi.mock('../../api/substrateWorkspace', async (importOriginal) => ({
     if (ref) state.reads.push(`actor ${ref.name}`)
     return ref ? state.actor : { data: undefined, error: null, isLoading: false, isRefetchError: false, dataUpdatedAt: 0 }
   },
-  useSubstrateActorLogs: () => ({ data: state.logs, error: null, isLoading: !state.logs }),
+  useSubstrateActorLogs: (_: unknown, options: typeof state.logOptions) => {
+    state.logOptions = options
+    return { data: state.logs, error: null, isLoading: !state.logs }
+  },
   useSubstrateWorkspace: () => ({ data: state.workspace }),
   useSubstratePool: () => ({ data: undefined, error: null, isLoading: true }),
 }))
@@ -151,7 +155,7 @@ describe('a template whose actors crashed', () => {
     t.template.actors = counts({ crashed: 11, running: 30 })
     state.template = ok(t)
     const crash = { id: 'c', rule: 'crashedActors', severity: 'critical', title: 't', reading: 'r', nextStep: 'Fix it.', subject: { kind: 'Actors', filter: { state: 'crashed' } }, count: 15,
-      groups: [{ subject: { kind: 'ActorTemplate', atespace: 'team', name: 'langgraph-research' }, count: 11, cause: 'memoryLimit', nextStep: 'Create a template with a higher memory limit.', command: 'kubectl ate update actor <name> -a <atespace> --template <new-template>' }] }
+      groups: [{ subject: { kind: 'ActorTemplate', atespace: 'team', name: 'langgraph-research' }, count: 11, cause: 'memoryLimit', nextStep: 'Create a template with a higher memory limit. Revert the actors, update their templates once suspended, then resume.', command: 'kubectl ate revert actor <name> -a <atespace>', thenCommand: 'kubectl ate update actor <name> -a <atespace> --template <new-template>' }] }
     state.workspace = { ...workspace(), needsAttention: [crash] }
     const html = render(<SubstrateTemplatePage template={{ atespace: 'team', name: 'langgraph-research' }} onOpenSubject={() => {}} />, '/substrate/templates/team/langgraph-research?ctx=cluster-B')
     expect(html).toContain('11 reported crashed →')
@@ -160,7 +164,7 @@ describe('a template whose actors crashed', () => {
     expect(html).toContain('Golden snapshot ready')
     expect(html).toContain('2 CPU · 2Gi')
     expect(html).toMatch(/Crash recovery steps.*?inert=.*?Create a template.*?Copy command/)
-    expect(html.match(/aria-label="Copy command"/g)?.length).toBe(1)
+    expect(html.match(/aria-label="Copy command"/g)?.length).toBe(2)
     state.workspace = undefined
   })
 })
@@ -169,7 +173,7 @@ describe('a template whose golden actor and actors were both killed over its mem
   const move = 'kubectl ate update actor <name> -a <atespace> --template <new-template>'
   const revert = 'kubectl ate revert actor <name> -a <atespace>'
   const crashRow = (count: number) => ({ id: 'c', rule: 'crashedActors', severity: 'critical', title: 't', reading: 'r', nextStep: 'Fix it.', subject: { kind: 'Actors', filter: { state: 'crashed' } }, count,
-    groups: [{ subject: { kind: 'ActorTemplate', atespace: 'sandbox-dev', name: 'mcp-browser' }, count, cause: 'memoryLimit', nextStep: 'Move the actors to a template with more memory, then revert them. A snapshot taken under the old template may restore only its volumes.', command: move, thenCommand: revert }] })
+    groups: [{ subject: { kind: 'ActorTemplate', atespace: 'sandbox-dev', name: 'mcp-browser' }, count, cause: 'memoryLimit', nextStep: 'Revert the actors, move them to a template with more memory and identical volumes, mounts and snapshot location, then resume. Snapshots may keep only volumes.', command: revert, thenCommand: move }] })
   const goldenRow = { id: 'g', rule: 'goldenSnapshotFailed', severity: 'warning', title: 't', reading: 'Its golden actor was killed for exceeding its memory limit before the snapshot was taken. Substrate does not retry a failed build.', nextStep: 'Recreate the template with a higher memory limit; templates can’t be edited.', subject: { kind: 'ActorTemplate', atespace: 'sandbox-dev', name: 'mcp-browser' }, count: 1 }
   const page = (cause: 'memoryLimit' | undefined, count: number) => {
     const t = template('mcp-browser')
@@ -190,18 +194,18 @@ describe('a template whose golden actor and actors were both killed over its mem
     const w = words(html)
     expect(w.indexOf('Startup snapshot failed')).toBeLessThan(w.indexOf('At a glance'))
     expect(html).not.toContain('bg-red-50')
-    const plan = 'Recreate the template with a higher memory limit, move the crashed actor to it, then revert it. The move may keep only its snapshot’s volumes.'
+    const plan = 'Recreate with more memory and identical volumes, mounts and snapshot location. Revert the actor, move it over, then resume. The move may keep only volumes.'
     expect(w).toContain(`Next step: ${plan}`)
     expect(w.split('Next step:').length - 1).toBe(1)
     expect(w).not.toContain('Recreate the template with a higher memory limit; templates can’t be edited.')
-    expect(w.indexOf(plan)).toBeLessThan(w.indexOf(move))
-    expect(w.indexOf(move)).toBeLessThan(w.indexOf(revert))
+    expect(w.indexOf(plan)).toBeLessThan(w.indexOf(revert))
+    expect(w.indexOf(revert)).toBeLessThan(w.indexOf(move))
     expect(html).toMatch(/Crash recovery steps.*?inert=.*?Copy command/)
   })
 
   it('keeps the actor remedy separately folded when the startup build failed for another reason', () => {
     const w = words(page(undefined, 3))
-    expect(w).toContain('Move the actors to a template with more memory, then revert them.')
+    expect(w).toContain('Revert the actors, move them to a template with more memory and identical volumes, mounts and snapshot location, then resume.')
     expect(w).toContain('Next step: Recreate the template with a higher memory limit; templates can’t be edited.')
     expect(w.indexOf('Startup snapshot failed')).toBeLessThan(w.indexOf('Crash recovery steps'))
   })
@@ -211,7 +215,7 @@ describe('a template whose golden actor and actors were both killed over its mem
     ;(t.template as any).atespace = 'sandbox-dev'
     ;(t.template as any).golden = { state: 'failed', error: 'GoldenActorCrashed: golden actor crashed: killed for exceeding its memory limit', cause: 'memoryLimit' }
     state.template = ok(t)
-    const step = 'Move the actors to a template with more memory, then revert them. A snapshot taken under the old template may restore only its volumes. Recover the kagent sessions among them through kagent instead (RevertSession, or delete the chat).'
+    const step = 'Revert the actors, move them to a template with more memory and identical volumes, mounts and snapshot location, then resume. Snapshots may keep only volumes. Recover the kagent sessions among them through kagent instead (RevertSession, or delete the chat).'
     const row = crashRow(2)
     row.groups = [{ subject: { kind: 'ActorTemplate', atespace: 'sandbox-dev', name: 'mcp-browser' }, count: 2, cause: 'memoryLimit', nextStep: step, kagent: true } as any]
     state.workspace = { ...workspace(), needsAttention: [row, goldenRow] } as any
@@ -220,7 +224,7 @@ describe('a template whose golden actor and actors were both killed over its mem
       expect(w).toContain(step)
       expect(w).not.toContain(move)
       expect(w).not.toContain(revert)
-      expect(w).not.toContain('move the crashed actors to it, then revert them')
+      expect(w).not.toContain('Recreate with more memory')
     } finally {
       state.workspace = undefined
     }
@@ -331,6 +335,20 @@ describe('actor log availability', () => {
       state.logs = undefined
     }
   }
+
+  it('polls only with an assigned worker Pod and namespace', () => {
+    logs('noMatch')
+    expect(state.logOptions).toMatchObject({ tailLines: 500, pollMs: false })
+
+    const detail = actorDetail()
+    state.actor = ok({
+      ...detail,
+      actor: { ...detail.actor, assignment: { worker: 'w', pool: 'pool', pod: 'worker', namespace: 'agents', node: 'node' } },
+    })
+    render(<SubstrateActorPage actor={detail.actor} onOpenSubject={() => {}} />, '/substrate/actors/research/lit-review-0193?tab=logs&ctx=cluster-B')
+    expect(state.logOptions?.tailLines).toBe(500)
+    expect(state.logOptions?.pollMs).toBeUndefined()
+  })
 
   it('gives one unavailable card and an external query when the recorded node is gone', () => {
     const html = logs('nodeGone')

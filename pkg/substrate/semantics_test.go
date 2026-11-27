@@ -194,8 +194,8 @@ func TestServiceVerdictsAddRowsWhereDefinite(t *testing.T) {
 		t.Errorf("node row on a NotReady node = %+v", r)
 	}
 	for _, c := range Checks(in) {
-		if c.Rule == "poolService" && !c.Ran {
-			t.Errorf("Prometheus was read: %+v", c)
+		if c.Rule == CheckPoolService && c.Ran {
+			t.Errorf("A pool verdict was unknown: %+v", c)
 		}
 	}
 	in.Service = &Service{Why: "Prometheus is not connected"}
@@ -269,11 +269,11 @@ func TestNextStepsOfferOnlyWhatCanBeRead(t *testing.T) {
 	if other := ActorAttention(rows, actors[4], nil, now); other[0].NextStep != crashedActorNextStep || other[0].Command != "kubectl ate revert actor c2 -a a" || other[0].ThenCommand != "" {
 		t.Errorf("another cause gets the general step: %+v", other[0])
 	}
-	// Its two commands, in order: the move, then the revert.
-	if onPage[0].NextStep != CrashedMemoryActorStep(actors[0]) || onPage[0].Command != "kubectl ate update actor c -a a --template <new-template>" || onPage[0].ThenCommand != "kubectl ate revert actor c -a a" {
+	// Its two commands, in order: the revert, then the template update.
+	if onPage[0].NextStep != CrashedMemoryActorStep(actors[0]) || onPage[0].Command != "kubectl ate revert actor c -a a" || onPage[0].ThenCommand != "kubectl ate update actor c -a a --template <new-template>" {
 		t.Errorf("a memory-limit kill names its remedy: %+v", onPage[0])
 	}
-	if r := find(t, NeedsAttention(Inputs{Actors: actors[:1], ActorsRead: true, Now: now}), RuleCrashedActors); r.NextStep != CrashedMemoryNextStep || r.Command != retemplateCommand || r.ThenCommand != revertCommand || r.Groups[0].Cause != CauseMemoryLimit {
+	if r := find(t, NeedsAttention(Inputs{Actors: actors[:1], ActorsRead: true, Now: now}), RuleCrashedActors); r.NextStep != CrashedMemoryNextStep || r.Command != revertCommand || r.ThenCommand != retemplateCommand || r.Groups[0].Cause != CauseMemoryLimit {
 		t.Errorf("crashes that are all memory-limit kills name the remedy: %+v", r)
 	}
 	if crashed.Groups[0].Cause != "" {
@@ -302,21 +302,21 @@ func TestMemoryStepFollowsTheRecoverySnapshot(t *testing.T) {
 		snaps []Snapshot
 		says  string
 	}{
-		{nil, "; it has no stored snapshot, so it boots fresh."},
-		{[]Snapshot{snap(FidelityMemory, "old", DurablePending)}, "; it has no stored snapshot, so it boots fresh."},
+		{nil, " No stored snapshot, so it boots fresh."},
+		{[]Snapshot{snap(FidelityMemory, "old", DurablePending)}, " No stored snapshot, so it boots fresh."},
 		// What the page says the snapshot holds stays true: the move is what drops it.
-		{[]Snapshot{snap(FidelityMemory, "old", DurableCompleted)}, ". The move drops its snapshot's memory and files: it restarts from volumes."},
-		{[]Snapshot{snap(FidelityRootFS, "old", DurableCompleted)}, ". The move drops its snapshot's saved files: it restarts from volumes."},
-		{[]Snapshot{snap("", "old", DurableCompleted)}, ". The move drops all but its snapshot's volumes: it restarts from them."},
-		{[]Snapshot{snap(FidelityRootFS, "", DurableCompleted)}, "; on the new template it resumes from its saved files."},
-		{[]Snapshot{snap(FidelityMemory, "", DurableCompleted)}, "; on the new template it still resumes from memory on a compatible runtime."},
-		{[]Snapshot{snap("", "", DurableCompleted)}, "; what it restores then is unknown: Substrate names no fidelity for its snapshot."},
-		{[]Snapshot{snap(FidelityVolumes, "old", DurableCompleted)}, "; on the new template it resumes from its volumes."},
+		{[]Snapshot{snap(FidelityMemory, "old", DurableCompleted)}, " The move drops saved memory and files."},
+		{[]Snapshot{snap(FidelityRootFS, "old", DurableCompleted)}, " The move drops its saved files."},
+		{[]Snapshot{snap("", "old", DurableCompleted)}, " The move keeps only its volumes."},
+		{[]Snapshot{snap(FidelityRootFS, "", DurableCompleted)}, " It resumes from its saved files."},
+		{[]Snapshot{snap(FidelityMemory, "", DurableCompleted)}, " It resumes from memory on a compatible runtime."},
+		{[]Snapshot{snap("", "", DurableCompleted)}, " What it restores is unknown: no snapshot fidelity."},
+		{[]Snapshot{snap(FidelityVolumes, "old", DurableCompleted)}, " It resumes from its volumes."},
 	}
 	for _, tc := range tests {
 		a := Actor{State: StateCrashed, Crash: &Crash{Message: memoryLimitMessage}, Snapshots: tc.snaps}
 		got := CrashedMemoryActorStep(a)
-		if got != "Move this actor to a template with more memory, then revert it"+tc.says {
+		if got != "Revert, move to a template with more memory and identical volumes, mounts and snapshot location, then resume."+tc.says {
 			t.Errorf("%+v: %s", tc.snaps, got)
 		}
 		// Never a bare "resumes from volumes, without memory" beside the page's "holds memory".

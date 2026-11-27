@@ -369,21 +369,22 @@ export function SubstrateActorOverview({
 }) {
   const { actor, row, recovery } = detail
   const logs = useSubstrateActorLogs(actor, { tailLines: 8, pollMs: actor.assignment?.pod && actor.assignment.namespace ? undefined : false })
-  const assessment = actorProblem(detail, logs.data)
-  const plan = actor.state === 'crashed' ? crashPlan(detail, logs.data?.memoryKill) : undefined
+  const logData = definitiveFailure(substrateErrorCode(logs.error)) ? undefined : logs.data
+  const assessment = actorProblem(detail, logData)
+  const plan = actor.state === 'crashed' ? crashPlan(detail, logData?.memoryKill) : undefined
   const otherRemedy = detail.row.workerImpact ?? detail.attention.find((a) => a.id === assessment?.problem.id)
   const command = actor.kagent ? undefined : plan ? plan.command : otherRemedy?.command
   const then = actor.kagent ? undefined : plan ? plan.thenCommand : otherRemedy && 'thenCommand' in otherRemedy ? otherRemedy.thenCommand : undefined
   const egress = egressText(detail.egress)
-  const matchingLines = logs.data?.lines.length ?? 0
-  const logsTruncated = logs.data?.searched.some((pod) => pod.truncated)
-  const logsUnavailable = logs.data && !workerLogsAvailable(logs.data)
+  const matchingLines = logData?.lines.length ?? 0
+  const logsTruncated = logData?.searched.some((pod) => pod.truncated)
+  const logsUnavailable = logData && !workerLogsAvailable(logData)
   const logValue = logs.isLoading ? 'Reading worker logs…'
     : logsUnavailable ? 'Worker logs unavailable'
     : logs.error ? 'Worker logs couldn’t be read'
-    : !logs.data ? 'Worker logs not read'
-    : matchingLines > 0 ? `${matchingLines}${logsTruncated ? '' : ' recent'} ${matchingLines === 1 ? 'line' : 'lines'} read${logs.data.partial ? ' from available worker Pods' : ''}`
-    : logs.data.partial || logsTruncated ? 'No matches in the worker logs Radar could search'
+    : !logData ? 'Worker logs not read'
+    : matchingLines > 0 ? `${matchingLines}${logsTruncated ? '' : ' recent'} ${matchingLines === 1 ? 'line' : 'lines'} read${logData.partial ? ' from available worker Pods' : ''}`
+    : logData.partial || logsTruncated ? 'No matches in the worker logs Radar could search'
     : 'No matches in the recent log window'
   const restore = { memory: 'with memory', filesystem: 'with saved files', volumes: 'with saved volumes only', cold: 'as a fresh boot', unknown: 'with unreported fidelity' }[row.resumesWith]
   const recoveryText = row.resumeGeneration === undefined ? 'Boots fresh'
@@ -441,7 +442,7 @@ export function SubstrateActorOverview({
           </FactRow>
           <FactRow label="Placement"><ActorPlacement detail={detail} onOpenSubject={onOpenSubject} /></FactRow>
           <FactRow label="Recent logs">
-            <DimensionValue tone={!logs.data || logsUnavailable || logs.error ? 'unknown' : 'neutral'} source={logsUnavailable ? logGap(logs.data!, actor) : "Actor-filtered records from Kubernetes worker Pods"} linkLabel="Logs" onOpen={onShowLogs}>
+            <DimensionValue tone={!logData || logsUnavailable || logs.error ? 'unknown' : 'neutral'} source={logsUnavailable ? logGap(logData, actor) : "Actor-filtered records from Kubernetes worker Pods"} linkLabel="Logs" onOpen={onShowLogs}>
               {logValue}
             </DimensionValue>
             {matchingLines > 0 && (

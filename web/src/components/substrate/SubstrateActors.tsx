@@ -23,6 +23,7 @@ import {
   ACTOR_STATE_LABEL,
   coverageInPart,
   coverageReason,
+  definitiveFailure,
   durableText,
   fidelityLabel,
   resumeSentence,
@@ -251,6 +252,7 @@ export function SubstrateActorsScreen({ workspace, status, onOpenActor, openActo
   }, [search]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const states = segmentStates(phase, linkedState)
+  const actorsEnabled = !workspace || workspace.apiTier.state === 'connected'
   const query = useSubstrateActors({
     atespace: atespace || undefined,
     template: template || undefined,
@@ -265,9 +267,15 @@ export function SubstrateActorsScreen({ workspace, status, onOpenActor, openActo
     sort,
     limit: ACTORS_PAGE_SIZE,
     offset: page * ACTORS_PAGE_SIZE,
-  }, !workspace || workspace.apiTier.state === 'connected')
-  const connected = (query.data?.apiTier ?? workspace?.apiTier)?.state === 'connected'
-  const templates = useSubstrateTemplates(connected)
+  }, actorsEnabled)
+  const code = actorsEnabled ? substrateErrorCode(query.error) : undefined
+  const data = actorsEnabled && !definitiveFailure(code) ? query.data : undefined
+  // A refused read says why in its code; that wins over the workspace's older tier.
+  const tier: SubstrateAPITier | undefined = !data && code
+    ? { state: code === 'notConfigured' || code === 'targetChanged' ? 'notConfigured' : code === 'sharedRadar' || code === 'apiDisabled' ? 'disabled' : 'failed', code, reason: query.error instanceof Error ? query.error.message : undefined }
+    : data?.apiTier ?? workspace?.apiTier
+  const notConnected = !data && !!tier && tier.state !== 'connected'
+  const templates = useSubstrateTemplates(tier?.state === 'connected')
 
   const setSegment = (id: ActorSegment | 'attention') => {
     const p = new URLSearchParams(params)
@@ -306,13 +314,6 @@ export function SubstrateActorsScreen({ workspace, status, onOpenActor, openActo
   // A filter from a link that the menus don't list still shows, and can be cleared.
   const extra = (options: SelectMenuOption[], value: string) => (value && !options.some((o) => o.value === value) ? [...options, { value, label: value }] : options)
 
-  const code = substrateErrorCode(query.error)
-  // A refused read says why in its code; that wins over the workspace's older tier.
-  const tier: SubstrateAPITier | undefined = !query.data && code
-    ? { state: code === 'notConfigured' || code === 'targetChanged' ? 'notConfigured' : code === 'sharedRadar' ? 'disabled' : 'failed', code, reason: query.error instanceof Error ? query.error.message : undefined }
-    : query.data?.apiTier ?? workspace?.apiTier
-  const notConnected = !query.data && !!tier && tier.state !== 'connected'
-
   const chips = [
     ...(worker ? [{ label: `Worker: ${worker}`, onClear: () => update({ worker: '' }) }] : []),
     ...(impact ? [{ label: IMPACT_FILTER_LABEL[impact], onClear: () => update({ impact: '' }) }] : []),
@@ -324,9 +325,9 @@ export function SubstrateActorsScreen({ workspace, status, onOpenActor, openActo
     <div className="flex min-h-0 flex-1 flex-col">
       <SubstrateHeader title="Actors" intro={atespace ? <>Atespace: {atespace}</> : 'Cluster-wide · all atespaces'} />
       <ScreenBody>
-        {!notConnected && query.data?.counts && (
+        {!notConnected && data?.counts && (
           <WorkspaceCard title="Reported phases">
-            <SubstrateStateBar counts={query.data.counts} partial={coverageInPart(query.data.coverage)} onSelectState={(state) => update({ state, attention: '' })} />
+            <SubstrateStateBar counts={data.counts} partial={coverageInPart(data.coverage)} onSelectState={(state) => update({ state, attention: '' })} />
           </WorkspaceCard>
         )}
         {node && !notConnected && (
@@ -343,8 +344,8 @@ export function SubstrateActorsScreen({ workspace, status, onOpenActor, openActo
             <span className="text-xs">{NODE_HAS_MEANING[nodeHas]}</span>
           </div>
         )}
-        {query.data && query.data.sources.some((s) => s !== 'snapshot') && (
-          <p className="text-xs text-theme-text-tertiary">{sourcesNote(query.data.sources)}</p>
+        {data && data.sources.some((s) => s !== 'snapshot') && (
+          <p className="text-xs text-theme-text-tertiary">{sourcesNote(data.sources)}</p>
         )}
         {!notConnected && <div>
           <div className="flex flex-wrap items-center gap-2">
@@ -357,8 +358,8 @@ export function SubstrateActorsScreen({ workspace, status, onOpenActor, openActo
                 { id: 'attention' as const, label: 'Needs attention' },
                 ...ACTOR_SEGMENTS.slice(1).map((s) => ({ id: s.id, label: s.label })),
               ].map((s) => {
-                const n = s.id === 'attention' ? query.data?.attentionCount : segmentCount(query.data?.counts, s.id)
-                const partial = coverageInPart(query.data?.coverage) || (s.id === 'attention' && coverageInPart(query.data?.workerCoverage))
+                const n = s.id === 'attention' ? data?.attentionCount : segmentCount(data?.counts, s.id)
+                const partial = coverageInPart(data?.coverage) || (s.id === 'attention' && coverageInPart(data?.workerCoverage))
                 return { ...s, count: n === undefined ? undefined : partial ? (n > 0 ? `≥${n.toLocaleString('en-US')}` : undefined) : n.toLocaleString('en-US') }
               })}
             />
@@ -384,19 +385,19 @@ export function SubstrateActorsScreen({ workspace, status, onOpenActor, openActo
           </Collapse>
           <FilterChips chips={chips} />
         </div>}
-        {attentionOnly && query.data && query.data.attentionCount === undefined ? (
+        {attentionOnly && data && data.attentionCount === undefined ? (
           <Notice>Filtering actors that need attention requires a newer Radar.</Notice>
         ) : notConnected && tier ? (
           <>
             <SubstrateTierBanner tier={tier} />
             <SubstrateConnectNotice status={status} tier={tier} />
           </>
-        ) : query.error && !query.data ? (
+        ) : query.error && !data ? (
           <Notice>Radar couldn’t read the actors: {query.error instanceof Error ? query.error.message : 'unknown error'}.</Notice>
         ) : (
           <>
             <RefreshFailedNotice queries={[query]} />
-            <ActorsTable sort={sort} data={query.data} attentionPartial={attentionOnly && coverageInPart(query.data?.workerCoverage)} loading={query.isLoading} placeholder={query.isPlaceholderData} page={page} onPage={setPage} onOpenActor={onOpenActor} openActor={openActor} />
+            <ActorsTable sort={sort} data={data} workerFilterPartial={(attentionOnly || !!impact) && coverageInPart(data?.workerCoverage)} loading={query.isLoading} placeholder={query.isPlaceholderData} page={page} onPage={setPage} onOpenActor={onOpenActor} openActor={openActor} />
           </>
         )}
         {attentionOnly && <p className="text-xs text-theme-text-tertiary">Includes reported crashes, lost sandboxes, unavailable workers and stuck transitions. Failed golden builds also have a template finding.</p>}
@@ -409,7 +410,7 @@ export function SubstrateActorsScreen({ workspace, status, onOpenActor, openActo
 export function ActorsTable({
   sort = 'attention',
   data,
-  attentionPartial,
+  workerFilterPartial,
   loading,
   placeholder,
   page,
@@ -418,7 +419,7 @@ export function ActorsTable({
   openActor,
 }: {
   sort?: ActorSort
-  attentionPartial?: boolean
+  workerFilterPartial?: boolean
   data?: SubstrateActorsResponse
   loading?: boolean
   /** The rows are the page before, kept while this page loads. */
@@ -434,14 +435,14 @@ export function ActorsTable({
   const from = (data?.offset ?? page * ACTORS_PAGE_SIZE) + 1
   const to = (data?.offset ?? 0) + rows.length
   const cov = data?.coverage
-  const partial = coverageInPart(cov) || attentionPartial
+  const partial = coverageInPart(cov) || workerFilterPartial
   const empty = loading
     ? 'Loading actors…'
     : !data
       ? 'Actors were not read.'
       : cov && (cov.state === 'denied' || cov.state === 'failed')
         ? `No actors: ${coverageReason(cov, 'actors')}.`
-        : attentionPartial
+        : workerFilterPartial
           ? 'No matching actors observed. Some worker disruptions could not be assessed.'
           : coverageInPart(cov)
           ? `No actors match in what Radar could read (${coverageReason(cov, 'actors')}).`

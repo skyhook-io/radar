@@ -19,6 +19,7 @@ const state = vi.hoisted(() => ({
   actorsError: null as unknown,
   lastQuery: undefined as SubstrateActorsQuery | undefined,
   logs: undefined as SubstrateActorLogs | undefined,
+  logsError: null as ApiError | null,
   logOptions: undefined as { tailLines?: number; pollMs?: number | false } | undefined,
 }))
 
@@ -35,7 +36,7 @@ vi.mock('../../api/substrateWorkspace', async (importOriginal) => ({
   useSubstrateTemplates: () => ({ data: undefined }),
   useSubstrateActorLogs: (_: unknown, options: typeof state.logOptions) => {
     state.logOptions = options
-    return { data: state.logs, isLoading: false, error: null }
+    return { data: state.logs, isLoading: false, error: state.logsError, isRefetchError: !!state.logsError }
   },
   useSubstrateConnection: () => ({ data: connection(), isError: false }),
   useUpdateSubstrateConnection: () => ({ mutate: vi.fn(), isPending: false }),
@@ -169,12 +170,17 @@ describe('Actors list', () => {
   })
 
   it('says the operator turned the API off, not an error, when actors are refused for that', () => {
-    state.actors = undefined
+    state.actors = actors()
     state.actorsError = new ApiError('turned off', 403, { error: 'turned off', error_code: 'apiDisabled' })
-    const html = screen('/substrate/actors', notConnectedWorkspace(apiDisabledTier))
-    expect(html).toContain('Turned off for this Radar')
-    expect(html).not.toContain('couldn’t read the actors')
-    state.actorsError = null
+    try {
+      const html = plain(screen())
+      expect(html).toContain('Turned off for this Radar')
+      expect(html).not.toContain('couldn’t read the actors')
+      expect(html).not.toContain('lit-review-0193')
+      expect(html).not.toContain('Reported phases')
+    } finally {
+      state.actorsError = null
+    }
   })
 
   it('reads an actor page refused because the API is off as that, with what to ask for', async () => {
@@ -242,11 +248,24 @@ describe('Actors list', () => {
 
   it('leads to Substrate settings instead of the table while not connected', () => {
     state.actors = undefined
-    state.actorsError = new ApiError('Choose who Radar reads as', 409, { error_code: 'notConfigured' })
     const html = screen('/substrate/actors', notConnectedWorkspace())
     expect(html).toContain('Open Substrate settings')
     expect(html).not.toContain('No actors match')
-    state.actorsError = null
+  })
+
+  it('follows the current workspace tier when the disabled query still holds actors', () => {
+    state.actors = actors()
+    const html = plain(screen('/substrate/actors', notConnectedWorkspace(apiDisabledTier)))
+    expect(html).toContain('Turned off for this Radar')
+    expect(html).not.toContain('lit-review-0193')
+    expect(html).not.toContain('Reported phases')
+  })
+
+  it('qualifies an empty worker-impact filter when the worker read is incomplete', () => {
+    state.actors = actors({ rows: [], total: 0, workerCoverage: { state: 'partial' } })
+    expect(screen('/substrate/actors?impact=restarted')).toContain('No matching actors observed. Some worker disruptions could not be assessed.')
+    state.actors = actors({ rows: [], total: 0, workerCoverage: { state: 'full' } })
+    expect(screen('/substrate/actors?impact=restarted')).toContain('No actors match.')
   })
 })
 
@@ -314,7 +333,7 @@ describe('Actor overview', () => {
     const before = state.logs
     // The server ties a kill to the crash by timing: it came at most 10m before it, with no restart between.
     const killedAt = new Date(Date.parse(actorDetail().actor.crash!.time!) - 2 * 60_000).toISOString()
-    state.logs = { actor: { atespace: 'research', name: 'lit-review-0193' }, state: 'crashed', origin: 'lastNode', node: 'ip-10-0-4-57', reasonCode: 'candidates', source: 'all', searched: [], scanned: 900, windowFull: false, lines: [{ kind: 'worker', time: killedAt, message: 'Killing a sandbox over its memory limit', text: 'x', namespace: 'agents', pod: 'agent-pool-worker-1', memoryLimitBytes: 2147483648, memoryUsageBytes: 2147483648 }], memoryKill: { time: killedAt, namespace: 'agents', pod: 'agent-pool-worker-1', limitBytes: 2147483648, usageBytes: 2147483648, current: true, nextStep: 'Raise the template’s memory limit (recreate it), then revert the actor.', command: 'kubectl ate revert actor lit-review-0193 -a research' } }
+    state.logs = { actor: { atespace: 'research', name: 'lit-review-0193' }, state: 'crashed', origin: 'lastNode', node: 'ip-10-0-4-57', reasonCode: 'candidates', source: 'all', searched: [], scanned: 900, windowFull: false, lines: [{ kind: 'worker', time: killedAt, message: 'Killing a sandbox over its memory limit', text: 'x', namespace: 'agents', pod: 'agent-pool-worker-1', memoryLimitBytes: 2147483648, memoryUsageBytes: 2147483648 }], memoryKill: { time: killedAt, namespace: 'agents', pod: 'agent-pool-worker-1', limitBytes: 2147483648, usageBytes: 2147483648, current: true, nextStep: 'Revert the actor, update its template once suspended, then resume.', command: 'kubectl ate revert actor lit-review-0193 -a research', thenCommand: 'kubectl ate update actor lit-review-0193 -a research --template <new-template>' } }
     try {
     const html = plain(text(renderToStaticMarkup(<MemoryRouter><SubstrateActorOverview detail={actorDetail()} onOpenSubject={() => {}} /></MemoryRouter>)))
     // The cause carries its evidence, not a bare claim: how long before the crash the worker killed it.
@@ -330,7 +349,7 @@ describe('Actor overview', () => {
     expect(html).toContain('in agents/agent-pool-worker-1.')
     expect(html.indexOf('in agents/agent-pool-worker-1.')).toBeGreaterThan(html.indexOf('Details'))
     // The cause found picks the step: the remedy, not "find the cause".
-    expect(html).toContain('Next step: Raise the template’s memory limit (recreate it), then revert the actor.')
+    expect(html).toContain('Next step: Revert the actor, update its template once suspended, then resume.')
     expect(html).not.toContain('Find the cause')
     // The banner names the cause; the last lines below don't repeat it.
     expect(html).not.toContain('that is why it crashed')
@@ -347,8 +366,8 @@ describe('Actor overview', () => {
     const before = state.logs
     // The tour's s05 drawer: crashed over its 2Gi limit, gen 6 a stored memory snapshot stamped with its template.
     // The step is CrashedMemoryActorStep's for that snapshot (pkg/substrate TestMemoryStepFollowsTheRecoverySnapshot).
-    const step = "Move this actor to a template with more memory, then revert it. The move drops its snapshot's memory and files: it restarts from volumes."
-    state.logs = { actor: { atespace: 'research', name: 'lit-review-0193' }, state: 'crashed', origin: 'lastNode', node: 'ip-10-0-17-21', reasonCode: 'candidates', source: 'all', searched: [], scanned: 900, windowFull: false, lines: [], memoryKill: { time: minutesAgo(22), namespace: 'agents', pod: 'agent-pool-worker-1', limitBytes: 2147483648, usageBytes: 2147483648, current: true, nextStep: step, command: 'kubectl ate update actor lit-review-0193 -a research --template <new-template>' } }
+    const step = "Revert, move to a template with more memory and identical volumes, mounts and snapshot location, then resume. The move drops saved memory and files."
+    state.logs = { actor: { atespace: 'research', name: 'lit-review-0193' }, state: 'crashed', origin: 'lastNode', node: 'ip-10-0-17-21', reasonCode: 'candidates', source: 'all', searched: [], scanned: 900, windowFull: false, lines: [], memoryKill: { time: minutesAgo(22), namespace: 'agents', pod: 'agent-pool-worker-1', limitBytes: 2147483648, usageBytes: 2147483648, current: true, nextStep: step, command: 'kubectl ate revert actor lit-review-0193 -a research', thenCommand: 'kubectl ate update actor lit-review-0193 -a research --template <new-template>' } }
     const gen6 = { generation: 6, fidelity: 'memory' as const, owner: 'actor' as const, durable: 'completed' as const, sandboxClass: 'gvisor' }
     const d = actorDetail({
       actor: { ...actorDetail().actor, snapshots: [gen6] },
@@ -359,32 +378,56 @@ describe('Actor overview', () => {
       const html = plain(text(renderToStaticMarkup(<MemoryRouter><SubstrateActorOverview detail={d} onOpenSubject={() => {}} /></MemoryRouter>))).replace(/<[^>]+>/g, ' ')
       expect(html).toContain('Resumes from snapshot generation 6 (with memory, if the runtime is compatible)')
       expect(html).toContain('Snapshot holds memory')
-      expect(html).toContain("The move drops its snapshot's memory and files: it restarts from volumes.")
+      expect(html).toContain('The move drops saved memory and files.')
       // Every sentence that restores from volumes names the move as the reason; none says what the snapshot lacks.
       const sentences = html.split(/(?<=[.!?])\s+/)
-      for (const x of sentences.filter((x) => /volumes/.test(x))) expect(x).toMatch(/[Mm]ove/)
+      for (const x of sentences.filter((x) => /(?:keeping|from|to) volumes/.test(x))) expect(x).toMatch(/[Mm]ove/)
       expect(html).not.toMatch(/without memory|resumes from volumes/)
     } finally {
       state.logs = before
     }
   })
 
-  it('gives a memory-limit crash both commands of its step, the move then the revert, after the sentence that says what the move drops', () => {
+  it('gives a memory-limit crash both commands of its step, the revert then the template update, after the sentence that says what the move drops', () => {
     const before = state.logs
-    const step = "Move this actor to a template with more memory, then revert it. The move drops its snapshot's memory and files: it restarts from volumes."
+    const step = "Revert, move to a template with more memory and identical volumes, mounts and snapshot location, then resume. The move drops saved memory and files."
     const move = 'kubectl ate update actor lit-review-0193 -a research --template <new-template>'
     const revert = 'kubectl ate revert actor lit-review-0193 -a research'
-    state.logs = { actor: { atespace: 'research', name: 'lit-review-0193' }, state: 'crashed', origin: 'lastNode', node: 'ip-10-0-17-21', reasonCode: 'candidates', source: 'all', searched: [], scanned: 900, windowFull: false, lines: [], memoryKill: { time: minutesAgo(22), namespace: 'agents', pod: 'agent-pool-worker-1', limitBytes: 2147483648, current: true, nextStep: step, command: move, thenCommand: revert } }
+    state.logs = { actor: { atespace: 'research', name: 'lit-review-0193' }, state: 'crashed', origin: 'lastNode', node: 'ip-10-0-17-21', reasonCode: 'candidates', source: 'all', searched: [], scanned: 900, windowFull: false, lines: [], memoryKill: { time: minutesAgo(22), namespace: 'agents', pod: 'agent-pool-worker-1', limitBytes: 2147483648, current: true, nextStep: step, command: revert, thenCommand: move } }
     try {
       const raw = text(renderToStaticMarkup(<MemoryRouter><SubstrateActorOverview detail={actorDetail()} onOpenSubject={() => {}} /></MemoryRouter>))
       const html = plain(raw).replace(/<[^>]+>/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
       expect(raw.match(/data-command-line/g)?.length).toBeGreaterThanOrEqual(2)
-      const drops = html.indexOf("The move drops its snapshot's memory and files")
+      const drops = html.indexOf("The move drops saved memory and files")
       expect(drops).toBeGreaterThan(-1)
-      expect(drops).toBeLessThan(html.indexOf(move))
-      expect(html.indexOf(move)).toBeLessThan(html.indexOf(revert))
+      expect(drops).toBeLessThan(html.indexOf(revert))
+      expect(html.indexOf(revert)).toBeLessThan(html.indexOf(move))
     } finally {
       state.logs = before
+    }
+  })
+
+  it('drops cached log evidence and recovery commands when access is denied', () => {
+    const before = state.logs
+    state.logs = {
+      actor: { atespace: 'research', name: 'lit-review-0193' }, state: 'crashed', origin: 'lastNode',
+      source: 'all', searched: [], scanned: 1, windowFull: false,
+      lines: [{ kind: 'worker', message: 'cached worker log', text: 'x', namespace: 'agents', pod: 'worker' }],
+      memoryKill: { time: minutesAgo(4), namespace: 'agents', pod: 'worker', limitBytes: 2 ** 30, current: true,
+        nextStep: 'Cached recovery step.', command: 'kubectl ate revert actor lit-review-0193 -a research',
+        thenCommand: 'kubectl ate update actor lit-review-0193 -a research --template <new-template>' },
+    }
+    state.logsError = new ApiError('logs denied', 403, { error_code: 'denied' })
+    try {
+      const html = plain(text(renderToStaticMarkup(<MemoryRouter><SubstrateActorOverview detail={actorDetail()} /></MemoryRouter>)))
+      expect(html).toContain('Worker logs couldn’t be read')
+      expect(html).toContain('Substrate’s message')
+      expect(html).not.toContain('cached worker log')
+      expect(html).not.toContain('Cached recovery step')
+      expect(html).not.toContain('kubectl ate update')
+    } finally {
+      state.logs = before
+      state.logsError = null
     }
   })
 
@@ -645,9 +688,9 @@ describe('Needs attention rows', () => {
   it('folds each crash group’s known remedy and leaves the concentration visible', async () => {
     const { SubstrateAttentionList } = await import('./SubstrateAttentionList')
     const row = { ...poolShortRow, rule: 'crashedActors' as const, count: 14, nextStep: 'Fix the cause Substrate’s crash message names, then revert each actor.', command: 'kubectl ate revert actor <name> -a <atespace>', groups: [
-      { subject: { kind: 'ActorTemplate' as const, atespace: 'research', name: 'langgraph-research' }, count: 11, cause: 'memoryLimit' as const, nextStep: 'Create a template with a higher memory limit, move the actors to it, then revert them.', command: 'kubectl ate update actor <name> -a <atespace> --template <new-template>' },
+      { subject: { kind: 'ActorTemplate' as const, atespace: 'research', name: 'langgraph-research' }, count: 11, cause: 'memoryLimit' as const, nextStep: 'Create a template with a higher memory limit. Revert the actors, update their templates once suspended, then resume.', command: 'kubectl ate revert actor <name> -a <atespace>', thenCommand: 'kubectl ate update actor <name> -a <atespace> --template <new-template>' },
       { subject: { kind: 'ActorTemplate' as const, atespace: 'code-review', name: 'claude-code-gvisor' }, count: 2 },
-      { subject: { kind: 'ActorTemplate' as const, atespace: 'sandbox-dev', name: 'mcp-browser' }, count: 1, cause: 'memoryLimit' as const, nextStep: 'Create a template with a higher memory limit, move the actors to it, then revert them.', command: 'kubectl ate update actor <name> -a <atespace> --template <new-template>' },
+      { subject: { kind: 'ActorTemplate' as const, atespace: 'sandbox-dev', name: 'mcp-browser' }, count: 1, cause: 'memoryLimit' as const, nextStep: 'Create a template with a higher memory limit. Revert the actors, update their templates once suspended, then resume.', command: 'kubectl ate revert actor <name> -a <atespace>', thenCommand: 'kubectl ate update actor <name> -a <atespace> --template <new-template>' },
     ] }
     const raw = renderToStaticMarkup(<MemoryRouter><SubstrateAttentionList rows={[row]} onOpen={() => {}} /></MemoryRouter>)
     const html = words(raw)
@@ -665,8 +708,8 @@ describe('Needs attention rows', () => {
     expect(html.indexOf('For the other 2, on')).toBeGreaterThan(details)
     // The step's own line names its templates, so Details doesn't list them again.
     expect(html).not.toContain('Killed over their memory limit:')
-    expect(html).not.toContain('kubectl ate revert actor')
-    expect(raw.match(/aria-label="Copy command"/g)).toHaveLength(1)
+    expect(html.indexOf('kubectl ate revert actor')).toBeLessThan(html.indexOf('kubectl ate update actor'))
+    expect(raw.match(/aria-label="Copy command"/g)).toHaveLength(2)
     // Concentration, not cause.
     expect(html).toContain('11 of the 14 use template research / langgraph-research')
     expect(html.indexOf('11 of the 14')).toBeLessThan(details)
@@ -675,7 +718,7 @@ describe('Needs attention rows', () => {
 
   it('names a remedy’s templates on its line up to two, and counts more, listing them under Details', async () => {
     const { SubstrateAttentionList } = await import('./SubstrateAttentionList')
-    const memory = { cause: 'memoryLimit' as const, nextStep: 'Move them.', command: 'kubectl ate update actor <name> -a <atespace> --template <new-template>' }
+    const memory = { cause: 'memoryLimit' as const, nextStep: 'Revert them.', command: 'kubectl ate revert actor <name> -a <atespace>' }
     const row = { ...poolShortRow, rule: 'crashedActors' as const, count: 9, nextStep: 'Fix the cause.', groups: [
       { subject: { kind: 'ActorTemplate' as const, atespace: 'a', name: 'one' }, count: 5, ...memory },
       { subject: { kind: 'ActorTemplate' as const, atespace: 'b', name: 'two' }, count: 2, ...memory },
@@ -684,7 +727,7 @@ describe('Needs attention rows', () => {
     ] }
     const html = words(renderToStaticMarkup(<MemoryRouter><SubstrateAttentionList rows={[row]} onOpen={() => {}} /></MemoryRouter>))
     const details = html.indexOf('Details')
-    expect(html).toContain('Next step for 8 killed over their memory limit, on 3 templates: Move them.')
+    expect(html).toContain('Next step for 8 killed over their memory limit, on 3 templates: Revert them.')
     expect(html.indexOf('Killed over their memory limit: a / one (5), b / two (2) and c / three (1)')).toBeGreaterThan(details)
     expect(html).toContain('The other one crashed for another reason')
   })
@@ -708,7 +751,7 @@ describe('Needs attention rows', () => {
     const { SubstrateAttentionList } = await import('./SubstrateAttentionList')
     const opened: unknown[] = []
     const row = { ...poolShortRow, rule: 'crashedActors' as const, count: 15, reading: 'Latest: research / lit-review-0193. Substrate’s message: killed for exceeding its memory limit', nextStep: 'Fix the cause.', groups: [
-      { subject: { kind: 'ActorTemplate' as const, atespace: 'research', name: 'lg' }, count: 12, cause: 'memoryLimit' as const, nextStep: 'Move them.', command: 'kubectl ate update actor <name> -a <atespace> --template <new-template>' },
+      { subject: { kind: 'ActorTemplate' as const, atespace: 'research', name: 'lg' }, count: 12, cause: 'memoryLimit' as const, nextStep: 'Revert them.', command: 'kubectl ate revert actor <name> -a <atespace>' },
       { subject: { kind: 'ActorTemplate' as const, atespace: 'code', name: 'cc' }, count: 2 },
       { subject: { kind: 'ActorTemplate' as const, atespace: 'support', name: 'adk' }, count: 1 },
     ] }
@@ -716,7 +759,7 @@ describe('Needs attention rows', () => {
     const details = html.indexOf('Details')
     expect(html.indexOf('Latest: research / lit-review-0193.')).toBeGreaterThan(details)
     // No one filter covers two templates: the line opens Details, where each links to its actors.
-    expect(html).toContain('Next step for 12 killed over their memory limit, on research / lg: Move them.')
+    expect(html).toContain('Next step for 12 killed over their memory limit, on research / lg: Revert them.')
     expect(html).toContain('The other 3 include crashes for other reasons: see Details')
     expect(html).not.toContain('show them →')
     expect(html.indexOf('For the other 3, on code / cc (2) and support / adk (1)')).toBeGreaterThan(details)
@@ -729,7 +772,7 @@ describe('Needs attention rows', () => {
     const { SubstrateAttentionList } = await import('./SubstrateAttentionList')
     const opened: unknown[] = []
     const row = { ...poolShortRow, rule: 'crashedActors' as const, count: 3, subject: { kind: 'Actors' as const, filter: { state: 'crashed' } }, groups: [
-      { subject: { kind: 'ActorTemplate' as const, atespace: 'research', name: 'lg' }, count: 2, cause: 'memoryLimit' as const, nextStep: 'Move them.', command: 'kubectl ate update actor <name> -a <atespace> --template <new-template>' },
+      { subject: { kind: 'ActorTemplate' as const, atespace: 'research', name: 'lg' }, count: 2, cause: 'memoryLimit' as const, nextStep: 'Revert them.', command: 'kubectl ate revert actor <name> -a <atespace>' },
       { subject: { kind: 'ActorTemplate' as const, atespace: 'code', name: 'cc' }, count: 1 },
     ] }
     const html = renderToStaticMarkup(<MemoryRouter><SubstrateAttentionList rows={[row]} onOpen={(s) => opened.push(s)} /></MemoryRouter>)
@@ -739,8 +782,8 @@ describe('Needs attention rows', () => {
 
   it('gives crashes that share one remedy that remedy once, with its command', async () => {
     const { SubstrateAttentionList } = await import('./SubstrateAttentionList')
-    const step = 'Move the actors to a template with more memory, then revert them.'
-    const cmd = 'kubectl ate update actor <name> -a <atespace> --template <new-template>'
+    const step = 'Revert the actors, move them to a template with more memory and identical volumes, mounts and snapshot location, then resume.'
+    const cmd = 'kubectl ate revert actor <name> -a <atespace>'
     const row = { ...poolShortRow, rule: 'crashedActors' as const, count: 3, nextStep: step, command: cmd, groups: [
       { subject: { kind: 'ActorTemplate' as const, atespace: 'a', name: 'one' }, count: 2, cause: 'memoryLimit' as const, nextStep: step, command: cmd },
       { subject: { kind: 'ActorTemplate' as const, atespace: 'a', name: 'two' }, count: 1, cause: 'memoryLimit' as const, nextStep: step, command: cmd },
@@ -751,27 +794,27 @@ describe('Needs attention rows', () => {
     expect(html).not.toContain('For the other')
   })
 
-  it('shows a memory-limit remedy’s two commands on their own lines, the move then the revert', async () => {
+  it('shows a memory-limit remedy’s two commands on their own lines, the revert then the template update', async () => {
     const { SubstrateAttentionList } = await import('./SubstrateAttentionList')
-    const step = 'Move the actors to a template with more memory, then revert them. A snapshot taken under the old template may restore only its volumes.'
+    const step = 'Revert the actors, move them to a template with more memory and identical volumes, mounts and snapshot location, then resume. Snapshots may keep only volumes.'
     const move = 'kubectl ate update actor <name> -a <atespace> --template <new-template>'
     const revert = 'kubectl ate revert actor <name> -a <atespace>'
-    const memory = { cause: 'memoryLimit' as const, nextStep: step, command: move, thenCommand: revert }
+    const memory = { cause: 'memoryLimit' as const, nextStep: step, command: revert, thenCommand: move }
     const commands = (raw: string) => [...raw.matchAll(/<code class="[^"]*">([^<]*)<\/code>/g)].map((m) => m[1].replace(/&lt;/g, '<').replace(/&gt;/g, '>'))
     // Every crash a memory-limit kill: the row's own step.
-    const all = { ...poolShortRow, rule: 'crashedActors' as const, count: 3, nextStep: step, command: move, thenCommand: revert, groups: [{ subject: { kind: 'ActorTemplate' as const, atespace: 'a', name: 'one' }, count: 3, ...memory }] }
+    const all = { ...poolShortRow, rule: 'crashedActors' as const, count: 3, nextStep: step, command: revert, thenCommand: move, groups: [{ subject: { kind: 'ActorTemplate' as const, atespace: 'a', name: 'one' }, count: 3, ...memory }] }
     let raw = renderToStaticMarkup(<MemoryRouter><SubstrateAttentionList rows={[all]} /></MemoryRouter>)
-    expect(commands(raw)).toEqual([move + targetFlags, revert + targetFlags])
+    expect(commands(raw)).toEqual([revert + targetFlags, move + targetFlags])
     expect(raw.match(/data-command-line/g)).toHaveLength(2)
     // What the move drops is in the step itself, ahead of both commands.
-    expect(words(raw).indexOf('may restore only its volumes')).toBeLessThan(words(raw).indexOf('kubectl ate update'))
+    expect(words(raw).indexOf('may keep only volumes')).toBeLessThan(words(raw).indexOf('kubectl ate revert'))
     // Split by remedy: the memory groups' step carries both; the rest's general step carries neither.
     const split = { ...poolShortRow, rule: 'crashedActors' as const, count: 4, nextStep: 'Fix the cause.', command: revert, groups: [
       { subject: { kind: 'ActorTemplate' as const, atespace: 'a', name: 'one' }, count: 3, ...memory },
       { subject: { kind: 'ActorTemplate' as const, atespace: 'b', name: 'mixed' }, count: 1 },
     ] }
     raw = renderToStaticMarkup(<MemoryRouter><SubstrateAttentionList rows={[split]} onOpen={() => {}} /></MemoryRouter>)
-    expect(commands(raw)).toEqual([move + targetFlags, revert + targetFlags])
+    expect(commands(raw)).toEqual([revert + targetFlags, move + targetFlags])
   })
 
   it('reads a link’s worker-impact filter and lets it be cleared', () => {

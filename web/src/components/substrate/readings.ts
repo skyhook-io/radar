@@ -267,15 +267,15 @@ export function durableText(s: SubstrateSnapshot): { text: string; tone: StatusT
 /**
  * The one plan for a template whose golden actor and actors were both killed
  * over its memory limit: a new template, which also builds a new golden
- * snapshot, then the crashed actors' move to it and their revert. Its
+ * snapshot, then a revert and template update for each crashed actor. Its
  * commands are the crash group's, in that order. The move is what may drop
  * a snapshot's memory and files, so the step says so beside it, as the
  * server's group step does.
  */
 export function memoryRebuildStep(crashed: number): string {
   return crashed === 1
-    ? 'Recreate the template with a higher memory limit, move the crashed actor to it, then revert it. The move may keep only its snapshot’s volumes.'
-    : 'Recreate the template with a higher memory limit, move the crashed actors to it, then revert them. The move may keep only their snapshots’ volumes.'
+    ? 'Recreate with more memory and identical volumes, mounts and snapshot location. Revert the actor, move it over, then resume. The move may keep only volumes.'
+    : 'Recreate with more memory and identical volumes, mounts and snapshot location. Revert the actors, move them over, then resume. The move may keep only volumes.'
 }
 
 /** `kubectl ate revert actor`, which returns a crashed actor to suspended at its newest stored snapshot. */

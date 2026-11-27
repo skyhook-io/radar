@@ -171,6 +171,21 @@ func TestSubstrateManagedViewAndInvalidInstallation(t *testing.T) {
 	}
 }
 
+func TestSubstrateDisabledConnectionOmitsEndpointAndServerName(t *testing.T) {
+	t.Setenv("RADAR_SUBSTRATE_API", "disabled")
+	t.Setenv("RADAR_SUBSTRATE_ENDPOINT", "internal-endpoint")
+	t.Setenv("RADAR_SUBSTRATE_SERVER_NAME", "internal-server-name")
+	s := &Server{listenAddress: "0.0.0.0"}
+	var view substrateConnectionView
+	rec := call(t, s, s.handleGetSubstrateConnection, substrateCall{path: "/api/substrate/connection"}, &view)
+	if rec.Code != http.StatusOK || view.Access.Code != substrateapi.CodeAPIDisabled || view.Managed == nil {
+		t.Fatalf("disabled connection: %d %s", rec.Code, rec.Body)
+	}
+	if view.Managed.Endpoint != "" || view.Managed.ServerName != "" {
+		t.Errorf("disabled connection disclosed its address: %s", rec.Body)
+	}
+}
+
 func TestSubstrateConnectionRevisionReconfirmAndConsent(t *testing.T) {
 	s := substrateTestServer(t, substrateapi.Kube{})
 	initial := fakeConnection(t, fullToken)

@@ -534,7 +534,7 @@ export interface SubstrateAttention {
    * `<name>` and `<atespace>` for them; an actor page's rows have them filled in.
    */
   command?: string
-  /** Runs after command when the step takes two: a memory-limit crash's move to a new template, then its revert. */
+  /** Runs after command when the step takes two: a memory-limit crash's revert, then its template update. */
   thenCommand?: string
   subject: SubstrateSubject
   related?: SubstrateSubject[]
@@ -615,6 +615,7 @@ export interface SubstrateManagedConnection {
   enabled: boolean
   /** eachUser: ate-client, its token minted with each signed-in person's own Kubernetes access. */
   readsAs: 'eachUser' | 'none'
+  /** Both are blank when the operator disables the API or installation settings fail validation. */
   endpoint: string
   serverName: string
   /** Where the server certificate is verified from; never a path. */
@@ -1005,7 +1006,7 @@ export interface SubstrateActorLogs {
      * is evidence of a kill attempt with no confirmed tie to the current crash.
      */
     current: boolean
-    /** The remedy, the crash step: command moves the actor to a new template, thenCommand reverts it. Absent unless current. */
+    /** The remedy, the crash step: command reverts the actor, thenCommand updates its template. Absent unless current. */
     nextStep?: string
     command?: string
     thenCommand?: string

@@ -183,11 +183,11 @@ func TestCrashedKagentSharingATemplate(t *testing.T) {
 	if len(row.Groups) != 1 || !g.Kagent || g.Command != "" || g.ThenCommand != "" || g.NextStep != CrashedMemoryNextStep+kagentAside {
 		t.Errorf("group = %+v", g)
 	}
-	if row.Command != "" && row.Command == retemplateCommand {
+	if row.Command != "" || row.ThenCommand != "" {
 		t.Errorf("fleet row offers the move: %+v", row)
 	}
 	r := find(t, ActorAttention(rows, other, nil, now), RuleCrashedActors)
-	if r.Command != "kubectl ate update actor plain -a kagent --template <new-template>" {
+	if r.Command != "kubectl ate revert actor plain -a kagent" || r.ThenCommand != "kubectl ate update actor plain -a kagent --template <new-template>" {
 		t.Errorf("the other actor keeps its own move: %+v", r)
 	}
 

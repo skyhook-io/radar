@@ -119,7 +119,7 @@ type Attention struct {
 	// ActorAttention fills them in.
 	Command string `json:"command,omitempty"`
 	// ThenCommand runs after Command when the step takes two, as a
-	// memory-limit crash's move to a new template and then its revert.
+	// memory-limit crash's revert and then its template update.
 	ThenCommand string  `json:"thenCommand,omitempty"`
 	Subject     Subject `json:"subject"`
 	// Related are links beside the subject, such as a worker's Pod and node.
@@ -458,7 +458,7 @@ func crashedActors(in Inputs) []Attention {
 		if mixed[key] {
 			allMemory = false
 		} else {
-			groups[i].Cause, groups[i].NextStep, groups[i].Command, groups[i].ThenCommand = CauseMemoryLimit, CrashedMemoryNextStep, retemplateCommand, revertCommand
+			groups[i].Cause, groups[i].NextStep, groups[i].Command, groups[i].ThenCommand = CauseMemoryLimit, CrashedMemoryNextStep, revertCommand, retemplateCommand
 		}
 		// A group's command runs for each of its actors, so it is offered
 		// only when kagent runs none of them.
@@ -485,7 +485,7 @@ func crashedActors(in Inputs) []Attention {
 		nextStep += kagentAsideOf(sessions, sandboxes)
 		command = ""
 	case allMemory:
-		nextStep, command, then = CrashedMemoryNextStep, retemplateCommand, revertCommand
+		nextStep, command, then = CrashedMemoryNextStep, revertCommand, retemplateCommand
 	}
 	// Which template most crashes share is Groups' to say, beside the title.
 	title := plural(len(crashed), "actor is crashed", "actors are crashed")
@@ -530,7 +530,7 @@ const (
 	// stamped with the template it was taken under restores only its volumes
 	// under another (Substrate's templateReplaced); an unstamped one restores
 	// whole, so the group step says "may".
-	CrashedMemoryNextStep = "Move the actors to a template with more memory, then revert them. A snapshot taken under the old template may restore only its volumes."
+	CrashedMemoryNextStep = "Revert the actors, move them to a template with more memory and identical volumes, mounts and snapshot location, then resume. Snapshots may keep only volumes."
 	// crashedActorNextStep is crashedNextStep on one actor's own page.
 	crashedActorNextStep = "Fix the cause Substrate's crash message names, then revert this actor to its newest stored generation."
 )
@@ -556,33 +556,31 @@ const (
 // only its volumes under another (templateReplaced); an unstamped one
 // restores whole.
 func CrashedMemoryActorStep(a Actor) string {
-	const move = "Move this actor to a template with more memory, then revert it"
+	const step = "Revert, move to a template with more memory and identical volumes, mounts and snapshot location, then resume."
 	src := RecoverySource(a)
 	switch {
 	case src == nil:
-		return move + "; it has no stored snapshot, so it boots fresh."
+		return step + " No stored snapshot, so it boots fresh."
 	case src.Fidelity == FidelityVolumes:
-		return move + "; on the new template it resumes from its volumes."
+		return step + " It resumes from its volumes."
 	case src.ActorTemplateUID != "" && src.Fidelity == FidelityMemory:
-		return move + ". The move drops its snapshot's memory and files: it restarts from volumes."
+		return step + " The move drops saved memory and files."
 	case src.ActorTemplateUID != "" && src.Fidelity == FidelityRootFS:
-		return move + ". The move drops its snapshot's saved files: it restarts from volumes."
+		return step + " The move drops its saved files."
 	case src.ActorTemplateUID != "":
-		return move + ". The move drops all but its snapshot's volumes: it restarts from them."
+		return step + " The move keeps only its volumes."
 	case src.Fidelity == FidelityRootFS:
-		return move + "; on the new template it resumes from its saved files."
+		return step + " It resumes from its saved files."
 	case src.Fidelity == FidelityMemory:
-		return move + "; on the new template it still resumes from memory on a compatible runtime."
+		return step + " It resumes from memory on a compatible runtime."
 	}
-	return move + "; what it restores then is unknown: Substrate names no fidelity for its snapshot."
+	return step + " What it restores is unknown: no snapshot fidelity."
 }
 
-// CrashedMemoryCommand is the first command of the memory-limit step for a:
-// moving it to the new template, which the user names.
+// CrashedMemoryCommand updates the actor to a new template after it reverts to suspended.
 func CrashedMemoryCommand(a Actor) string { return forActor(retemplateCommand, a) }
 
-// RevertCommand reverts a; it follows CrashedMemoryCommand in the
-// memory-limit step.
+// RevertCommand reverts the actor to suspended.
 func RevertCommand(a Actor) string { return forActor(revertCommand, a) }
 
 func forActor(command string, a Actor) string {
@@ -1525,6 +1523,17 @@ func Checks(in Inputs) []Check {
 		svcWhy = in.Service.Why
 	}
 	svc := req{ok: serviceRead(in), why: svcWhy, collecting: in.Service != nil && in.Service.Collecting}
+	poolSvc := svc
+	if svc.ok {
+		poolSvc.ok = len(in.Service.Pools) > 0
+		for _, pool := range in.Service.Pools {
+			if pool.Verdict == "" || pool.Verdict == ServiceUnknown {
+				poolSvc.ok = false
+				break
+			}
+		}
+		poolSvc.why = "Prometheus pool verdicts are incomplete"
+	}
 	nodes := req{ok: serviceRead(in) && len(in.Service.Nodes) > 0, why: "no node holding actor state was known"}
 	return []Check{
 		need(RuleCrashedActors, "Crashed actors", actors),
@@ -1537,9 +1546,9 @@ func Checks(in Inputs) []Check {
 		need(RuleWorkerDraining, "Draining workers", workers),
 		need(RuleWorkerRestarting, "Worker registrations not yet reconciled", workers),
 		need(RulePoolShort, "Pools short of workers", pools),
-		need(RulePoolFull, "Pools with no free actor slots", req{ok: in.WorkersComplete || svc.ok, why: "the worker list is incomplete and " + svc.why, collecting: svc.collecting}),
+		need(RulePoolFull, "Pools with no free actor slots", req{ok: in.WorkersComplete || poolSvc.ok, why: "the worker list is incomplete and " + poolSvc.why, collecting: poolSvc.collecting}),
 		need(RulePoolNoRoom, "Pools whose free slots lack the CPU or memory for an actor", workers, workersAll, templatesAll),
-		need(CheckPoolService, "Substrate's pool capacity verdicts (Prometheus)", svc),
+		need(CheckPoolService, "Substrate's pool capacity verdicts (Prometheus)", poolSvc),
 		need(RuleNodeUploadsOverdue, "Overdue snapshot uploads per node (Prometheus)", svc, nodes),
 	}
 }
@@ -1569,7 +1578,7 @@ func ActorAttention(rows []Attention, a Actor, templates []Template, now time.Ti
 			case isKagent(a):
 				r.NextStep, r.Command = KagentActorStep(a, IsMemoryLimitCrash(a)), ""
 			case IsMemoryLimitCrash(a):
-				r.NextStep, r.Command, r.ThenCommand = CrashedMemoryActorStep(a), retemplateCommand, revertCommand
+				r.NextStep, r.Command, r.ThenCommand = CrashedMemoryActorStep(a), revertCommand, retemplateCommand
 			}
 		case RuleStuckTransition:
 			r.NextStep = stuckActorNextStep[r.key]

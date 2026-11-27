@@ -450,15 +450,15 @@ describe('tier readings for a Radar Hub owner, who has no form', () => {
 })
 
 describe('a template’s one memory-limit plan', () => {
-  it('is one short action in order, recreate, move, revert, and says what the move may drop', () => {
+  it('orders recovery and names the constraints and snapshot consequences', () => {
     for (const n of [1, 4]) {
       const step = memoryRebuildStep(n)
       expect(step.split(/\s+/).length).toBeLessThanOrEqual(25)
-      expect(step.indexOf('Recreate')).toBeLessThan(step.indexOf('move'))
-      expect(step.indexOf('move')).toBeLessThan(step.indexOf('revert'))
-      expect(step).toMatch(/The move may keep only (its snapshot’s|their snapshots’) volumes\.$/)
+      expect(step).toMatch(/Recreate.*Revert the actors?, move (it|them) over, then resume/)
+      expect(step).toContain('identical volumes, mounts and snapshot location')
+      expect(step).toContain('The move may keep only volumes.')
     }
-    expect(memoryRebuildStep(1)).toContain('the crashed actor to it, then revert it.')
-    expect(memoryRebuildStep(4)).toContain('the crashed actors to it, then revert them.')
+    expect(memoryRebuildStep(1)).toContain('the actor, move it')
+    expect(memoryRebuildStep(4)).toContain('the actors, move them')
   })
 })

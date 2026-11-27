@@ -253,6 +253,18 @@ func TestSubstrateUserTokenRequiredWithWarmProof(t *testing.T) {
 		!strings.Contains(rec.Body.String(), k8s.UserTokenRequiredMessage) {
 		t.Errorf("request missing its token: %d %s", rec.Code, rec.Body)
 	}
+	var status substrateStatusResponse
+	if rec := call(t, s, s.handleSubstrateStatus, substrateCall{path: "/api/substrate/status", user: user}, &status); rec.Code != http.StatusOK || status.APITier.Code != substrateapi.CodeUserTokenRequired {
+		t.Errorf("status missing its token: %d %s", rec.Code, rec.Body)
+	}
+	var workspace substrateWorkspaceResponse
+	if rec := call(t, s, s.handleSubstrateWorkspace, substrateCall{path: "/api/substrate/workspace", user: user}, &workspace); rec.Code != http.StatusOK || workspace.APITier.Code != substrateapi.CodeUserTokenRequired {
+		t.Errorf("workspace missing its token: %d %s", rec.Code, rec.Body)
+	}
+	var view substrateConnectionView
+	if rec := call(t, s, s.handleGetSubstrateConnection, substrateCall{path: "/api/substrate/connection", user: user}, &view); rec.Code != http.StatusOK || view.Access.Code != substrateapi.CodeUserTokenRequired {
+		t.Errorf("connection missing its token: %d %s", rec.Code, rec.Body)
+	}
 	if asked, minted := mints.count(); asked != 1 || minted != 1 {
 		t.Errorf("refused request reached the Kubernetes client: %d client lookups, %d mints", asked, minted)
 	}

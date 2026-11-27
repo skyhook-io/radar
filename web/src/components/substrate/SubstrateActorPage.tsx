@@ -135,7 +135,13 @@ function LogsTab({ detail }: { detail: SubstrateActorDetail }) {
   const [container, setContainer] = useState('')
   const containers = detail.template?.containers ?? []
   const filtered = hidesWorkerRecords(view, container)
-  const logs = useSubstrateActorLogs(detail.actor, { source: view, container: view === 'lifecycle' || view === 'worker' ? undefined : container || undefined, tailLines: 500 })
+  const { actor } = detail
+  const logs = useSubstrateActorLogs(actor, {
+    source: view,
+    container: view === 'lifecycle' || view === 'worker' ? undefined : container || undefined,
+    tailLines: 500,
+    pollMs: actor.assignment?.pod && actor.assignment.namespace ? undefined : false,
+  })
   const data = definitiveFailure(substrateErrorCode(logs.error)) ? undefined : logs.data
   if (!data || !workerLogsAvailable(data)) {
     const title = logs.isLoading ? 'Worker logs' : 'Worker logs unavailable'

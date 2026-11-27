@@ -30,6 +30,7 @@ describe('copyable kubectl ate commands', () => {
     expect(html).toContain(`${revert} --kubeconfig '/home/me/kube configs/staging' --context dev`)
     expect(html).toContain('aria-label="Copy command"')
     expect(html).not.toContain('--endpoint')
+    expect(html).not.toContain('--token-file')
   })
 
   it.each(['CAPI', 'relative/kubeconfig', 'C:relative'])('uses guidance for a non-absolute source (%s)', (source) => {
@@ -44,10 +45,11 @@ describe('copyable kubectl ate commands', () => {
       .toEqual({ context: target.inFileName, kubeconfig: source })
   })
 
-  it('includes a directly reachable local endpoint with standard cluster trust', () => {
-    const html = show(local({ identity: 'tokenFile', tokenFile: '/home/me/ate.token', endpoint: '127.0.0.1:18443' }))
+  it('includes a directly reachable local endpoint and quotes the saved token file path', () => {
+    const html = show(local({ identity: 'tokenFile', tokenFile: '/home/me/substrate auth/ate.token', endpoint: '127.0.0.1:18443' }))
     expect(html).toContain('--endpoint 127.0.0.1:18443')
-    expect(html).not.toContain('--token-file')
+    expect(html).toContain("--token-file '/home/me/substrate auth/ate.token'")
+    expect(show(local({ identity: 'tokenFile' }))).not.toContain('--token-file')
   })
 
   it.each([{ caFile: '/home/me/ca.pem' }, { serverName: 'ate.example.org' }])('hands off local custom TLS (%j)', (tls) => {

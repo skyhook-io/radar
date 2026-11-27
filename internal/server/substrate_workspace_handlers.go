@@ -501,7 +501,7 @@ func (s *Server) substrateConnectionView(r *http.Request) (substrateConnectionVi
 			readsAs = "eachUser"
 		}
 		endpoint, serverName := c.Settings.Endpoint, c.Settings.ServerName
-		if c.Err != nil {
+		if !c.Enabled || c.Err != nil {
 			endpoint, serverName = "", ""
 		}
 		view.Managed = &substrateManagedConnectionView{Enabled: enabled, ReadsAs: readsAs, Endpoint: endpoint, ServerName: serverName, Trust: c.Trust(),
@@ -1500,6 +1500,9 @@ func (s *Server) handleSubstrateActor(w http.ResponseWriter, r *http.Request) {
 				return
 			case workerTier != nil || workerCode != "":
 				resp.Coverage.Workers = substratePointFailure(workerTier, workerCode, workerMsg)
+				if workerCode == substrateapi.CodeNotFound {
+					in.Workers = slices.DeleteFunc(slices.Clone(in.Workers), func(w model.Worker) bool { return w.Name == as.Worker })
+				}
 			case rawWorker != nil:
 				resp.Coverage.Workers = detailCoverage
 				wk := substrateapi.WorkerOf(rawWorker)
@@ -1657,7 +1660,7 @@ type substrateMemoryKill struct {
 	// execution start or later failed kill in the lines read.
 	Current bool `json:"current"`
 	// NextStep, Command and ThenCommand are the remedy, the actor page's
-	// crash step: move the actor to a new template, then revert it. Absent
+	// crash step: revert the actor, then update its template. Absent
 	// unless Current.
 	NextStep    string `json:"nextStep,omitempty"`
 	Command     string `json:"command,omitempty"`
@@ -1686,7 +1689,7 @@ func memoryKillOf(actor model.Actor, lines []substrateLogLine) *substrateMemoryK
 		if kill.Current && actor.Kagent != nil {
 			kill.NextStep = model.KagentActorStep(actor, true)
 		} else if kill.Current {
-			kill.NextStep, kill.Command, kill.ThenCommand = model.CrashedMemoryActorStep(actor), model.CrashedMemoryCommand(actor), model.RevertCommand(actor)
+			kill.NextStep, kill.Command, kill.ThenCommand = model.CrashedMemoryActorStep(actor), model.RevertCommand(actor), model.CrashedMemoryCommand(actor)
 		}
 		return kill
 	}
@@ -1791,7 +1794,7 @@ func (s *Server) handleSubstrateActorLogs(w http.ResponseWriter, r *http.Request
 			return
 		}
 		if !substratePodLogAllowed(s, r, as.Namespace) {
-			s.writeError(w, http.StatusForbidden, "no access to pod logs in namespace "+as.Namespace+": requires get pods/log")
+			s.writeErrorCode(w, http.StatusForbidden, substrateapi.CodeDenied, "no access to pod logs in namespace "+as.Namespace+": requires get pods/log")
 			return
 		}
 		read := s.searchSubstratePod(r, client, as.Namespace, as.Pod, filter, tail)
@@ -1954,7 +1957,11 @@ func (s *Server) searchSubstratePod(r *http.Request, client kubernetes.Interface
 			return nil, err
 		}
 		defer stream.Close()
-		return io.ReadAll(io.LimitReader(stream, limitBytes))
+		body, err := io.ReadAll(io.LimitReader(stream, limitBytes))
+		if err == nil && k8score.IsLogsUnavailableNotice(string(body)) {
+			return nil, k8score.ErrLogsUnavailable
+		}
+		return body, err
 	}
 	scanLines := int64(substrateLogScanLines)
 	body, err := readTail(scanLines)
