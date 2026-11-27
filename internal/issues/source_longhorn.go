@@ -41,21 +41,28 @@ func detectLonghornVolumeIssues(gvr schema.GroupVersionResource, kind string, it
 	return out
 }
 
-// longhornSuppressesGenericConditions: Longhorn copies the Kubernetes node's
-// state into its own Node's Ready condition (reasons KubernetesNode*). The
-// core Node already has that Issue; Longhorn's own reasons (its manager pod
-// down, no mount propagation) are kept.
-func longhornSuppressesGenericConditions(group, kind string, u *unstructured.Unstructured) bool {
-	if group != longhorn.Group || kind != "Node" {
-		return false
-	}
-	conds, _, _ := unstructured.NestedSlice(u.Object, "status", "conditions")
-	for _, c := range conds {
-		m, _ := c.(map[string]any)
-		if m["type"] == "Ready" && m["status"] == "False" {
-			reason, _ := m["reason"].(string)
-			return strings.HasPrefix(reason, "KubernetesNode")
+// dedupeLonghornNodeOverCoreNode: Longhorn copies the Kubernetes node's
+// state into its own Node's Ready condition (reasons KubernetesNode*). The copy
+// is dropped only when the caller still sees an Issue on the core Node of the
+// same name, so it runs after access gating: a deleted core Node
+// (KubernetesNodeGone) or one the caller cannot read leaves it the only signal.
+// Longhorn's own reasons (its manager pod down, no mount propagation) are kept.
+func dedupeLonghornNodeOverCoreNode(in []Issue) []Issue {
+	coreNodes := map[string]bool{}
+	for _, i := range in {
+		if i.Group == "" && i.Kind == "Node" {
+			coreNodes[i.Name] = true
 		}
 	}
-	return false
+	if len(coreNodes) == 0 {
+		return in
+	}
+	out := in[:0]
+	for _, i := range in {
+		if i.Group == longhorn.Group && i.Kind == "Node" && strings.HasPrefix(i.Reason, "Ready: KubernetesNode") && coreNodes[i.Name] {
+			continue
+		}
+		out = append(out, i)
+	}
+	return out
 }

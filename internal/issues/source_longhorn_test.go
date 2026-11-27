@@ -93,27 +93,38 @@ func TestLonghornNodeIsNotACoreNode(t *testing.T) {
 	}
 }
 
-// Longhorn mirrors the Kubernetes node into its own Node's Ready condition;
-// those reasons are the core Node's Issue already, Longhorn's own are not.
-func TestLonghornNodeSuppressesMirroredNodeConditions(t *testing.T) {
-	node := func(reason string) *unstructured.Unstructured {
-		return &unstructured.Unstructured{Object: map[string]any{
-			"apiVersion": "longhorn.io/v1beta2", "kind": "Node",
-			"metadata": map[string]any{"name": "worker-1", "namespace": "longhorn-system"},
-			"status":   map[string]any{"conditions": []any{map[string]any{"type": "Ready", "status": "False", "reason": reason}}},
-		}}
+// Longhorn mirrors the Kubernetes node into its own Node's Ready condition.
+// The copy is dropped only when the caller still sees the core Node's Issue:
+// a deleted core Node, or one the caller cannot read, leaves it the only signal.
+func TestDedupeLonghornNodeOverCoreNode(t *testing.T) {
+	longhornNode := func(name, reason string) Issue {
+		return Issue{Source: SourceCondition, Group: longhorn.Group, Kind: "Node", Namespace: "longhorn-system", Name: name, Reason: "Ready: " + reason}
 	}
-	for _, reason := range []string{"KubernetesNodeNotReady", "KubernetesNodeGone", "KubernetesNodePressure"} {
-		if !longhornSuppressesGenericConditions(longhorn.Group, "Node", node(reason)) {
-			t.Errorf("%s repeats the core Node's Issue and must be suppressed", reason)
+	coreNode := Issue{Source: SourceProblem, Kind: "Node", Name: "worker-1", Reason: "NotReady"}
+	names := func(in []Issue) []string {
+		var out []string
+		for _, i := range in {
+			out = append(out, i.Group+"/"+i.Name+"/"+i.Reason)
+		}
+		return out
+	}
+
+	for _, reason := range []string{"KubernetesNodeNotReady", "KubernetesNodePressure"} {
+		got := dedupeLonghornNodeOverCoreNode([]Issue{coreNode, longhornNode("worker-1", reason)})
+		if len(got) != 1 || got[0].Group != "" {
+			t.Errorf("%s with a visible core Node Issue: got %v, want the core Node only", reason, names(got))
 		}
 	}
-	for _, reason := range []string{"ManagerPodDown", "ManagerPodMissing", "NoMountPropagationSupport"} {
-		if longhornSuppressesGenericConditions(longhorn.Group, "Node", node(reason)) {
-			t.Errorf("%s is Longhorn's own failure and must stay", reason)
+	for _, reason := range []string{"KubernetesNodeGone", "KubernetesNodeNotReady"} {
+		got := dedupeLonghornNodeOverCoreNode([]Issue{longhornNode("worker-1", reason)})
+		if len(got) != 1 {
+			t.Errorf("%s with no core Node Issue in view: got %v, want it kept", reason, names(got))
 		}
 	}
-	if longhornSuppressesGenericConditions("", "Node", node("KubernetesNodeNotReady")) {
-		t.Error("a core Node is never suppressed here")
+	if got := dedupeLonghornNodeOverCoreNode([]Issue{coreNode, longhornNode("worker-2", "KubernetesNodeNotReady")}); len(got) != 2 {
+		t.Errorf("another node's core Issue must not hide it: got %v", names(got))
+	}
+	if got := dedupeLonghornNodeOverCoreNode([]Issue{coreNode, longhornNode("worker-1", "ManagerPodDown")}); len(got) != 2 {
+		t.Errorf("Longhorn's own reason must stay: got %v", names(got))
 	}
 }
