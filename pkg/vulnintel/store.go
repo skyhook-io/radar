@@ -115,8 +115,10 @@ type Store struct {
 type feed struct {
 	source    string
 	cacheName string
-	parse     func([]byte) (any, FeedStatus, error)
-	status    FeedStatus
+	// maxBytes bounds a download: KEV is read as it comes, EPSS gzipped.
+	maxBytes int64
+	parse    func([]byte) (any, FeedStatus, error)
+	status   FeedStatus
 	// data is the parsed copy in use: *KEVCatalog or *EPSSScores.
 	data    any
 	due     time.Time
@@ -171,17 +173,17 @@ func NewStore(cfg Config) *Store {
 		cfg.RetryAfter = time.Hour
 	}
 	if cfg.Client == nil {
-		cfg.Client = &http.Client{Timeout: 2 * time.Minute}
+		cfg.Client = &http.Client{Timeout: 2 * time.Minute, CheckRedirect: noDowngrade}
 	}
 	s := &Store{cfg: cfg, loaded: make(chan struct{}), done: make(chan struct{}), kick: make(chan time.Time, 1), clock: time.Now}
-	s.kev = newFeed(cfg.KEVSource, DefaultKEVURL, cfg.NoDownloads, "kev.json", func(b []byte) (any, FeedStatus, error) {
+	s.kev = newFeed(cfg.KEVSource, DefaultKEVURL, cfg.NoDownloads, "kev.json", maxKEVBytes, func(b []byte) (any, FeedStatus, error) {
 		c, err := ParseKEV(bytes.NewReader(b))
 		if err != nil {
 			return nil, FeedStatus{}, err
 		}
 		return c, FeedStatus{Version: c.Version, Count: c.Len()}, nil
 	})
-	s.epss = newFeed(cfg.EPSSSource, DefaultEPSSURL, cfg.NoDownloads, "epss.csv.gz", func(b []byte) (any, FeedStatus, error) {
+	s.epss = newFeed(cfg.EPSSSource, DefaultEPSSURL, cfg.NoDownloads, "epss.csv.gz", maxEPSSBytes, func(b []byte) (any, FeedStatus, error) {
 		e, err := ParseEPSS(bytes.NewReader(b))
 		if err != nil {
 			return nil, FeedStatus{}, err
@@ -191,14 +193,26 @@ func NewStore(cfg Config) *Store {
 	return s
 }
 
+// noDowngrade follows redirects as Go does, except from https to plain
+// http, which would let anyone on the path rewrite the feed.
+func noDowngrade(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return errors.New("stopped after 10 redirects")
+	}
+	if via[0].URL.Scheme == "https" && req.URL.Scheme != "https" {
+		return errors.New("the feed redirected from https to http")
+	}
+	return nil
+}
+
 // newFeed resolves a source: with downloads off, a URL is off.
-func newFeed(source, public string, noDownloads bool, cacheName string, parse func([]byte) (any, FeedStatus, error)) feed {
+func newFeed(source, public string, noDownloads bool, cacheName string, maxBytes int64, parse func([]byte) (any, FeedStatus, error)) feed {
 	source = strings.TrimSpace(source)
 	blocked := noDownloads && isURL(source)
 	if blocked {
 		source = "off"
 	}
-	f := feed{source: source, cacheName: cacheName, parse: parse}
+	f := feed{source: source, cacheName: cacheName, maxBytes: maxBytes, parse: parse}
 	if off(source) {
 		f.status = FeedStatus{State: StateDisabled, DownloadsOff: blocked}
 	} else {
@@ -247,6 +261,7 @@ func (s *Store) WaitLoaded(ctx context.Context) {
 	s.ensureStarted()
 	select {
 	case <-s.loaded:
+	case <-s.done:
 	case <-ctx.Done():
 	}
 }
@@ -321,7 +336,7 @@ func epssVersion(e *EPSSScores) string {
 
 // refreshOne reloads a feed and schedules its next load.
 func (s *Store) refreshOne(ctx context.Context, f *feed) {
-	body, err := s.read(ctx, f.source)
+	body, err := s.read(ctx, f.source, f.maxBytes)
 	var data any
 	var st FeedStatus
 	if err == nil {
@@ -404,7 +419,7 @@ func writeCache(path string, body []byte) error {
 	return err
 }
 
-func (s *Store) read(ctx context.Context, source string) ([]byte, error) {
+func (s *Store) read(ctx context.Context, source string, limit int64) ([]byte, error) {
 	if !isURL(source) {
 		path := strings.TrimPrefix(source, "file://")
 		b, err := os.ReadFile(path)
@@ -434,7 +449,7 @@ func (s *Store) read(ctx context.Context, source string) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("the feed answered HTTP %d", resp.StatusCode)
 	}
-	b, err := readCapped(resp.Body, maxEPSSBytes)
+	b, err := readCapped(resp.Body, limit)
 	if err != nil {
 		return nil, err
 	}
