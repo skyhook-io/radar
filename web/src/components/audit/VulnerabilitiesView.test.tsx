@@ -7,9 +7,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useVulnerabilities, type VulnerabilitiesResponse, type VulnerabilityWorkloadRef } from '../../api/vulnerabilities'
 import { VulnerabilitiesView } from './VulnerabilitiesView'
 
+// A Radar with the KEV filter unless a test says otherwise.
+const features = vi.hoisted(() => ({ current: { vulnerabilityFeedRefresh: true } as Record<string, boolean> }))
 vi.mock('../../api/client', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../api/client')>(),
-  useCapabilities: () => ({ data: { features: {} } }),
+  useCapabilities: () => ({ data: { features: features.current } }),
   useRadarFeature: () => ({ support: 'unsupported', guard: <T,>(fn: () => T) => fn() }),
 }))
 vi.mock('../../api/apiResources', () => ({ useAPIResources: () => ({ data: [{ group: 'aquasecurity.github.io', name: 'vulnerabilityreports' }] }) }))
@@ -231,8 +233,15 @@ describe('VulnerabilitiesView', () => {
 
   it('leaves out the KEV chip and EPSS column for a Radar without the feeds', () => {
     localStorage.setItem('radar-vulnerability-columns', JSON.stringify(['cve.epss']))
-    render('/checks/vulnerabilities?by=cve&kev=1')
-    localStorage.removeItem('radar-vulnerability-columns')
+    features.current = {}
+    try {
+      render('/checks/vulnerabilities?by=cve&kev=1')
+    } finally {
+      features.current = { vulnerabilityFeedRefresh: true }
+      localStorage.removeItem('radar-vulnerability-columns')
+    }
+    // A shared link's kev=1 isn't sent to a Radar that would ignore it.
+    expect(lastParams().kev).toBe(false)
     expect(button('Known exploited')).toBeUndefined()
     expect(container.textContent).not.toContain('EPSS')
     expect(container.textContent).not.toContain('KEV')

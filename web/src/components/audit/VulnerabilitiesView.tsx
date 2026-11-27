@@ -152,7 +152,6 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
   const eolOnly = params.get('eol') === '1'
   const optional = useOptionalColumns()
   const optionalFilters = useOptionalFilters()
-  const kevOnly = params.get('kev') === '1'
   const queryDraft = params.get('q') ?? ''
   const workload = parseWorkloadParam(params.get('workload'))
   const query = useDebouncedValue(queryDraft.trim(), 300)
@@ -160,6 +159,10 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
   const { data: capabilities } = useCapabilities()
   const { data: resources } = useAPIResources()
   const java4ShellSupported = capabilities?.features?.runtimeAdvisoryChecks === true
+  // kev=1 goes only to a Radar that filters by it (it shipped with the feed
+  // refresh): an older one would answer every row under a shared link's
+  // Known exploited filter.
+  const kevOnly = params.get('kev') === '1' && capabilities?.features?.vulnerabilityFeedRefresh === true
   const reportsAbsent = java4ShellSupported && resources !== undefined && !hasVulnerabilityReports(resources)
 
   // Typing and chip toggles replace the entry; a new view or a drill-down
