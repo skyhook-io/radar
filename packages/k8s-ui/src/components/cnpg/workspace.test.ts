@@ -1,6 +1,6 @@
 import { cnpgDimensions } from './ha'
 import { describe, it, expect } from 'vitest'
-import { applyCNPGDisk, buildCNPGFleet, cnpgMatchesPostureFilter, cnpgPostureFlags, cnpgReadyInstances, cnpgRecoveryMatchesCluster, getCNPGRestoreValidation, type CNPGWorkspaceResponse, type CNPGWorkspaceKey, CNPG_WORKSPACE_KEYS } from './workspace'
+import { applyCNPGDisk, buildCNPGFleet, CNPG_POSTURE_FILTERS, cnpgMatchesPostureFilter, cnpgReadyInstances, cnpgRecoveryMatchesCluster, getCNPGRestoreValidation, type CNPGPostureFilter, type CNPGWorkspaceResponse, type CNPGWorkspaceKey, CNPG_WORKSPACE_KEYS } from './workspace'
 
 const G = 'postgresql.cnpg.io/v1'
 
@@ -692,48 +692,46 @@ it('a single-instance replica cluster does not read its replication as calm', ()
 })
 
 describe('fleet posture', () => {
-  const barman = { name: 'barman-cloud.cloudnative-pg.io', parameters: { barmanObjectName: 'store' } }
+  const finding = (name: string, checkId: string, namespace = 'db') => ({ checkId, severity: 'warning', kind: 'Cluster', namespace, name, message: checkId })
   const clusters = [
     cluster('bare', 'db', { spec: { instances: 1 } }),
-    cluster('snap', 'db', { spec: { instances: 2, backup: { volumeSnapshot: {} } } }),
-    cluster('intree', 'db', { spec: { backup: { barmanObjectStore: { destinationPath: 's3://b' } } } }),
-    // barman-cloud archives WAL whether or not it is marked isWALArchiver
-    cluster('plugin', 'db', { spec: { instances: 1, plugins: [barman] } }),
-    // a third-party plugin not marked isWALArchiver may archive: not judged on WAL
-    cluster('vendor', 'db', { spec: { plugins: [{ name: 'backup.example.com' }] } }),
-    cluster('unset', 'db', { spec: { instances: undefined, plugins: [barman] } }),
+    cluster('snap', 'db', { spec: { instances: 3, backup: { volumeSnapshot: {} } } }),
+    cluster('intree', 'db', { spec: { instances: 3, backup: { barmanObjectStore: { destinationPath: 's3://b' } } } }),
+    // Single instance by its spec, but Checks reports nothing: an ignored or annotated namespace, or a disabled Check.
+    cluster('quiet', 'scratch-system', { spec: { instances: 1 } }),
   ]
-  const fleet = buildCNPGFleet(resp({ clusters }))
+  const audit = [
+    finding('bare', 'cnpgNoBackupDestination'),
+    finding('bare', 'cnpgSingleInstance'),
+    finding('snap', 'cnpgNoWALArchiving'),
+    finding('intree', 'cnpgInTreeBackupDeprecated'),
+  ]
+  const fleet = buildCNPGFleet(resp({ clusters }, { audit }))
+  const names = (f: CNPGPostureFilter, rows = fleet.rows) => rows.filter((r) => cnpgMatchesPostureFilter(r, f)).map((r) => r.name).sort()
 
-  it('counts Clusters the way the Checks define each cause', () => {
-    expect(fleet.posture).toEqual({ total: 6, noDestination: 1, noWalArchiving: 1, singleInstance: 3, inTree: 1, withDestination: 5 })
+  it("counts the Clusters with each Check's finding, never re-deciding from the spec", () => {
+    expect(fleet.posture).toEqual({ none: 1, nowal: 1, single: 1, intree: 1 })
+    expect(names('single')).toEqual(['bare'])
   })
 
-  it('filters rows by each posture value, matching the flags', () => {
-    const names = (f: Parameters<typeof cnpgMatchesPostureFilter>[1]) => fleet.rows.filter((r) => cnpgMatchesPostureFilter(r, f)).map((r) => r.name).sort()
+  it('keeps exactly the Clusters it counts', () => {
+    for (const f of CNPG_POSTURE_FILTERS) expect(names(f)).toHaveLength(fleet.posture[f])
     expect(names('none')).toEqual(['bare'])
     expect(names('nowal')).toEqual(['snap'])
-    expect(names('single')).toEqual(['bare', 'plugin', 'unset'])
     expect(names('intree')).toEqual(['intree'])
-    expect(cnpgPostureFlags(clusters[4])).toEqual({ noDestination: false, noWalArchiving: false, singleInstance: false, inTree: false })
   })
 
-  it('keeps the counts after applyCNPGDisk rebuilds the fleet', () => {
+  it('counts a missing destination that a blocked schedule already names on the row', () => {
+    const schedule = { apiVersion: G, kind: 'ScheduledBackup', metadata: { name: 'bare-nightly', namespace: 'db' }, spec: { cluster: { name: 'bare' } } }
+    const blocked = buildCNPGFleet(resp({ clusters, scheduledBackups: [schedule] }, { audit, issues: [serverProblem('CNPGScheduleDestinationMissing', 'Backup schedule bare-nightly cannot run: no backup destination', 'ScheduledBackup', 'bare-nightly')] }))
+    expect(blocked.rows.find((r) => r.name === 'bare')!.problems.map((p) => p.id)).not.toContain('audit:cnpgNoBackupDestination:db/bare')
+    expect(blocked.posture.none).toBe(1)
+    expect(names('none', blocked.rows)).toEqual(['bare'])
+  })
+
+  it('ignores findings on other kinds and keeps the counts after applyCNPGDisk rebuilds the fleet', () => {
+    const other = buildCNPGFleet(resp({ clusters }, { audit: [...audit, { ...finding('bare', 'cnpgSingleInstance'), kind: 'Pooler' }, finding('bare', 'cnpgSingleInstance', 'elsewhere')] }))
+    expect(other.posture.single).toBe(1)
     expect(applyCNPGDisk(fleet, []).posture).toEqual(fleet.posture)
-  })
-
-  it('mirrors the Go rule on edge shapes and honours radarhq.io/ignore-checks', () => {
-    const flags = (spec: any, annotations?: Record<string, string>) => cnpgPostureFlags({ metadata: { annotations }, spec })
-    expect(flags({ instances: 3, plugins: [{ ...barman, enabled: false }] }).noDestination).toBe(true)
-    expect(flags({ instances: 3, plugins: [{ name: barman.name }] }).noDestination).toBe(true)
-    expect(flags({ instances: 3, plugins: [{ name: barman.name }], backup: { volumeSnapshot: {} } })).toMatchObject({ noDestination: false, noWalArchiving: true })
-    expect(flags({ instances: 0 }).singleInstance).toBe(true)
-    // Go truncates a float and reads anything else as CNPG's default of 1
-    expect(flags({ instances: 2.7 }).singleInstance).toBe(false)
-    expect(flags({ instances: '3' }).singleInstance).toBe(true)
-    expect(flags({ instances: 1 }, { 'radarhq.io/ignore-checks': 'hostNetwork, cnpgSingleInstance' })).toMatchObject({ singleInstance: false, noDestination: true })
-    expect(flags({ instances: 1 }, { 'radarhq.io/ignore-checks': 'cnpgNoBackupDestination' })).toMatchObject({ singleInstance: true, noDestination: false })
-    const ignoredBare = buildCNPGFleet(resp({ clusters: [cluster('quiet', 'db', { metadata: { annotations: { 'radarhq.io/ignore-checks': 'cnpgNoBackupDestination' } } })] }))
-    expect(ignoredBare.posture).toMatchObject({ noDestination: 0, withDestination: 0 })
   })
 })

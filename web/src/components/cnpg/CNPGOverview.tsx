@@ -13,6 +13,7 @@ import {
   Tooltip,
   toneTextClass,
   usePhoneLayout,
+  type CNPGFleetPosture,
   type CNPGFleetRow,
   type CNPGPostureFilter,
   type CNPGProblemCategory,
@@ -199,42 +200,35 @@ const POSTURE_LABELS: Record<CNPGPostureFilter, string> = {
   intree: 'In-tree backup',
 }
 
-// What CNPG is configured to do across the fleet, counted as the posture
-// Checks define each cause. Each count but the last narrows the table.
+// Clusters with each posture Check's finding, as Checks reports them. Each count narrows the table.
 function PostureSummary({ posture, lowerBound, active, onToggle }: {
-  posture: { noDestination: number; noWalArchiving: number; singleInstance: number; inTree: number; withDestination: number }
+  posture: CNPGFleetPosture
   lowerBound: boolean
   active: CNPGPostureFilter | null
   onToggle: (filter: CNPGPostureFilter) => void
 }) {
-  const n = (v: number) => lowerBound ? v === 0 ? '–' : `≥${v}` : String(v)
   // Posture is stated without a mark, as on every CNPG surface: no tone on the counts.
-  const items: { id: CNPGPostureFilter; value: number }[] = [
-    { id: 'none', value: posture.noDestination },
-    { id: 'nowal', value: posture.noWalArchiving },
-    { id: 'single', value: posture.singleInstance },
-    { id: 'intree', value: posture.inTree },
-  ]
   return (
     <div role="group" className="flex flex-wrap items-center gap-2 text-xs" aria-label="Backup and availability configuration">
-      {items.map(({ id, value }) => {
+      {CNPG_POSTURE_FILTERS.map((id) => {
+        const value = posture[id]
+        const text = lowerBound ? value === 0 ? '–' : `≥${value}` : String(value)
         const on = active === id
         return (
           <button
             key={id}
             type="button"
             aria-pressed={on}
-            aria-label={`${POSTURE_LABELS[id]}: ${lowerBound && value === 0 ? 'unknown' : n(value)}`}
+            aria-label={`${POSTURE_LABELS[id]}: ${lowerBound && value === 0 ? 'unknown' : text}`}
             disabled={value === 0 && !on}
             onClick={() => onToggle(id)}
             className={clsx(
               'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 transition-colors',
               on ? 'border-accent bg-accent-muted text-accent-text' : 'border-theme-border text-theme-text-secondary enabled:hover:bg-theme-hover disabled:opacity-60',
             )}
-          ><span>{POSTURE_LABELS[id]}</span><span className="font-mono">{n(value)}</span></button>
+          ><span>{POSTURE_LABELS[id]}</span><span className="font-mono">{text}</span></button>
         )
       })}
-      <span className="inline-flex items-center gap-1.5 px-1 text-theme-text-tertiary"><span>With a destination</span><span className="font-mono">{n(posture.withDestination)}</span></span>
     </div>
   )
 }

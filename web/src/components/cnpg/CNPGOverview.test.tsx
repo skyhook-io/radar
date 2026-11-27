@@ -23,8 +23,8 @@ const cluster = (namespace: string, name: string) => ({
   status: { phase: 'Cluster in healthy state', readyInstances: 1 },
 })
 
-function response(clusters: ReturnType<typeof cluster>[], coverage: CNPGKindCoverage = { state: 'full' }): CNPGWorkspaceResponse {
-  return { installed: true, context: 'kind-test', namespaces: null, coverage: { clusters: coverage }, objects: { clusters }, issues: [], audit: [], backupsOmitted: 0 }
+function response(clusters: ReturnType<typeof cluster>[], coverage: CNPGKindCoverage = { state: 'full' }, audit: CNPGWorkspaceResponse['audit'] = []): CNPGWorkspaceResponse {
+  return { installed: true, context: 'kind-test', namespaces: null, coverage: { clusters: coverage }, objects: { clusters }, issues: [], audit, backupsOmitted: 0 }
 }
 
 function render(resp: CNPGWorkspaceResponse, query = '', opts: { attention?: string[]; onCreate?: () => void; namespaces?: string[] } = {}) {
@@ -172,26 +172,32 @@ it('uses an unknown sidebar count and tooltip for zero over partial coverage', (
 
 describe('CNPGOverview posture summary', () => {
   const withSpec = (name: string, spec: { instances: number } & Record<string, unknown>) => ({ ...cluster('pg', name), spec })
+  const finding = (name: string, checkId: string) => ({ checkId, severity: 'warning', kind: 'Cluster', namespace: 'pg', name, message: checkId })
   const count = (html: string, label: string) => html.match(new RegExp(`${label}</span><span[^>]*>([^<]+)<`))?.[1]
+  const bareAndIntree = () => response(
+    [withSpec('bare', { instances: 1 }), withSpec('intree', { instances: 3, backup: { barmanObjectStore: { destinationPath: 's3://b' } } })],
+    { state: 'full' },
+    [finding('bare', 'cnpgNoBackupDestination'), finding('bare', 'cnpgSingleInstance'), finding('intree', 'cnpgInTreeBackupDeprecated')],
+  )
 
-  it('counts what CNPG is configured to do above the table', () => {
-    const html = render(response([withSpec('a', { instances: 1 }), withSpec('b', { instances: 1 })]))
-    expect(count(html, 'No backup destination')).toBe('2')
-    expect(count(html, 'Single instance')).toBe('2')
-    expect(count(html, 'With a destination')).toBe('0')
-    expect(html).toMatch(/<div role="group"[^>]*aria-label="Backup and availability configuration"/)
-    expect(html).toContain('aria-label="Single instance: 2"')
+  it("counts the Checks' findings above the table, in neutral text", () => {
+    const html = render(bareAndIntree())
+    expect(count(html, 'No backup destination')).toBe('1')
+    expect(count(html, 'Single instance')).toBe('1')
+    expect(count(html, 'In-tree backup')).toBe('1')
     expect(count(html, 'No WAL archiving')).toBe('0')
+    expect(html).toMatch(/<div role="group"[^>]*aria-label="Backup and availability configuration"/)
+    expect(html).toMatch(/Single instance<\/span><span class="font-mono">1</)
+    expect(html).not.toContain('With a destination')
   })
 
-  it('states posture counts without a tone, like posture everywhere', () => {
-    const html = render(response([withSpec('a', { instances: 1 })]))
-    expect(html).toMatch(/No backup destination<\/span><span class="font-mono">1</)
-    expect(html).toMatch(/Single instance<\/span><span class="font-mono">1</)
+  it('does not count a single-instance spec that Checks reports nothing for', () => {
+    const html = render(response([withSpec('a', { instances: 1 }), withSpec('b', { instances: 1 })], { state: 'full' }, [finding('a', 'cnpgSingleInstance')]))
+    expect(count(html, 'Single instance')).toBe('1')
   })
 
   it('narrows the table to one posture value, with a chip to clear it', () => {
-    const html = render(response([withSpec('bare', { instances: 3 }), withSpec('intree', { instances: 3, backup: { barmanObjectStore: { destinationPath: 's3://b' } } })]), 'protect=none')
+    const html = render(bareAndIntree(), 'protect=none')
     expect(html).toContain('bare')
     expect(html).not.toContain('>intree<')
     expect(html).toContain('Posture: No backup destination')
@@ -199,14 +205,14 @@ describe('CNPGOverview posture summary', () => {
   })
 
   it('shows counts as lower bounds when Clusters were partly read', () => {
-    const html = render(response([withSpec('a', { instances: 1 }), withSpec('b', { instances: 1 })], { state: 'partial', allowedNamespaces: ['pg'] } as CNPGKindCoverage))
+    const html = render(response([withSpec('a', { instances: 1 }), withSpec('b', { instances: 1 })], { state: 'partial', allowedNamespaces: ['pg'] } as CNPGKindCoverage, [finding('a', 'cnpgSingleInstance'), finding('b', 'cnpgSingleInstance')]))
     expect(count(html, 'Single instance')).toBe('≥2')
-    expect(count(html, 'With a destination')).toBe('–')
+    expect(count(html, 'No WAL archiving')).toBe('–')
     expect(html).toContain('aria-label="No WAL archiving: unknown"')
   })
 
   it('ignores an unknown protect value', () => {
-    const html = render(response([withSpec('bare', { instances: 3 }), withSpec('intree', { instances: 3, backup: { barmanObjectStore: { destinationPath: 's3://b' } } })]), 'protect=bogus')
+    const html = render(bareAndIntree(), 'protect=bogus')
     expect(html).toContain('bare')
     expect(html).toContain('intree')
     expect(html).not.toContain('Posture:')
@@ -217,4 +223,5 @@ describe('CNPGOverview posture summary', () => {
     expect(html).toContain('No clusters match these filters')
     expect(html).not.toContain('No clusters need attention')
   })
+
 })
