@@ -129,6 +129,12 @@ func resolveOwners(ctx context.Context, cache *k8s.ResourceCache, refs []Workloa
 			ns = ""
 		}
 		ref := resourceid.NewRef(w.Group, w.Kind, ns, w.Name)
+		if acc.CanRead(ref.GroupKind(), ns) != ownership.Allowed {
+			// Nothing of an object the caller can't read, its labels
+			// included: unknown.
+			out = append(out, WorkloadOwner{WorkloadRef: w, ManagerUnknown: true})
+			continue
+		}
 		obj, read := rs.Borrow(ref)
 		if read.State == ownership.Unavailable || read.State == ownership.Absent {
 			// Its store couldn't say, or Pods still name a controller that

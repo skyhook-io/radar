@@ -211,9 +211,9 @@ func TestResolveOwnersReadsOnlyWhatTheCallerMay(t *testing.T) {
 	// A caller who can't read the Deployment itself gets unknown, not
 	// "none found".
 	hidden := denyKinds{{Group: "apps", Kind: "Deployment"}}
-	owners, _, err = resolveOwners(context.Background(), cache, ownerRefs[3:], func(*ownership.Catalog) ownership.Access { return hidden }, TeamLabel)
-	if err != nil || len(owners) != 1 || !owners[0].ManagerUnknown || owners[0].Manager != nil {
-		t.Errorf("unreadable workload = %+v, %v; want unknown", owners, err)
+	owners, _, err = resolveOwners(context.Background(), cache, ownerRefs[:1], func(*ownership.Catalog) ownership.Access { return hidden }, TeamLabel)
+	if err != nil || len(owners) != 1 || !owners[0].ManagerUnknown || owners[0].Manager != nil || owners[0].Team != "" {
+		t.Errorf("unreadable workload = %+v, %v; want unknown, without its team label", owners, err)
 	}
 }
 
