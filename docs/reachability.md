@@ -179,7 +179,7 @@ The UI shows the verdict at the top of the panel with a one-sentence reason. Tre
 An exposed workload (one with a LoadBalancer, NodePort, Ingress or Gateway API route) offers **Check reachability** on the Vulnerabilities page. It runs the same in-cluster probe for the Service ports behind the workload's routes, through `GET|POST /api/vulnerabilities/reachability/{kind}/{namespace}/{name}`:
 
 - Only Services that select the workload's Pods are probed, so an Ingress in front of several workloads probes only this one.
-- Every probe Pod runs in the workload's namespace, at most 5 for the whole check, under the same permission check and consent dialog as the in-cluster test.
+- Every probe Pod runs in the workload's namespace, at most 5 for the whole check, under the same permission check and consent dialog as the in-cluster test. A run carries the cluster the user confirmed, and is refused (409, nothing created) if Radar has switched clusters since.
 - A result says what it proves: the Service answers from inside the cluster. The load balancer, node port, Ingress controller and access from the internet are not tested.
 - It runs only on a click. The last result stays for the browser tab's session, a reload included (in `sessionStorage`); it is never stored on the server, shown as a column or exported.
 - Every run is logged by Radar with the workload and how many Service ports it probes, with or without authentication; with authentication it is also audit-logged.
