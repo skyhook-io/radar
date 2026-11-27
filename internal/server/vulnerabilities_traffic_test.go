@@ -14,16 +14,17 @@ import (
 )
 
 // One fetch answers every read for vulnTrafficFresh; a fetch slower than
-// vulnTrafficWait leaves the page without the marks rather than holding it;
-// and a new traffic manager (a context switch) never gets the old answer.
+// the wait leaves the page without the marks rather than holding it; and a
+// new traffic manager (a context switch) never gets the old answer.
 func TestVulnerabilityTrafficMemo(t *testing.T) {
 	var memo vulnTrafficMemo
 	var calls atomic.Int32
 	ev := vulnerabilities.NewTrafficEvidence("caretta", time.Minute, false, nil, nil)
-	fetch := func(context.Context) *vulnerabilities.TrafficEvidence { calls.Add(1); return ev }
+	active := func() string { return "caretta" }
+	fetch := func(context.Context) (*vulnerabilities.TrafficEvidence, bool) { calls.Add(1); return ev, true }
 	mgr := &traffic.Manager{}
 	for range 3 {
-		if got := memo.get(context.Background(), mgr, fetch); got != ev {
+		if got := memo.get(context.Background(), mgr, active, vulnTrafficWait, fetch); got != ev {
 			t.Fatalf("got %v", got)
 		}
 	}
@@ -32,14 +33,66 @@ func TestVulnerabilityTrafficMemo(t *testing.T) {
 	}
 
 	release := make(chan struct{})
-	slow := func(context.Context) *vulnerabilities.TrafficEvidence { <-release; return ev }
+	slow := func(context.Context) (*vulnerabilities.TrafficEvidence, bool) { <-release; return ev, true }
 	other := &traffic.Manager{}
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	if got := memo.get(ctx, other, slow); got != nil {
+	if got := memo.get(ctx, other, active, vulnTrafficWait, slow); got != nil {
 		t.Fatalf("a new cluster got the old answer: %v", got)
 	}
 	close(release)
+}
+
+// Switching the active source on the same manager drops the old source's
+// answer, and a fetch of the old source that ends after the switch doesn't
+// publish.
+func TestVulnerabilityTrafficMemoSourceSwitch(t *testing.T) {
+	var memo vulnTrafficMemo
+	mgr := &traffic.Manager{}
+	source := "hubble"
+	active := func() string { return source }
+	hubble := vulnerabilities.NewTrafficEvidence("hubble", time.Minute, true, nil, nil)
+	if got := memo.get(context.Background(), mgr, active, vulnTrafficWait, func(context.Context) (*vulnerabilities.TrafficEvidence, bool) { return hubble, true }); got != hubble {
+		t.Fatalf("got %v", got)
+	}
+	source = "caretta"
+	release := make(chan struct{})
+	late := func(context.Context) (*vulnerabilities.TrafficEvidence, bool) { <-release; return hubble, true }
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if got := memo.get(ctx, mgr, active, vulnTrafficWait, late); got != nil {
+		t.Fatalf("after the switch: %v", got)
+	}
+	close(release)
+	time.Sleep(20 * time.Millisecond)
+	memo.mu.Lock()
+	defer memo.mu.Unlock()
+	if memo.ev != nil {
+		t.Fatalf("the old source's late answer was published: %v", memo.ev)
+	}
+}
+
+// A fetch that fails keeps the last good answer standing, and is asked
+// again only after vulnTrafficFresh.
+func TestVulnerabilityTrafficMemoKeepsAnswerOnFailure(t *testing.T) {
+	var memo vulnTrafficMemo
+	mgr := &traffic.Manager{}
+	active := func() string { return "beyla" }
+	ev := vulnerabilities.NewTrafficEvidence("beyla", time.Minute, false, nil, nil)
+	memo.get(context.Background(), mgr, active, vulnTrafficWait, func(context.Context) (*vulnerabilities.TrafficEvidence, bool) { return ev, true })
+	memo.mu.Lock()
+	memo.tried = memo.tried.Add(-vulnTrafficFresh)
+	memo.mu.Unlock()
+	var calls atomic.Int32
+	failing := func(context.Context) (*vulnerabilities.TrafficEvidence, bool) { calls.Add(1); return nil, false }
+	for range 2 {
+		if got := memo.get(context.Background(), mgr, active, vulnTrafficWait, failing); got != ev {
+			t.Fatalf("a failed fetch replaced the answer: %v", got)
+		}
+	}
+	if n := calls.Load(); n != 1 {
+		t.Fatalf("%d fetches after a failure", n)
+	}
 }
 
 // A node is a node however a source names it: by name, by an address the

@@ -43,7 +43,10 @@ import (
 // Traffic (the workloads Live Traffic saw receive connections) comes from
 // one fetch of the active traffic source, shared across callers (see
 // vulnerabilityTraffic) and read with Radar's identity as the Traffic view
-// is; the answer lists only workloads this caller's read returned.
+// is; the answer lists only workloads this caller's read returned. Without
+// an answer, traffic=1 keeps every row on a page, whose chip then says the
+// filter isn't applied; an export with traffic=1 is a 503 instead, since a
+// file can't say so.
 func (s *Server) handleVulnerabilities(w http.ResponseWriter, r *http.Request) {
 	resp, ok := s.readVulnerabilities(w, r, false)
 	if ok {
@@ -174,6 +177,21 @@ func (s *Server) readVulnerabilities(w http.ResponseWriter, r *http.Request, exp
 		}
 	}
 
+	filter := vulnerabilityFilter(r)
+	// A filtered export's rows depend on the traffic answer, so it waits for
+	// a fetch to finish; a page loads without the marks rather than wait.
+	trafficWait := vulnTrafficWait
+	if export && filter.TrafficSeenOnly {
+		trafficWait = vulnTrafficFetchTimeout
+	}
+	traffic := trafficFor(r.Context(), view, trafficWait)
+	if export && filter.TrafficSeenOnly && traffic == nil && view != vulnerabilities.ViewSummary {
+		if r.Context().Err() == nil {
+			s.writeError(w, http.StatusServiceUnavailable, "Live Traffic didn't answer, so the Traffic seen filter can't be applied. Try again, or export without it.")
+		}
+		return vulnerabilities.Response{}, false
+	}
+
 	namespaces, checkFailed := s.parseNamespacesForUserWithStatus(r)
 	routeNamespaces, routeCheckFailed := s.routeNamespacesForUser(r)
 	resp, err := vulnerabilities.Read(r.Context(), k8s.GetResourceCache(), vulnerabilities.Request{
@@ -183,9 +201,9 @@ func (s *Server) readVulnerabilities(w http.ResponseWriter, r *http.Request, exp
 		RouteCeiling:         !routeCheckFailed,
 		ReportAccess:         s.searchKindAccess(r, s.computeSearchKindRBAC(r)),
 		View:                 view,
-		Filter:               vulnerabilityFilter(r),
+		Filter:               filter,
 		Export:               export,
-		Traffic:              trafficFor(r.Context(), view),
+		Traffic:              traffic,
 	})
 	if err != nil {
 		if r.Context().Err() != nil {

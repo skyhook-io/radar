@@ -26,23 +26,32 @@ const (
 	vulnTrafficWindow = 15 * time.Minute
 	// vulnTrafficFresh is how long one fetch answers every request.
 	vulnTrafficFresh = time.Minute
-	// vulnTrafficStale is how long an older answer still stands in while a
-	// new fetch runs past vulnTrafficWait.
-	vulnTrafficStale = 5 * time.Minute
-	// vulnTrafficWait is the most a vulnerabilities read waits on a fetch:
-	// past it the page loads without the marks, which arrive on a later
-	// refresh.
+	// vulnTrafficStale is how old an answer may be and still stand in, while
+	// a new fetch runs past the wait or after one failed. The window the
+	// page states is counted from the fetch, so this bounds how far the
+	// claim can lag.
+	vulnTrafficStale = 2 * time.Minute
+	// vulnTrafficWait is the most a page read waits on a fetch: past it the
+	// page loads without the marks, which arrive on a later refresh.
 	vulnTrafficWait = 3 * time.Second
-	// vulnTrafficFetchTimeout bounds one fetch, detection included.
+	// vulnTrafficFetchTimeout bounds one fetch, detection included. A
+	// filtered export waits this long, since its rows depend on the answer.
 	vulnTrafficFetchTimeout = 30 * time.Second
 )
 
 type vulnTrafficMemo struct {
 	mu sync.Mutex
-	// manager is the traffic manager the answer came from; a context
-	// switch builds a new one, so an answer never outlives its cluster.
+	// manager and source are what the answer came from: a context switch
+	// builds a new manager, and the Traffic view can switch the active
+	// source on the same one, so an answer never outlives either.
 	manager *traffic.Manager
-	at      time.Time
+	source  string
+	// gen changes with manager or source, so a fetch that started before
+	// the change doesn't publish after it.
+	gen uint64
+	// at is when ev was read; tried is when the last fetch ended, answered
+	// or not, so a failing source is asked once per vulnTrafficFresh.
+	at, tried time.Time
 	// ev is nil when no source answered; that is remembered too, so a
 	// cluster without one isn't asked on every read.
 	ev *vulnerabilities.TrafficEvidence
@@ -54,46 +63,57 @@ var vulnTraffic vulnTrafficMemo
 
 // trafficFor is vulnerabilityTraffic for a view with rows to mark; the
 // summary view's counts never read the source.
-func trafficFor(ctx context.Context, view vulnerabilities.View) *vulnerabilities.TrafficEvidence {
+func trafficFor(ctx context.Context, view vulnerabilities.View, wait time.Duration) *vulnerabilities.TrafficEvidence {
 	if view == vulnerabilities.ViewSummary {
 		return nil
 	}
-	return vulnerabilityTraffic(ctx)
+	return vulnerabilityTraffic(ctx, wait)
 }
 
 // vulnerabilityTraffic is what Live Traffic saw for the Vulnerabilities
 // view, or nil when no source is active and connected (or it is still
 // being read).
-func vulnerabilityTraffic(ctx context.Context) *vulnerabilities.TrafficEvidence {
+func vulnerabilityTraffic(ctx context.Context, wait time.Duration) *vulnerabilities.TrafficEvidence {
 	mgr := traffic.GetManager()
 	if mgr == nil {
 		return nil
 	}
-	return vulnTraffic.get(ctx, mgr, func(ctx context.Context) *vulnerabilities.TrafficEvidence {
+	return vulnTraffic.get(ctx, mgr, mgr.GetActiveSourceName, wait, func(ctx context.Context) (*vulnerabilities.TrafficEvidence, bool) {
 		return fetchVulnerabilityTraffic(ctx, mgr)
 	})
 }
 
-func (m *vulnTrafficMemo) get(ctx context.Context, mgr *traffic.Manager, fetch func(context.Context) *vulnerabilities.TrafficEvidence) *vulnerabilities.TrafficEvidence {
+// get answers from the memo, fetching when it is older than vulnTrafficFresh.
+// fetch reports ok=false for an answer that failed, which keeps the last good
+// one standing until it is vulnTrafficStale old.
+func (m *vulnTrafficMemo) get(ctx context.Context, mgr *traffic.Manager, active func() string, wait time.Duration, fetch func(context.Context) (*vulnerabilities.TrafficEvidence, bool)) *vulnerabilities.TrafficEvidence {
 	m.mu.Lock()
-	if m.manager != mgr {
-		m.manager, m.at, m.ev, m.fetching = mgr, time.Time{}, nil, nil
+	if source := active(); m.manager != mgr || m.source != source {
+		m.manager, m.source, m.gen = mgr, source, m.gen+1
+		m.at, m.tried, m.ev, m.fetching = time.Time{}, time.Time{}, nil, nil
 	}
-	if !m.at.IsZero() && time.Since(m.at) < vulnTrafficFresh {
-		ev := m.ev
+	if !m.tried.IsZero() && time.Since(m.tried) < vulnTrafficFresh {
+		ev := m.standing()
 		m.mu.Unlock()
 		return ev
 	}
+	gen := m.gen
 	if m.fetching == nil {
 		done := make(chan struct{})
 		m.fetching = done
 		go func() {
 			fctx, cancel := context.WithTimeout(context.Background(), vulnTrafficFetchTimeout)
 			defer cancel()
-			ev := fetch(fctx)
+			ev, ok := fetch(fctx)
+			// A fetch that detected the source publishes under it; one that
+			// read a source since switched away from publishes nothing.
+			after := active()
 			m.mu.Lock()
-			if m.manager == mgr {
-				m.ev, m.at = ev, time.Now()
+			if m.gen == gen && (m.source == after || m.source == "") && (ev == nil || ev.Source == after) {
+				m.source, m.tried = after, time.Now()
+				if ok {
+					m.ev, m.at = ev, m.tried
+				}
 			}
 			if m.fetching == done {
 				m.fetching = nil
@@ -103,22 +123,19 @@ func (m *vulnTrafficMemo) get(ctx context.Context, mgr *traffic.Manager, fetch f
 		}()
 	}
 	done := m.fetching
-	var stale *vulnerabilities.TrafficEvidence
-	if !m.at.IsZero() && time.Since(m.at) < vulnTrafficStale {
-		stale = m.ev
-	}
+	stale := m.standing()
 	m.mu.Unlock()
 
-	timer := time.NewTimer(vulnTrafficWait)
+	timer := time.NewTimer(wait)
 	defer timer.Stop()
 	select {
 	case <-done:
 		m.mu.Lock()
 		defer m.mu.Unlock()
-		if m.manager != mgr {
+		if m.gen != gen {
 			return nil
 		}
-		return m.ev
+		return m.standing()
 	case <-timer.C:
 		return stale
 	case <-ctx.Done():
@@ -126,32 +143,47 @@ func (m *vulnTrafficMemo) get(ctx context.Context, mgr *traffic.Manager, fetch f
 	}
 }
 
+// standing is the answer while it is younger than vulnTrafficStale. Callers
+// hold mu.
+func (m *vulnTrafficMemo) standing() *vulnerabilities.TrafficEvidence {
+	if m.at.IsZero() || time.Since(m.at) >= vulnTrafficStale {
+		return nil
+	}
+	return m.ev
+}
+
 // fetchVulnerabilityTraffic reads the active source's window. It reuses a
-// recent detection, as the workload pages do, and answers nil when no
-// source is active or it answered nothing usable (Hubble before the Traffic
-// view connected to it, a failed query).
-func fetchVulnerabilityTraffic(ctx context.Context, mgr *traffic.Manager) *vulnerabilities.TrafficEvidence {
+// recent detection, as the workload pages do. It answers nil, ok when no
+// source is active, and ok=false when the source couldn't answer this time
+// (busy, Hubble before the Traffic view connected to it, a failed query).
+func fetchVulnerabilityTraffic(ctx context.Context, mgr *traffic.Manager) (*vulnerabilities.TrafficEvidence, bool) {
 	name, idle := mgr.ActiveSourceNameIfIdle()
 	if !idle {
-		return nil
+		return nil, false
 	}
 	if name == "" {
 		if _, err := mgr.RecentSources(ctx, recentSourcesMaxAge); err != nil {
-			return nil
+			return nil, false
 		}
 		if mgr.GetActiveSourceName() == "" {
-			return nil
+			return nil, true
 		}
 	}
 	resp, err := mgr.GetFlows(ctx, traffic.FlowOptions{Since: vulnTrafficWindow, FromOutsideOnly: true, RecentOnly: true})
 	if err != nil || resp == nil {
-		return nil
+		return nil, false
+	}
+	// A metrics store holding several clusters' traffic that Radar couldn't
+	// narrow to this one: a workload's name alone can't say whose traffic it
+	// was.
+	if resp.WarningClusterScope {
+		return nil, true
 	}
 	// An empty answer with a warning is a source that couldn't read: not
 	// connected yet, or its query failed. With flows, a warning only says
 	// some may be missing, and what was seen still was.
 	if len(resp.Flows) == 0 && resp.Warning != "" {
-		return nil
+		return nil, false
 	}
 	cache := k8s.GetResourceCache()
 	flows := resolveFlowWorkloads(cache, resp.Flows)
@@ -164,7 +196,7 @@ func fetchVulnerabilityTraffic(ctx context.Context, mgr *traffic.Manager) *vulne
 	}
 	ev := vulnerabilities.NewTrafficEvidence(resp.Source, window, limited, flows, clusterNodes(cache))
 	log.Printf("[vulnerabilities] Live Traffic (%s) saw %d workloads receive connections in %s", resp.Source, ev.Len(), window)
-	return ev
+	return ev, true
 }
 
 // nodeAddressAnnotations are where CNIs record the address a node's own

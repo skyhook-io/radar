@@ -571,7 +571,7 @@ func buildWith(ctx context.Context, items []*unstructured.Unstructured, targets 
 	j.refsLeft, j.budgeted = maxExportRefs, export
 	j.exposureGaps, j.unknownIn = exposure, map[string]bool{}
 	j.traffic = newTrafficIndex(traffic, targets)
-	resp := Response{Source: SourceTrivyOperator, View: view, Summary: j.summary(), Exposure: &Exposure{}, Traffic: j.traffic.answer(targets, lim.rows)}
+	resp := Response{Source: SourceTrivyOperator, View: view, Summary: j.summary(), Exposure: &Exposure{}, Traffic: j.traffic.answer(targets, lim.rows, j.exposed)}
 	extras := &exportExtras{}
 	resp.WorkloadRuns = f.Workload != nil && slices.ContainsFunc(targets, func(t target) bool { return newMatcher(f).wanted(t.workload) })
 	if view != ViewSummary {

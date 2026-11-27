@@ -118,11 +118,43 @@ func receiver(f pkgtraffic.Flow, fromOutside bool, isNode func(pkgtraffic.Endpoi
 	if nodeLike(s) || (isNode != nil && isNode(s)) {
 		return "", "", "", false
 	}
-	// A workload's own replicas talking to each other aren't callers.
-	if s.Namespace == d.Namespace && cmp.Or(s.Workload, s.Name) == name {
+	// A caller the source couldn't attribute (Istio's "unknown" peer) may
+	// be a node too.
+	if unattributed(s) {
 		return "", "", "", false
 	}
+	// A workload's own replicas talking to each other aren't callers. Two
+	// kinds sharing a name are two workloads when both kinds are known.
+	if s.Namespace == d.Namespace && cmp.Or(s.Workload, s.Name) == name {
+		if sk := endpointWorkloadKind(s); sk == "" || kind == "" || strings.EqualFold(sk, kind) {
+			return "", "", "", false
+		}
+	}
 	return d.Namespace, name, kind, true
+}
+
+// endpointWorkloadKind is the kind of the workload an endpoint belongs to,
+// when the source names one.
+func endpointWorkloadKind(e pkgtraffic.Endpoint) string {
+	if e.WorkloadKind != "" {
+		return e.WorkloadKind
+	}
+	if e.Workload == "" && strings.EqualFold(e.Kind, pkgtraffic.EndpointKindPod) {
+		return "Pod"
+	}
+	if !strings.EqualFold(e.Kind, pkgtraffic.EndpointKindPod) && !strings.EqualFold(e.Kind, pkgtraffic.EndpointKindWorkload) {
+		return e.Kind
+	}
+	return ""
+}
+
+// unattributed is a caller with no identity: no name and no address, or
+// the "unknown" a metrics source records for a peer it couldn't identify.
+func unattributed(e pkgtraffic.Endpoint) bool {
+	if e.IP != "" {
+		return false
+	}
+	return cmp.Or(e.Workload, e.Name) == "" || strings.EqualFold(e.Name, "unknown") || strings.EqualFold(e.Namespace, "unknown")
 }
 
 // Caretta files a node under namespace and kind "node", and an address it
@@ -187,7 +219,9 @@ func (ix *trafficIndex) seen(w WorkloadRef) bool {
 }
 
 // answer is the wire Traffic for the workloads in targets, at most n listed.
-func (ix *trafficIndex) answer(targets []target, n int) *Traffic {
+// The page marks only exposed workloads, so they are listed first and a cap
+// leaves out unexposed ones before any it would mark.
+func (ix *trafficIndex) answer(targets []target, n int, exposed func(WorkloadRef) bool) *Traffic {
 	if ix == nil {
 		return nil
 	}
@@ -207,8 +241,14 @@ func (ix *trafficIndex) answer(targets []target, n int) *Traffic {
 			t.Workloads = append(t.Workloads, w)
 		}
 	}
+	rank := func(w WorkloadRef) int {
+		if exposed != nil && exposed(w) {
+			return 0
+		}
+		return 1
+	}
 	slices.SortFunc(t.Workloads, func(a, b WorkloadRef) int {
-		return cmp.Or(cmp.Compare(a.Namespace, b.Namespace), cmp.Compare(a.Name, b.Name), cmp.Compare(a.Kind, b.Kind))
+		return cmp.Or(cmp.Compare(rank(a), rank(b)), cmp.Compare(a.Namespace, b.Namespace), cmp.Compare(a.Name, b.Name), cmp.Compare(a.Kind, b.Kind))
 	})
 	t.WorkloadsTotal = len(t.Workloads)
 	t.Workloads = t.Workloads[:min(len(t.Workloads), n)]

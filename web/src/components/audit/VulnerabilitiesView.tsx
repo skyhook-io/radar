@@ -224,7 +224,10 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
   // Live Traffic's optional chip: only a positive signal, so it shows only
   // when a source answered and saw something, or while a link sets it.
   const traffic = data.traffic
-  const trafficChip = !!traffic && (trafficOnly || (optionalFilters.shown('traffic') && traffic.workloadsTotal > 0))
+  // A link can set the filter where no source answered this read: the chip
+  // then stays, saying it isn't applied, rather than the rows silently
+  // ignoring it.
+  const trafficChip = trafficOnly || (!!traffic && optionalFilters.shown('traffic') && traffic.workloadsTotal > 0)
   const filtered = severities.length > 0 || (fixableOnly && view !== 'fix') || (exposedOnly && !!exposure) || (eolOnly && eolCount !== undefined) || (trafficOnly && !!traffic) || query !== '' || !!workload
   // Narrowed only to a workload whose images are all clean or unscanned:
   // the folds below list them, so "nothing matches" would mislead.
@@ -250,7 +253,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
           <div className="flex items-center gap-2">
             <FreshnessControl mode="auto" dataUpdatedAt={dataUpdatedAt} isFetching={isFetching} onRefresh={() => refetch()} connectionState={connection.state} />
             <PageMenu
-              params={tableParams}
+              params={{ ...tableParams, trafficSeen: trafficOnly && !!traffic }}
               cluster={connection.clusterName || connection.context}
               columns={data.view === view ? availableColumns(view, data).map((c) => ({ key: c.key, label: c.label, shown: optional.shown.has(c.key) })) : []}
               onToggleColumn={optional.toggle}
@@ -308,13 +311,13 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
               onClick={() => update((p) => (exposedOnly ? p.delete('exposed') : p.set('exposed', '1')))}
             />
           )}
-          {trafficChip && traffic && (
+          {trafficChip && (
             <FilterPill
-              label={TRAFFIC_FILTER.chip(traffic)}
+              label={traffic ? TRAFFIC_FILTER.chip(traffic) : TRAFFIC_FILTER.unanswered.chip}
               icon={Activity}
-              count={traffic.workloadsTotal}
-              tooltip={TRAFFIC_FILTER.chipTip(traffic)}
-              active={trafficOnly}
+              count={traffic?.workloadsTotal}
+              tooltip={traffic ? TRAFFIC_FILTER.chipTip(traffic) : TRAFFIC_FILTER.unanswered.tip}
+              active={trafficOnly && !!traffic}
               onClick={() => update((p) => (trafficOnly ? p.delete('traffic') : p.set('traffic', '1')))}
             />
           )}

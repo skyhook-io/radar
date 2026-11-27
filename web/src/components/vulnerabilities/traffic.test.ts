@@ -20,6 +20,8 @@ describe('Traffic on the Exposed mark', () => {
     expect(TRAFFIC_FILTER.chipTip(caretta)).toContain('in the last 15 minutes')
     expect(TRAFFIC_FILTER.chipTip(caretta)).toContain('may still be reachable')
     expect(TRAFFIC_FILTER.chipTip(hubble)).toContain('from outside the cluster')
+    expect(TRAFFIC_FILTER.chipTip(hubble)).toContain("as far back as Hubble's flow history reaches")
+    expect(TRAFFIC_FILTER.unanswered.tip).toContain("isn't applied")
   })
 
   it('states the window', () => {
@@ -27,6 +29,7 @@ describe('Traffic on the Exposed mark', () => {
     expect(trafficWindowText(60)).toBe('1 minute')
     expect(trafficWindowText(3600)).toBe('1 hour')
     expect(trafficWindowText(40)).toBe('40 seconds')
+    expect(trafficWindowText(877)).toBe('14 minutes')
   })
 
   it('says outside the cluster only for a source that can tell', () => {

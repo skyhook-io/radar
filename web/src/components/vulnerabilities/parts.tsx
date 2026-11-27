@@ -195,7 +195,8 @@ const TRAFFIC_SOURCES: Record<string, string> = { hubble: 'Hubble', caretta: 'Ca
 export function trafficWindowText(seconds: number): string {
   const unit = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
   if (seconds >= 3600 && seconds % 3600 === 0) return unit(seconds / 3600, 'hour')
-  if (seconds >= 60) return unit(Math.round(seconds / 60), 'minute')
+  // Down, never up: a history cut short reads no longer than it reached.
+  if (seconds >= 60) return unit(Math.floor(seconds / 60), 'minute')
   return unit(seconds, 'second')
 }
 
@@ -206,11 +207,15 @@ export function trafficWindowText(seconds: number): string {
  * only those; the other sources can't, so they count any caller but a node
  * (where health checks come from).
  */
-export function trafficSentence(t: VulnerabilityTraffic): string {
-  const source = TRAFFIC_SOURCES[t.source] ?? t.source
-  const window = t.historyLimited
+function trafficWindowPhrase(t: VulnerabilityTraffic, source: string): string {
+  return t.historyLimited
     ? `within the last ${trafficWindowText(t.windowSeconds)}, as far back as ${source}'s flow history reaches`
     : `in the last ${trafficWindowText(t.windowSeconds)}`
+}
+
+export function trafficSentence(t: VulnerabilityTraffic): string {
+  const source = TRAFFIC_SOURCES[t.source] ?? t.source
+  const window = trafficWindowPhrase(t, source)
   if (t.fromOutside) {
     return `Live Traffic (${source}) saw connections to it from outside the cluster ${window}. A client whose address a node rewrote (SNAT) reads as that node and isn't counted.`
   }
@@ -227,7 +232,12 @@ export const TRAFFIC_FILTER = {
   chipTip(t: VulnerabilityTraffic): string {
     const what = t.fromOutside ? 'receive connections from outside the cluster' : 'receive connections'
     const source = TRAFFIC_SOURCES[t.source] ?? t.source
-    return `Only rows affecting a workload Live Traffic (${source}) saw ${what} in the last ${trafficWindowText(t.windowSeconds)}. A workload it didn't see may still be reachable.`
+    return `Only rows affecting a workload Live Traffic (${source}) saw ${what} ${trafficWindowPhrase(t, source)}. A workload it didn't see may still be reachable.`
+  },
+  /** A link set the filter, but no traffic source answered this read. */
+  unanswered: {
+    chip: 'Traffic seen',
+    tip: "Live Traffic didn't answer this read, so this filter isn't applied and every row is listed. Click to remove it.",
   },
 }
 

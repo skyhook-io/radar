@@ -883,12 +883,13 @@ func trafficCells(t *Traffic) func(workloads []WorkloadRef) []string {
 	}
 }
 
-// trafficWindowText is a window as "15m", "1h" or "45s".
+// trafficWindowText is a window as "15m", "1h" or "45s", rounded down so a
+// history cut short never reads longer than it reached.
 func trafficWindowText(seconds int) string {
 	switch {
 	case seconds >= 3600 && seconds%3600 == 0:
 		return strconv.Itoa(seconds/3600) + "h"
-	case seconds >= 60 && seconds%60 == 0:
+	case seconds >= 60:
 		return strconv.Itoa(seconds/60) + "m"
 	}
 	return strconv.Itoa(seconds) + "s"

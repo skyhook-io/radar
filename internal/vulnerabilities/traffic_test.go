@@ -55,6 +55,10 @@ func TestTrafficReceiver(t *testing.T) {
 		{"metrics: a node (kubelet probes)", flow(caretta("", "kind-worker"), metricsPod("shop", "frontend")), false, ""},
 		{"metrics: a host endpoint", flow(nodeHost, metricsPod("shop", "frontend")), false, ""},
 		{"metrics: its own replicas", flow(metricsPod("shop", "frontend"), metricsPod("shop", "frontend")), false, ""},
+		{"metrics: its own replicas, kinds known", flow(flowPod("shop", "frontend-1-a", "frontend", "Deployment"), front), false, ""},
+		{"metrics: a StatefulSet calls the Deployment of its name", flow(flowPod("shop", "frontend-0", "frontend", "StatefulSet"), front), false, "shop/frontend/Deployment"},
+		{"istio: a peer it couldn't identify", flow(pkgtraffic.Endpoint{Namespace: "unknown", Name: "unknown", Kind: pkgtraffic.EndpointKindPod, Workload: "unknown"}, metricsPod("shop", "frontend")), false, ""},
+		{"metrics: a caller with no name or address", flow(pkgtraffic.Endpoint{Kind: pkgtraffic.EndpointKindExternal}, metricsPod("shop", "frontend")), false, ""},
 		{"metrics: a 5xx response still arrived", func() pkgtraffic.Flow {
 			f := flow(metricsPod("shop", "checkout"), metricsPod("shop", "frontend"))
 			f.Verdict, f.Connections, f.RequestRate = "error", 0, 0.2
@@ -81,6 +85,19 @@ func TestTrafficReceiver(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
 		}
+	}
+}
+
+// The page marks only exposed workloads, so when the list is capped the
+// exposed ones it would mark are kept and unexposed ones left out.
+func TestTrafficAnswerListsExposedFirst(t *testing.T) {
+	a := WorkloadRef{Kind: "Deployment", Namespace: "shop", Name: "a"}
+	z := WorkloadRef{Kind: "Deployment", Namespace: "shop", Name: "z"}
+	ev := trafficFixture(t, "hubble", flow(world, flowPod("shop", "a-1", "a", "Deployment")), flow(world, flowPod("shop", "z-1", "z", "Deployment")))
+	targets := []target{{workload: a}, {workload: z}}
+	got := newTrafficIndex(ev, targets).answer(targets, 1, func(w WorkloadRef) bool { return w == z })
+	if got.WorkloadsTotal != 2 || !slices.Equal(got.Workloads, []WorkloadRef{z}) {
+		t.Fatalf("capped at one: %+v of %d", got.Workloads, got.WorkloadsTotal)
 	}
 }
 

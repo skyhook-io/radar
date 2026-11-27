@@ -183,8 +183,14 @@ describe('VulnerabilitiesView', () => {
     render('/checks/vulnerabilities?by=image&traffic=1', true, true)
     expect(chip()!.getAttribute('aria-pressed')).toBe('true')
 
-    // No traffic answer: nothing to offer (here the menu has nothing at all).
+    // The link's filter where no source answered: the chip stays, unpressed,
+    // saying it isn't applied, and a click removes it.
     render('/checks/vulnerabilities?by=image')
+    expect(chip()!.getAttribute('aria-pressed')).toBe('false')
+    act(() => chip()!.click())
+    expect(urlParams().has('traffic')).toBe(false)
+
+    // No traffic answer and no link: nothing to offer (here the menu has nothing at all).
     if (container.querySelector('button[aria-label="More actions"]')) openMenu()
     expect(menuItem('Show Traffic seen filter')).toBeUndefined()
     expect(chip()).toBeUndefined()
