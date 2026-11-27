@@ -152,6 +152,106 @@ func TestSettingsSwapKeepsUnchangedMembersAndCancelsOldQuery(t *testing.T) {
 	}
 }
 
+func TestMetricsEditPreservesAvailableTrafficSource(t *testing.T) {
+	cluster := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/api/v1/pods" && r.URL.Query().Get("labelSelector") == "k8s-app=hubble-relay":
+			_, _ = io.WriteString(w, `{"kind":"PodList","apiVersion":"v1","items":[{"metadata":{"namespace":"kube-system","name":"hubble-relay"},"status":{"phase":"Running"}}]}`)
+		case r.URL.Path == "/api/v1/namespaces/kube-system/services/hubble-relay":
+			_, _ = io.WriteString(w, `{"kind":"Service","apiVersion":"v1","metadata":{"namespace":"kube-system","name":"hubble-relay"},"spec":{"clusterIP":"127.0.0.1","ports":[{"port":1}]}}`)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(cluster.Close)
+	metrics := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query().Get("query")
+		if query == "up" || (!strings.HasPrefix(r.URL.Path, "/without-beyla/") && strings.HasPrefix(query, "count(beyla_network_flow_bytes_total{")) {
+			_, _ = io.WriteString(w, metricsAnswer)
+			return
+		}
+		_, _ = io.WriteString(w, `{"status":"success","data":{"resultType":"vector","result":[]}}`)
+	}))
+	t.Cleanup(metrics.Close)
+
+	for _, tc := range []struct{ path, want string }{
+		{"/with-beyla", "beyla"},
+		{"/without-beyla", "hubble"},
+	} {
+		t.Run(tc.want, func(t *testing.T) {
+			t.Cleanup(k8s.SnapshotTestConnection())
+			t.Cleanup(k8s.SetTestLocalMode())
+			restConfig := &rest.Config{Host: cluster.URL}
+			installTestBuild(t, restConfig)
+			runtime := New(nil, Settings{Metrics: prom.Connection{URL: metrics.URL}})
+			old := admitRuntime(t, runtime)
+			t.Cleanup(k8s.RetireServingConnection)
+			if err := old.Traffic.SetActiveSource("beyla"); err != nil {
+				t.Fatal(err)
+			}
+			conn := k8s.Current()
+			edit := runtime.PrepareShared(conn, runtime.Snapshot(), func(settings *Settings) {
+				settings.Metrics.URL = metrics.URL + tc.path
+			})
+			if err := edit.Commit(func() error { return nil }); err != nil {
+				t.Fatal(err)
+			}
+			next := SetFor(conn).Traffic
+			if next == old.Traffic || next.SourceSnapshot() != "" {
+				t.Fatal("replacement must detect before reporting an active source")
+			}
+			if sources, err := next.DetectSources(t.Context()); err != nil || sources.Active != tc.want {
+				t.Fatalf("detection after edit = %+v, %v, want active %q", sources, err, tc.want)
+			}
+			installTestBuild(t, restConfig)
+			fresh := admitRuntime(t, runtime).Traffic
+			if sources, err := fresh.DetectSources(t.Context()); err != nil || sources.Active != "hubble" {
+				t.Fatalf("detection after readmission = %+v, %v, want active hubble", sources, err)
+			}
+		})
+	}
+}
+
+func TestSharedStartupInvalidKubecostURL(t *testing.T) {
+	metrics := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, metricsAnswer)
+	}))
+	t.Cleanup(metrics.Close)
+	for _, fromEnv := range []bool{false, true} {
+		name := "persisted"
+		if fromEnv {
+			name = "environment"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Cleanup(k8s.SnapshotTestConnection())
+			t.Cleanup(k8s.SetTestLocalMode())
+			k8s.ForceInCluster = true
+			for _, name := range []string{"RADAR_COST_SOURCE", "RADAR_KUBECOST_URL", "RADAR_KUBECOST_API_KEY", "RADAR_KUBECOST_CLUSTER_ID"} {
+				t.Setenv(name, "")
+			}
+			cost := opencost.ManagerConfig{Source: opencost.SourceKubecost, URL: "invalid-url"}
+			if fromEnv {
+				t.Setenv("RADAR_KUBECOST_URL", cost.URL)
+				cost.URL = ""
+			}
+			installTestBuild(t, &rest.Config{Host: "http://127.0.0.1:1"})
+			startup := Settings{Metrics: prom.Connection{URL: metrics.URL}}
+			startup.Cost, startup.CostEnv, startup.CostError = opencost.ResolveEnvironmentConfig(cost)
+			set := admitRuntime(t, New(nil, startup))
+			t.Cleanup(k8s.RetireServingConnection)
+			selected, err := set.Cost.Selected(t.Context())
+			if fromEnv {
+				if !errors.Is(err, opencost.ErrCostSourceEnvConfig) {
+					t.Fatalf("selection error = %v, want invalid environment configuration", err)
+				}
+			} else if err != nil || selected.Source != opencost.SourcePrometheus || set.Cost.ConfigSnapshot().Source != opencost.SourceAuto {
+				t.Fatalf("selection = %q, %v, want Auto to select Prometheus", selected.Source, err)
+			}
+		})
+	}
+}
+
 func TestSwitchFencesLateDiscoveryAndReadmissionCreatesFreshMembers(t *testing.T) {
 	t.Cleanup(k8s.SnapshotTestConnection())
 	t.Cleanup(k8s.SetTestLocalMode())

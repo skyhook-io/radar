@@ -31,16 +31,27 @@ const settle = () => act(async () => {
   await new Promise(resolve => setTimeout(resolve, 0))
 })
 
-it.each(['success', 'failure', 'cancelled detection', 'status stays disconnected'])('handles traffic connection loss after a Metrics save (%s)', async (scenario) => {
+it.each([
+  'success',
+  'failure',
+  'cancelled detection',
+  'status stays disconnected',
+  'initial status stays disconnected',
+  'flows lose source without Settings invalidation',
+  'Beyla unavailable until Metrics repair',
+])('handles traffic connection status and source loss (%s)', async (scenario) => {
   const queryClient = new QueryClient({ defaultOptions: { queries: { enabled: false, retryDelay: 0 } } })
   const container = document.body.appendChild(document.createElement('div'))
   const root = createRoot(container)
   const connectOrigins: (string | null)[] = []
   const connectionFailure = 'Could not connect to Hubble'
   const notConnected = 'Not connected to Hubble Relay. Call Connect() first or use the Traffic view to establish connection.'
+  const source = scenario === 'Beyla unavailable until Metrics repair' ? 'beyla' : 'hubble'
   let connected = false
+  let sourceAvailable = true
   let freshDetections = 0
   let warnings = 0
+  let disconnectedStatusReads = 0
   let statusReadsAfterReconnect = 0
   queryClient.setQueryDefaults(['traffic-sources'], { enabled: true })
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
@@ -54,10 +65,15 @@ it.each(['success', 'failure', 'cancelled detection', 'status stays disconnected
             init!.signal!.addEventListener('abort', () => reject(init!.signal!.reason), { once: true })
           })
         }
-        return Response.json({ cluster: {}, active: 'hubble', detected: [{ name: 'hubble', status: 'available' }], notDetected: [] })
+        return Response.json({
+          cluster: {}, active: sourceAvailable ? source : '', notDetected: [],
+          detected: [{ name: source, status: sourceAvailable ? 'available' : 'not_found' }],
+        })
       case '/api/traffic/connection':
         if (connectOrigins.length > 1) statusReadsAfterReconnect++
+        if (!connected) disconnectedStatusReads++
         return Response.json({ connected: connected &&
+          scenario !== 'initial status stays disconnected' &&
           !(scenario === 'status stays disconnected' && connectOrigins.length > 1) })
       case '/api/traffic/connect':
         expect(init?.method).toBe('POST')
@@ -65,11 +81,17 @@ it.each(['success', 'failure', 'cancelled detection', 'status stays disconnected
         if (connectOrigins.length > 1 && scenario === 'failure') {
           return Response.json({ connected: false, error: connectionFailure })
         }
+        if (!sourceAvailable) {
+          return Response.json({ error: 'No traffic source available' }, { status: 503 })
+        }
         connected = true
         return Response.json({ connected })
       case '/api/traffic/flows':
+        if (!connected && (scenario === 'flows lose source without Settings invalidation' || !sourceAvailable)) {
+          return Response.json({ error: 'no traffic source available' }, { status: 503 })
+        }
         if (!connected) warnings++
-        return Response.json({ source: 'hubble', timestamp: '', flows: [], aggregated: [], warning: connected ? undefined : notConnected })
+        return Response.json({ source, timestamp: '', flows: [], aggregated: [], warning: connected ? undefined : notConnected })
       default:
         throw new Error(`Unexpected request to ${url}`)
     }
@@ -88,15 +110,39 @@ it.each(['success', 'failure', 'cancelled detection', 'status stays disconnected
     await vi.waitFor(async () => {
       await settle()
       expect(connected).toBe(true)
-      expect(queryClient.getQueryData(['traffic-connection'])).toEqual({ connected: true })
+      expect(queryClient.getQueryData(['traffic-connection'])).toEqual({
+        connected: scenario !== 'initial status stays disconnected',
+      })
+      expect(queryClient.getQueryState(['traffic-connection'])?.fetchStatus).toBe('idle')
     })
+    await settle()
     expect(connectOrigins).toEqual(['auto'])
     expect(freshDetections).toBe(0)
+    if (scenario === 'initial status stays disconnected') return
 
     connected = false
-    const warningsBeforeSave = warnings
-    await act(async () => invalidateIntegrationQueries(queryClient, ['metrics']))
-    expect(warnings).toBeGreaterThan(warningsBeforeSave)
+    const statusReadsBeforeLoss = disconnectedStatusReads
+    if (scenario === 'flows lose source without Settings invalidation' || source === 'beyla') {
+      sourceAvailable = source !== 'beyla'
+      await act(async () => {
+        await queryClient.refetchQueries({ queryKey: ['traffic-flows'] })
+      })
+    } else {
+      const warningsBeforeSave = warnings
+      await act(async () => invalidateIntegrationQueries(queryClient, ['metrics']))
+      expect(warnings).toBeGreaterThan(warningsBeforeSave)
+    }
+
+    if (source === 'beyla') {
+      await vi.waitFor(async () => {
+        await settle()
+        expect(container.textContent).toContain('Beyla is installed but not usable')
+      })
+      expect(freshDetections).toBe(1)
+      expect(connectOrigins).toEqual(['auto'])
+      sourceAvailable = true
+      await act(async () => invalidateIntegrationQueries(queryClient, ['metrics']))
+    }
 
     if (scenario === 'cancelled detection') {
       await vi.waitFor(async () => {
@@ -117,8 +163,13 @@ it.each(['success', 'failure', 'cancelled detection', 'status stays disconnected
         expect(queryClient.getQueryData(['traffic-connection'])).toEqual({ connected: true })
       }
     })
-    await act(async () => invalidateIntegrationQueries(queryClient, ['metrics']))
+    if (scenario === 'flows lose source without Settings invalidation') {
+      expect(disconnectedStatusReads - statusReadsBeforeLoss).toBe(1)
+    } else {
+      await act(async () => invalidateIntegrationQueries(queryClient, ['metrics']))
+    }
     await settle()
+    expect(container.textContent).not.toContain('No traffic source available')
     expect(connectOrigins).toEqual(['auto', 'auto'])
     expect(freshDetections).toBe(scenario === 'cancelled detection' ? 2 : 1)
   } finally {

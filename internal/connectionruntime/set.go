@@ -3,6 +3,7 @@ package connectionruntime
 import (
 	"context"
 	"errors"
+	"log"
 	"reflect"
 	"slices"
 
@@ -128,6 +129,7 @@ func build(conn *k8s.Connection, settings Settings, previous *Set, rebuild []con
 			}
 		}
 		s.Traffic = traffic.NewConnectionManager(conn, s.Metrics, settings.BeylaSelector)
+		s.Traffic.PreferSource(previous.Traffic.SourceSnapshot())
 	}
 	if previous.ArgoCD == nil || slices.Contains(rebuild, config.IntegrationArgoCD) || settings.ArgoCD != old.ArgoCD ||
 		settings.ArgoTokenBinding != old.ArgoTokenBinding || settings.ArgoTokenContext != old.ArgoTokenContext ||
@@ -146,7 +148,11 @@ func build(conn *k8s.Connection, settings Settings, previous *Set, rebuild []con
 		errorText(settings.CostError) != errorText(old.CostError) || settings.CostEnv != old.CostEnv {
 		s.Cost = opencost.NewManager(conn, inCluster, s.Metrics, settings.metricsError())
 		if err := s.Cost.ConfigureResolved(settings.Cost, settings.CostEnv, settings.CostError); err != nil {
-			_ = s.Cost.ConfigureResolved(opencost.ManagerConfig{}, settings.CostEnv, err)
+			if settings.CostEnv || settings.CostError != nil {
+				_ = s.Cost.ConfigureResolved(opencost.ManagerConfig{}, settings.CostEnv, err)
+			} else {
+				log.Printf("[opencost] Invalid cost source configuration: %v", err)
+			}
 		}
 	}
 	if s.Cost != previous.Cost || settings.Currency != old.Currency {

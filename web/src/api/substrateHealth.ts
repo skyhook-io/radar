@@ -127,8 +127,7 @@ export function useSubstrateHealth(target: SubstrateTarget, enabled: boolean) {
     enabled: enabled && feature.support === 'supported',
     staleTime: 30_000,
     refetchInterval: 60_000,
-    // A changed connection answers 409 and is safe to retry once; a denial is final.
-    retry: (failureCount, error) => failureCount < 1 && error instanceof ApiError && error.status === 409,
+    retry: (failureCount, error) => failureCount < 1 && error instanceof ApiError && (error.status === 409 || error.status === 503),
   })
   return { ...query, upgrade: feature.upgrade, blockedReason: feature.blockedReason, support: feature.support }
 }

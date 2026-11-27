@@ -34,6 +34,8 @@ type Manager struct {
 	contextName    string // current K8s context name
 	mu             sync.RWMutex
 
+	preferredSource string
+
 	// The last detection, for callers that only ask whether traffic is
 	// available. A context switch builds a new Manager, so it never outlives
 	// the cluster it describes.
@@ -596,10 +598,25 @@ func (m *Manager) reconcileActiveSource(available []TrafficSource) {
 		m.activeSource = nil
 		m.sourceSnapshot.Store("")
 	}
-	if len(available) > 0 {
-		m.activeSource = available[0]
-		m.sourceSnapshot.Store(m.activeSource.Name())
+	preferred := m.preferredSource
+	m.preferredSource = ""
+	if len(available) == 0 {
+		return
 	}
+	m.activeSource = available[0]
+	for _, source := range available {
+		if source.Name() == preferred {
+			m.activeSource = source
+			break
+		}
+	}
+	m.sourceSnapshot.Store(m.activeSource.Name())
+}
+
+func (m *Manager) PreferSource(name string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.preferredSource = name
 }
 
 // SetActiveSource sets the active traffic source by name
@@ -613,6 +630,7 @@ func (m *Manager) SetActiveSource(name string) error {
 	}
 
 	m.activeSource = source
+	m.preferredSource = ""
 	m.sourceSnapshot.Store(source.Name())
 	return nil
 }

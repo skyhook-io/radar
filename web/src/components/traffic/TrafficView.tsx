@@ -512,6 +512,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
     data: flowsData,
     isFetching: flowsFetching,
     dataUpdatedAt: flowsUpdatedAt,
+    error: flowsError,
     refetch: refetchFlowsRaw,
   } = useTrafficFlows({
     namespaces,
@@ -522,6 +523,12 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
     // Only fetch flows when connected (not connecting and no connection error)
     enabled: wizardState === 'ready' && !isConnecting && !connectionError,
   })
+
+  useEffect(() => {
+    if (flowsError?.message === 'no traffic source available') {
+      queryClient.invalidateQueries({ queryKey: ['traffic-connection'] })
+    }
+  }, [flowsError, queryClient])
 
   // A partial, incomplete or cluster warning is the source's answer rather than
   // a hiccup, so retrying it is all cost and no progress.
@@ -1199,19 +1206,17 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
       return
     }
 
-    if (!sourcesData) {
-      setWizardState('not_found')
-      return
-    }
-
-    // Only consider sources with status 'available' as ready
-    const availableSources = sourcesData.detected.filter(s => s.status === 'available')
-    if (availableSources.length > 0) {
-      setWizardState('ready')
-    } else {
-      setWizardState('not_found')
-    }
+    setWizardState(sourcesData?.detected.some(s => s.status === 'available') ? 'ready' : 'not_found')
   }, [sourcesData, sourcesLoading])
+
+  useEffect(() => {
+    if (wizardState !== 'not_found') return
+    connectAttemptRef.current++
+    hasAutoConnectedRef.current = false
+    reconnectStateRef.current = 'idle'
+    setIsConnecting(false)
+    setConnectionError(null)
+  }, [wizardState])
 
   // Shared connection handler — used by auto-connect and retry buttons.
   // Deliberately does NOT reset hasAutoConnectedRef on failure: that ref gates
@@ -1241,8 +1246,12 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
       }
       const detected = fresh ? detectSourcesAgain() : Promise.resolve(undefined)
       detected.then(
-        () => {
+        (sources) => {
           if (attemptId !== connectAttemptRef.current) return
+          if (sources && !sources.detected.some(s => s.status === 'available')) {
+            setIsConnecting(false)
+            return
+          }
           connectTraffic({ automatic }, {
             onSuccess: (data) => {
               if (attemptId !== connectAttemptRef.current) return
@@ -1251,7 +1260,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
                 return
               }
               if (data.connected) {
-                reconnectStateRef.current = automatic && redetect ? 'awaiting-status' : 'armed'
+                reconnectStateRef.current = 'awaiting-status'
               }
               setIsConnecting(false)
             },
@@ -1262,7 +1271,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
           if (attemptId !== connectAttemptRef.current) return
           setIsConnecting(false)
           if (isCancelledError(error)) {
-            reconnectStateRef.current = 'armed'
+            if (automatic && redetect) reconnectStateRef.current = 'armed'
           } else {
             setConnectionError(error.message)
           }
@@ -1278,9 +1287,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
     detectSourcesAgain().catch(() => {})
   }, [detectSourcesAgain])
 
-  // Auto-connect once when a source is first detected. Strictly one-shot per
-  // mount / cluster (the ref resets on cluster change); failures surface a
-  // manual Retry rather than re-arming this effect.
+  // Auto-connect once when a source is first detected or becomes available again.
   useEffect(() => {
     if (wizardState === 'ready' && !hasAutoConnectedRef.current && !isConnecting) {
       hasAutoConnectedRef.current = true
@@ -1405,7 +1412,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
                   connectTraffic(undefined, {
                     onSuccess: (data) => {
                       if (attemptId !== connectAttemptRef.current) return
-                      reconnectStateRef.current = data.connected ? 'armed' : 'idle'
+                      reconnectStateRef.current = data.connected ? 'awaiting-status' : 'idle'
                       setIsConnecting(false)
                       if (!data.connected && data.error) setConnectionError(data.error)
                       queryClient.invalidateQueries({ queryKey: ['traffic-flows'] })
