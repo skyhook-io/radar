@@ -169,6 +169,13 @@ describe('Vulnerabilities optional columns', () => {
     expect(container.textContent).toContain(`2020-12-10${days.toLocaleString('en-US')} d`)
   })
 
+  it('shows a dash for Age, not 0 d, when the date does not parse', () => {
+    localStorage.setItem('radar-vulnerability-columns', JSON.stringify(['cve.published', 'cve.age']))
+    render('/checks/vulnerabilities?by=cve', 3, (r) => ({ ...r, cves: r.cves!.map((c) => ({ ...c, publishedAt: 'not a date' })) }))
+    expect(container.textContent).not.toContain('0 d')
+    expect(container.textContent).toContain('—')
+  })
+
   it('explains Published on its column head', () => {
     localStorage.setItem('radar-vulnerability-columns', JSON.stringify(['cve.published']))
     render('/checks/vulnerabilities?by=cve')
@@ -251,6 +258,15 @@ describe('No data', () => {
     act(() => clear.at(-1)!.click())
     expect(urlParams().has('q')).toBe(false)
     expect(urlParams().get('by')).toBe('cve')
+  })
+
+  it('says nothing matches, with Clear filters, for a workload whose images the end-of-life filter leaves out', () => {
+    render('/checks/vulnerabilities?by=image&eol=1&workload=Deployment/shop/web', 3, (r) => ({
+      ...r, images: [], unscanned: [{ image: 'acme/pending:1', workloads: [{ kind: 'Deployment', group: 'apps', namespace: 'shop', name: 'web' }], workloadsTotal: 1 }],
+    }))
+    expect(container.textContent).toContain('Nothing matches these filters')
+    expect(container.textContent).not.toContain('No report yet for the images web runs')
+    expect(button('Clear filters')).toBeDefined()
   })
 
   it('offers no column the answer has no data for, and draws none a browser had on', () => {
