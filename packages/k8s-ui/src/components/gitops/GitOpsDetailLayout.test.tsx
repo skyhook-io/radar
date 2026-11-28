@@ -77,4 +77,30 @@ describe('GitOpsDetailLayout', () => {
     expect(html).not.toContain('Sync…')
     expect(html).not.toContain('Reconcile')
   })
+
+  it('shows the Outside Flux tab and count only when the host passes them', () => {
+    const flux = (outsideChanges?: { count?: number; attention?: number; lowerBound?: boolean }) => renderToString(
+      <GitOpsDetailLayout
+        {...shell}
+        identity={{ kind: 'helmreleases', group: 'helm.toolkit.fluxcd.io', namespace: 'prod', name: 'api', kindLabel: 'HelmRelease', toolLabel: 'FluxCD' }}
+        isArgoApp={false}
+        isFlux
+        isFluxWorkload
+        outsideChanges={outsideChanges}
+      />,
+    ).replace(/<!-- -->/g, '')
+    expect(flux()).not.toContain('Outside Flux')
+    const two = flux({ count: 3, attention: 2 })
+    expect(two).toContain('Outside Flux (3)')
+    expect(two).toContain('2 objects changed outside Flux')
+    const partial = flux({ count: 3, attention: 2, lowerBound: true })
+    expect(partial).toContain('Outside Flux (≥3)')
+    expect(partial).toContain('≥2 objects changed outside Flux')
+    expect(flux({ count: 2, attention: 0 })).not.toContain('changed outside Flux')
+    const none = flux({ count: 0 })
+    expect(none).toContain('Outside Flux (0)')
+    expect(none).not.toContain('changed outside Flux')
+    expect(flux({})).toContain('>Outside Flux<')
+    expect(flux({ count: 1, attention: 1 })).toContain('1 object changed outside Flux')
+  })
 })

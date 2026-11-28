@@ -227,6 +227,7 @@ export interface FeatureCapabilities {
   /** POST /api/workloads/{kind}/{ns}/{name}/restart accepts {uid, resourceVersion}; an older Radar ignores the body and restarts unconditionally. */
   workloadRestartPreconditions?: boolean
   gitopsWriteEvidence?: boolean
+  gitopsOutsideChanges?: boolean
   agentSigninCheck?: boolean
   serviceEndpointSlices?: boolean
   trafficRecords?: boolean

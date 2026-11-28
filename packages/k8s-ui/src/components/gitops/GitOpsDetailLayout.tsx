@@ -1,14 +1,15 @@
 import { useEffect, useId, useState, type ComponentType, type ReactNode } from 'react'
-import { ArrowDownUp, Clock3, GitBranch, GitCommit, Loader2, Pause, Play, RefreshCw, Settings, Trash2, XCircle, Zap } from 'lucide-react'
+import { ArrowDownUp, Clock3, GitBranch, GitCommit, Hand, Loader2, Pause, Play, RefreshCw, Settings, Trash2, XCircle, Zap } from 'lucide-react'
 import { Collapse, CollapseChevron, useDisclosure } from '../ui/Collapse'
 import { gitOpsDenialMessage, uniqueGitOpsPermissions, type GitOpsPermission } from '../../utils/gitops-permissions'
 import { PaneLoader } from '../ui/PaneLoader'
 import { AlertBanner } from '../ui/drawer-components'
 
 import { HealthStatusBadge, SyncStatusBadge } from './GitOpsStatusBadge'
-import { GitOpsIssuesBand, GitOpsStatusStrip } from './insights'
+import { GitOpsIssuesBand, GitOpsStatusStrip, type OutsideChangesCounts } from './insights'
 import { GitOpsHealthSourceNotice } from './GitOpsHealthSourceNotice'
 import { Tooltip } from '../ui/Tooltip'
+import { Badge } from '../ui/Badge'
 import { RadarUpgradeNote, radarUpgradeNoteText } from '../ui/RadarUpgradeNote'
 import type { GitOpsHealthStatus, GitOpsInsight, GitOpsIssue, GitOpsRemediation, SyncStatus } from '../../types'
 import type { RadarUpgradeRequirement } from '../../types/fetch-error'
@@ -140,7 +141,7 @@ export interface GitOpsHelmValuesData {
   source: 'flux' | 'argo-object' | 'argo-string' | 'argo-parameters'
 }
 
-export type GitOpsDetailTab = 'topology' | 'changes' | 'activity'
+export type GitOpsDetailTab = 'topology' | 'changes' | 'activity' | 'outside'
 
 export interface GitOpsDetailLayoutProps {
   // Identity
@@ -218,6 +219,11 @@ export interface GitOpsDetailLayoutProps {
   }>
   argo?: ArgoActionHandlers
   flux?: FluxActionHandlers
+
+  // Changes made outside Flux. Absent hides the tab and the header count
+  // (Argo, older Radars, hosts that don't fetch it); count is the number of
+  // objects with a hand edit, undefined while it loads.
+  outsideChanges?: OutsideChangesCounts
 
   // Tab state
   activeTab: GitOpsDetailTab
@@ -305,6 +311,7 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
     isFluxWorkload,
     argo,
     flux,
+    outsideChanges,
     activeTab,
     onTabChange,
     fullscreen,
@@ -426,6 +433,11 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
                   <span className="inline-flex shrink-0 items-center rounded border border-theme-border bg-theme-hover/50 px-1.5 py-0.5 text-[11px] font-medium text-theme-text-secondary">
                     {identity.toolLabel} · {identity.kindLabel}
                   </span>
+                )}
+                {(outsideChanges?.attention ?? 0) > 0 && (
+                  <button type="button" onClick={() => onTabChange('outside')} className="shrink-0">
+                    <Badge severity="warning" size="sm">{outsideChanges?.lowerBound && '≥'}{outsideChanges?.attention} {outsideChanges?.attention === 1 ? 'object' : 'objects'} changed outside Flux</Badge>
+                  </button>
                 )}
                 {isFleetContext && destinationCluster && (
                   // Cross-cluster lineage chip — fleet-only. Renders the
@@ -671,6 +683,14 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
               <ViewButton active={activeTab === 'topology'} icon={GitBranch} label="Topology" onClick={() => onTabChange('topology')} />
               <ViewButton active={activeTab === 'changes'} icon={GitCommit} label="Resources" onClick={() => onTabChange('changes')} />
               <ViewButton active={activeTab === 'activity'} icon={Clock3} label="Activity" onClick={() => onTabChange('activity')} />
+              {outsideChanges && (
+                <ViewButton
+                  active={activeTab === 'outside'}
+                  icon={Hand}
+                  label={typeof outsideChanges.count === 'number' ? `Outside Flux (${outsideChanges.lowerBound ? '≥' : ''}${outsideChanges.count})` : 'Outside Flux'}
+                  onClick={() => onTabChange('outside')}
+                />
+              )}
             </div>
             {fullscreen ? (
               <div className="min-w-0 flex-1 truncate text-sm font-medium text-theme-text-primary">

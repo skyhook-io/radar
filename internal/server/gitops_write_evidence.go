@@ -652,24 +652,10 @@ func ignoreRuleFor(
 		// drift ignore. Flux documents that it keeps a kubectl-edit-style
 		// change, but that isn't verified against a live controller, so a
 		// covered field stays unevaluated rather than waived.
-		helm := owner.Group == "helm.toolkit.fluxcd.io"
-		field := []string{"spec", "ignore"}
-		if helm {
-			field = []string{"spec", "driftDetection", "ignore"}
-		}
-		by := strings.Join(field, ".")
-		rules, _, _ := unstructured.NestedSlice(ownerObj.Object, field...)
+		rules := fluxIgnoreRulesFor(owner, ownerObj, ref, target.GroupVersionKind().Version)
+		helm, by := rules.helm, rules.by
 		covered := make([]bool, len(sets))
-		for _, raw := range rules {
-			rule, ok := raw.(map[string]any)
-			if !ok {
-				continue
-			}
-			if t, ok := rule["target"].(map[string]any); ok && !fluxIgnoreTargetMatches(t, ref, target.GroupVersionKind().Version) {
-				continue
-			}
-			markCovered(stringSlice(rule["paths"]), sets, covered)
-		}
+		markCovered(rules.paths, sets, covered)
 		switch {
 		case allCovered(covered) && helm:
 			return "effective", by
@@ -678,6 +664,40 @@ func ignoreRuleFor(
 		}
 	}
 	return "", ""
+}
+
+// fluxIgnoreRules are the paths of a Flux root's ignore rules whose target
+// matches one object. Targets don't depend on the path, so they are matched
+// once per object.
+type fluxIgnoreRules struct {
+	paths []string
+	by    string
+	helm  bool
+}
+
+func fluxIgnoreRulesFor(owner *topology.ResourceRef, ownerObj *unstructured.Unstructured, ref writeEvidenceRef, version string) fluxIgnoreRules {
+	if ownerObj == nil || ownerTool(owner) != "fluxcd" {
+		return fluxIgnoreRules{}
+	}
+	helm := owner.Group == "helm.toolkit.fluxcd.io"
+	field := []string{"spec", "ignore"}
+	if helm {
+		field = []string{"spec", "driftDetection", "ignore"}
+	}
+	out := fluxIgnoreRules{by: strings.Join(field, "."), helm: helm}
+	rules, _, _ := unstructured.NestedFieldNoCopy(ownerObj.Object, field...)
+	list, _ := rules.([]any)
+	for _, raw := range list {
+		rule, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if t, ok := rule["target"].(map[string]any); ok && !fluxIgnoreTargetMatches(t, ref, version) {
+			continue
+		}
+		out.paths = append(out.paths, stringSlice(rule["paths"])...)
+	}
+	return out
 }
 
 // argoIgnoreEntryMatches: kind is required, an omitted group is the core
@@ -750,6 +770,9 @@ type fieldPathSegment struct {
 	key   string
 	value string
 	index int
+	// also holds further key=value pairs of a multi-key selector
+	// ([containerPort=80,protocol=TCP]); an element matches when all do.
+	also [][2]string
 }
 
 func unquoteFieldPath(s string) string {
@@ -799,8 +822,7 @@ func parseWriteFieldPath(path string) ([]fieldPathSegment, error) {
 			case body == "*":
 				segs = append(segs, fieldPathSegment{typ: segAny})
 			case body != "" && body[0] != '"' && body[0] != '\'' && strings.Contains(body, "="):
-				eq := strings.Index(body, "=")
-				segs = append(segs, fieldPathSegment{typ: segMatch, key: strings.TrimSpace(body[:eq]), value: unquoteFieldPath(body[eq+1:])})
+				segs = append(segs, parseMatchSegment(body))
 			default:
 				if n, err := strconv.Atoi(body); err == nil && n >= 0 {
 					segs = append(segs, fieldPathSegment{typ: segIndex, index: n})
@@ -824,13 +846,43 @@ func parseWriteFieldPath(path string) ([]fieldPathSegment, error) {
 	return segs, nil
 }
 
+// parseMatchSegment reads key=value, or several comma-separated pairs when
+// every part is one (a value may itself contain a comma otherwise).
+func parseMatchSegment(body string) fieldPathSegment {
+	pair := func(part string) (string, string) {
+		eq := strings.Index(part, "=")
+		return strings.TrimSpace(part[:eq]), unquoteFieldPath(part[eq+1:])
+	}
+	parts := strings.Split(body, ",")
+	for _, part := range parts {
+		if !strings.Contains(part, "=") {
+			parts = []string{body}
+			break
+		}
+	}
+	key, value := pair(parts[0])
+	seg := fieldPathSegment{typ: segMatch, key: key, value: value}
+	for _, part := range parts[1:] {
+		k, v := pair(part)
+		seg.also = append(seg.also, [2]string{k, v})
+	}
+	return seg
+}
+
 func matchesSelector(item any, seg fieldPathSegment) bool {
 	m, ok := item.(map[string]any)
 	if !ok {
 		return false
 	}
-	v, ok := m[seg.key]
-	return ok && fmt.Sprint(v) == seg.value
+	if v, ok := m[seg.key]; !ok || fmt.Sprint(v) != seg.value {
+		return false
+	}
+	for _, kv := range seg.also {
+		if v, ok := m[kv[0]]; !ok || fmt.Sprint(v) != kv[1] {
+			return false
+		}
+	}
+	return true
 }
 
 func hasWildcard(segs []fieldPathSegment) bool {
@@ -1011,6 +1063,19 @@ func newFieldsTree(node map[string]any) *fieldsTree {
 	return t
 }
 
+func intersectTrees(a, b []*fieldsTree) []*fieldsTree {
+	var out []*fieldsTree
+	for _, x := range a {
+		for _, y := range b {
+			if x == y {
+				out = append(out, x)
+				break
+			}
+		}
+	}
+	return out
+}
+
 // owns reports whether the set covers the path. Exact when the set names the
 // path itself as a leaf; approximate when it only names an ancestor as a leaf
 // (an atomic value such as an atomic list), names the path with a
@@ -1032,6 +1097,9 @@ func (t *fieldsTree) ownsAt(segs []fieldPathSegment, depth int) (bool, bool) {
 		}
 	case segMatch:
 		children = t.byKey[seg.key][seg.value]
+		for _, kv := range seg.also {
+			children = intersectTrees(children, t.byKey[kv[0]][kv[1]])
+		}
 	case segAny:
 		children = t.keyed
 	case segIndex:
