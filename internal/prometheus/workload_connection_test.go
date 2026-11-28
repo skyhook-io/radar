@@ -23,7 +23,7 @@ func TestWorkloadBackendIdentity(t *testing.T) {
 	} {
 		c := &Client{workloadScope: &scope, workloadScopeEverSet: true}
 		a := prom.Candidate{Namespace: "monitoring", Name: "prometheus", Port: 9090}
-		if !c.markConnected("http://127.0.0.1:10001", "", a.Key(), 0) || c.workloadScope == nil || c.backendEpoch() != 0 {
+		if !c.markConnected("http://127.0.0.1:10001", "", a.Key(), 0) || c.workloadScope == nil || c.BackendEpoch() != 0 {
 			t.Fatal("initial binding discarded startup assertion")
 		}
 		memo := &workloadPartitionMemo{expires: time.Now().Add(time.Minute)}
@@ -35,7 +35,7 @@ func TestWorkloadBackendIdentity(t *testing.T) {
 		c.mu.Lock()
 		c.dropConnectionLocked()
 		c.mu.Unlock()
-		if !c.markConnected("http://127.0.0.1:10002", "", a.Key(), 0) || c.workloadScope == nil || c.workloadPartition != memo || ctx.Err() != nil || c.backendEpoch() != 0 {
+		if !c.markConnected("http://127.0.0.1:10002", "", a.Key(), 0) || c.workloadScope == nil || c.workloadPartition != memo || ctx.Err() != nil || c.BackendEpoch() != 0 {
 			t.Fatal("same-service reconnect discarded valid trust")
 		}
 		b := a
@@ -43,35 +43,34 @@ func TestWorkloadBackendIdentity(t *testing.T) {
 		if !c.markConnected("http://127.0.0.1:10003", "", b.Key(), 0) {
 			t.Fatal("backend replacement failed")
 		}
-		if c.workloadScope != nil || c.workloadPartition != nil || len(c.workloadAttributionEntries) != 0 || ctx.Err() == nil || c.backendEpoch() != 1 || c.DiscoveryGeneration() != 0 {
+		if c.workloadScope != nil || c.workloadPartition != nil || len(c.workloadAttributionEntries) != 0 || ctx.Err() == nil || c.BackendEpoch() != 1 || c.DiscoveryGeneration() != 0 {
 			t.Fatal("backend replacement retained trust or changed discovery generation")
 		}
 		if c.workloadScopeNotice() == "" {
 			t.Fatal("discarded assertion was not explained")
 		}
 		c.markConnected("http://127.0.0.1:10001", "", a.Key(), 0)
-		if c.backendEpoch() != 2 || c.workloadScope != nil {
+		if c.BackendEpoch() != 2 || c.workloadScope != nil {
 			t.Fatal("returning to A resurrected old trust")
 		}
 		basePath := a
 		basePath.BasePath = "/select/1/prometheus"
 		c.markConnected("http://127.0.0.1:10001", basePath.BasePath, basePath.Key(), 0)
-		if c.backendEpoch() != 3 {
+		if c.BackendEpoch() != 3 {
 			t.Fatal("backend tenant path was not part of identity")
 		}
 	}
 }
 
-func TestWorkloadBackendIdentitySurvivesReinitialize(t *testing.T) {
+func TestWorkloadBackendIdentitySurvivesRediscovery(t *testing.T) {
 	for _, identity := range []string{"A", "B"} {
 		t.Run(identity, func(t *testing.T) {
-			Initialize(nil, nil, "original", nil)
-			if err := SetWorkloadMetricsScope(prom.WorkloadMetricsScope{SingleCluster: true}, ""); err != nil {
+			c := testClient(t, "original", nil)
+			if err := c.SetWorkloadMetricsScope(prom.WorkloadMetricsScope{SingleCluster: true}, ""); err != nil {
 				t.Fatal(err)
 			}
-			GetClient().markConnected("http://first", "", "A", 0)
-			Reinitialize(nil, nil, "original", nil)
-			c := GetClient()
+			c.markConnected("http://first", "", "A", 0)
+			c.dropConnectionLocked()
 			c.markConnected("http://second", "", identity, 0)
 			if _, _, configured := c.workloadMetricsConfig(); configured != (identity == "A") {
 				t.Fatalf("assertion preservation did not follow logical backend %s", identity)
@@ -116,7 +115,7 @@ func TestWorkloadTrustDuringAutomaticFailover(t *testing.T) {
 		if err != nil || addr != "http://"+host {
 			t.Fatalf("failover step %d: address=%q, err=%v", i, addr, err)
 		}
-		if c.backendEpoch() != uint64(i) || c.DiscoveryGeneration() != 0 {
+		if c.BackendEpoch() != uint64(i) || c.DiscoveryGeneration() != 0 {
 			t.Fatalf("failover step %d: wrong identity epoch or discovery generation", i)
 		}
 		if i == 0 {

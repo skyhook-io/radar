@@ -97,7 +97,7 @@ func TestTrackedSwitchDiscoveryWaitHasOwnBudget(t *testing.T) {
 			defer cancel()
 			const budget = 100 * time.Millisecond
 			done := make(chan error, 1)
-			go func() { done <- initAllSubsystems(ctx, func(string) {}, budget, nil) }()
+			go func() { done <- Current().initAllSubsystems(ctx, func(string) {}, budget, nil) }()
 			select {
 			case <-started:
 			case <-time.After(3 * time.Second):

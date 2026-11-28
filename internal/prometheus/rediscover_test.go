@@ -6,11 +6,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/skyhook-io/radar/internal/portforward"
+	"github.com/skyhook-io/radar/internal/portforward/forwardtest"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -425,7 +425,37 @@ func TestOnForwardLost(t *testing.T) {
 	}
 }
 
-var registerSignalsOnce sync.Once
+func TestCloseDoesNotRediscoverDeliberatelyStoppedForward(t *testing.T) {
+	cfg := forwardtest.Server(t, forwardtest.ServeTunnel)
+	kube := kubernetes.NewForConfigOrDie(cfg)
+	manager := portforward.NewManager(kube, cfg, "test")
+	t.Cleanup(manager.Close)
+	c := NewClient(kube, cfg, "test", manager, false, nil)
+	forward, err := manager.Start(t.Context(), portforward.OwnerPrometheus, "ns", "svc", 9090)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.handles.Track(forward); err != nil {
+		t.Fatal(err)
+	}
+	c.mu.Lock()
+	c.markConnectedLocked(forward.Address(), "", "test", c.discoveryGen, forward)
+	c.discoveryCancel = func() {
+		if !c.retired || !forward.Alive() {
+			t.Error("discovery must be canceled after retirement and before stopping the forward")
+		}
+	}
+	c.mu.Unlock()
+	if err := c.Close(); err != nil || forward.Alive() {
+		t.Fatalf("Close() = %v, forward alive = %v", err, forward.Alive())
+	}
+	c.onForwardLost(forward)
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.forward != forward {
+		t.Fatal("the lost-forward handler ran for a deliberately stopped forward")
+	}
+}
 
 // TestRediscoverySignalsThroughResourceCache drives the signals end to end:
 // objects written to the cluster reach the informer cache, its observer and
@@ -442,17 +472,8 @@ func TestRediscoverySignalsThroughResourceCache(t *testing.T) {
 		t.Fatalf("InitScopedTestResourceCache: %v", err)
 	}
 	t.Cleanup(k8s.ResetTestState)
-	registerSignalsOnce.Do(RegisterRediscoverySignals)
-	c := &Client{k8sClient: cs, httpClient: &http.Client{Timeout: 2 * time.Second}}
-	clientMu.Lock()
-	saved := globalClient
-	globalClient = c
-	clientMu.Unlock()
-	t.Cleanup(func() {
-		clientMu.Lock()
-		globalClient = saved
-		clientMu.Unlock()
-	})
+	c := NewClient(cs, nil, "test", nil, false, k8s.GetResourceCache())
+	t.Cleanup(func() { _ = c.Close() })
 
 	ctx := context.Background()
 	svc := promService("monitoring", "prometheus")
@@ -501,11 +522,11 @@ func TestCachedServicesDeclinesPartialView(t *testing.T) {
 	}
 	t.Cleanup(k8s.ResetTestState)
 
-	if _, ok := (&Client{k8sClient: cs}).cachedServices(); ok {
+	if _, ok := (&Client{k8sClient: cs, cache: k8s.GetResourceCache()}).cachedServices(); ok {
 		t.Fatal("namespace-scoped Service cache must not stand in for the cluster")
 	}
 	if _, ok := (&Client{k8sClient: fake.NewClientset()}).cachedServices(); ok {
-		t.Fatal("a cache built from another cluster connection must not be used")
+		t.Fatal("a client with no captured cache must not use another connection’s cache")
 	}
 }
 
@@ -524,7 +545,7 @@ func TestCachedServicesUsesCacheBuiltFromInformerClient(t *testing.T) {
 	}
 	t.Cleanup(k8s.ResetTestState)
 
-	c := &Client{k8sClient: request}
+	c := &Client{k8sClient: request, cache: k8s.GetResourceCache()}
 	if c.cachedServiceLister() == nil {
 		t.Error("cachedServiceLister() = nil for a cache built from this connection's informer client")
 	}
@@ -590,5 +611,33 @@ func TestRediscovery_NewSignalInterruptsFollowUpWait(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("new signal waited behind the follow-up delay")
 	}
+	waitIdle(t, c)
+}
+
+func TestCloseStopsRediscoveryFollowUpWait(t *testing.T) {
+	runs := stubRediscovery(t, func(string) error { return errPrometheusUnreachable })
+	rediscoveryFollowUps = []time.Duration{time.Minute}
+	c := NewClient(nil, nil, "test", nil, false, nil)
+	t.Cleanup(func() { _ = c.Close() })
+	c.requestRediscovery("", "service created")
+	select {
+	case <-runs:
+	case <-time.After(time.Second):
+		t.Fatal("rediscovery did not run")
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		c.rediscovery.mu.Lock()
+		waiting := c.rediscovery.pending && c.rediscovery.running
+		c.rediscovery.mu.Unlock()
+		if waiting {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("rediscovery did not queue a follow-up")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	_ = c.Close()
 	waitIdle(t, c)
 }

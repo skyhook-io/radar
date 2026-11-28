@@ -5,10 +5,11 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/skyhook-io/radar/internal/connectionruntime"
+
 	"github.com/go-chi/chi/v5"
 	"github.com/skyhook-io/radar/internal/k8s"
 	internalopencost "github.com/skyhook-io/radar/internal/opencost"
-	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	pkgopencost "github.com/skyhook-io/radar/pkg/opencost"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
@@ -26,11 +27,13 @@ func (s *Server) handleOpenCostWorkload(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	kind, namespace, name, ok := s.parseOpenCostWorkloadRequest(w, r)
+	conn := k8s.BoundOrCurrent(r.Context())
+	cache, set := conn.ResourceCache(), connectionruntime.SetFor(conn)
+	kind, namespace, name, ok := s.parseOpenCostWorkloadRequest(w, r, cache)
 	if !ok {
 		return
 	}
-	_, desiredReplicas, ok := s.loadOpenCostWorkloadResource(w, kind, namespace, name)
+	_, desiredReplicas, ok := s.loadOpenCostWorkloadResource(w, cache, kind, namespace, name)
 	if !ok {
 		return
 	}
@@ -40,57 +43,57 @@ func (s *Server) handleOpenCostWorkload(w http.ResponseWriter, r *http.Request) 
 		Kind:      kind,
 		Name:      name,
 	}
-	connection, err := internalopencost.Selected(r.Context())
+	connection, err := set.Cost.Selected(r.Context())
 	if err != nil {
 		resp.Reason = internalopencost.ConnectionFailureReason(err)
-		resp.Currency = s.resolvedOpenCostCurrency()
-		s.writeJSON(w, resp)
+		resp.Currency = set.Currency.Resolve()
+		internalopencost.WriteCostResponse(w, set.Cost, resp)
 		return
 	}
 	if connection.Source == internalopencost.SourceKubecost {
 		workloads, err := pkgopencost.ComputeKubecostWorkloads(r.Context(), connection.Client, namespace, pkgopencost.KubecostCurrentOptions{
-			Currency: s.resolvedOpenCostCurrency(), ClusterID: connection.ClusterID, Owners: internalopencost.BuildPodOwnerLookup(namespace),
+			Currency: set.Currency.Resolve(), ClusterID: connection.ClusterID, Owners: set.Cost.BuildPodOwnerLookup(namespace),
 		})
 		if err != nil {
 			log.Printf("[opencost] Kubecost workload cost failed for %s/%s: %s", sanitizeForLog(namespace), sanitizeForLog(name), sanitizeForLog(err.Error()))
 			resp.Reason = internalopencost.ConnectionFailureReason(err)
-			resp.Currency = s.resolvedOpenCostCurrency()
+			resp.Currency = set.Currency.Resolve()
 			resp.Source = "kubecost"
-			s.writeJSON(w, resp)
+			internalopencost.WriteCostResponse(w, set.Cost, resp)
 			return
 		}
 		result := focusOpenCostWorkload(workloads, kind, namespace, name, desiredReplicas)
-		result.Currency = s.resolvedOpenCostCurrency()
+		result.Currency = set.Currency.Resolve()
 		result.Source = "kubecost"
 		result.DataThrough = workloads.DataThrough
-		s.writeJSON(w, result)
+		internalopencost.WriteCostResponse(w, set.Cost, result)
 		return
 	}
 
-	client, connectionErr := prometheuspkg.ClientForOperation()
+	client, connectionErr := set.MetricsClient()
 	if connectionErr != nil {
 		resp.Available = false
 		resp.Reason = internalopencost.ConnectionFailureReason(connectionErr)
-		resp.Currency = s.resolvedOpenCostCurrency()
+		resp.Currency = set.Currency.Resolve()
 		resp.Source = "prometheus"
-		s.writeJSON(w, resp)
+		internalopencost.WriteCostResponse(w, set.Cost, resp)
 		return
 	}
 	if _, _, err := client.EnsureConnected(r.Context()); err != nil {
 		log.Print("[opencost] EnsureConnected failed for workload cost")
 		resp.Available = false
 		resp.Reason = internalopencost.ConnectionFailureReason(err)
-		resp.Currency = s.resolvedOpenCostCurrency()
+		resp.Currency = set.Currency.Resolve()
 		resp.Source = "prometheus"
-		s.writeJSON(w, resp)
+		internalopencost.WriteCostResponse(w, set.Cost, resp)
 		return
 	}
 
-	workloads := internalopencost.NewPromCost(client).Workloads(r.Context(), namespace, internalopencost.BuildPodOwnerLookup(namespace))
+	workloads := internalopencost.NewPromCost(client).Workloads(r.Context(), namespace, set.Cost.BuildPodOwnerLookup(namespace))
 	result := focusOpenCostWorkload(workloads, kind, namespace, name, desiredReplicas)
-	result.Currency = s.resolvedOpenCostCurrency()
+	result.Currency = set.Currency.Resolve()
 	result.Source = "prometheus"
-	s.writeJSON(w, result)
+	internalopencost.WriteCostResponse(w, set.Cost, result)
 }
 
 func (s *Server) handleOpenCostWorkloadTrend(w http.ResponseWriter, r *http.Request) {
@@ -98,11 +101,13 @@ func (s *Server) handleOpenCostWorkloadTrend(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	kind, namespace, name, ok := s.parseOpenCostWorkloadRequest(w, r)
+	conn := k8s.BoundOrCurrent(r.Context())
+	cache, set := conn.ResourceCache(), connectionruntime.SetFor(conn)
+	kind, namespace, name, ok := s.parseOpenCostWorkloadRequest(w, r, cache)
 	if !ok {
 		return
 	}
-	if _, _, ok := s.loadOpenCostWorkloadResource(w, kind, namespace, name); !ok {
+	if _, _, ok := s.loadOpenCostWorkloadResource(w, cache, kind, namespace, name); !ok {
 		return
 	}
 
@@ -112,37 +117,37 @@ func (s *Server) handleOpenCostWorkloadTrend(w http.ResponseWriter, r *http.Requ
 		Name:      name,
 		Range:     r.URL.Query().Get("range"),
 	}
-	connection, err := internalopencost.Selected(r.Context())
+	connection, err := set.Cost.Selected(r.Context())
 	if err != nil {
 		resp.Reason = internalopencost.ConnectionFailureReason(err)
-		resp.Currency = s.resolvedOpenCostCurrency()
-		s.writeJSON(w, resp)
+		resp.Currency = set.Currency.Resolve()
+		internalopencost.WriteCostResponse(w, set.Cost, resp)
 		return
 	}
 	if connection.Source == internalopencost.SourceKubecost {
 		resp.Reason = pkgopencost.ReasonHistoryUnsupported
-		resp.Currency = s.resolvedOpenCostCurrency()
+		resp.Currency = set.Currency.Resolve()
 		resp.Source = "kubecost"
-		s.writeJSON(w, resp)
+		internalopencost.WriteCostResponse(w, set.Cost, resp)
 		return
 	}
 
-	client, connectionErr := prometheuspkg.ClientForOperation()
+	client, connectionErr := set.MetricsClient()
 	if connectionErr != nil {
 		resp.Available = false
 		resp.Reason = internalopencost.ConnectionFailureReason(connectionErr)
-		resp.Currency = s.resolvedOpenCostCurrency()
+		resp.Currency = set.Currency.Resolve()
 		resp.Source = "prometheus"
-		s.writeJSON(w, resp)
+		internalopencost.WriteCostResponse(w, set.Cost, resp)
 		return
 	}
 	if _, _, err := client.EnsureConnected(r.Context()); err != nil {
 		log.Print("[opencost] EnsureConnected failed for workload trend")
 		resp.Available = false
 		resp.Reason = internalopencost.ConnectionFailureReason(err)
-		resp.Currency = s.resolvedOpenCostCurrency()
+		resp.Currency = set.Currency.Resolve()
 		resp.Source = "prometheus"
-		s.writeJSON(w, resp)
+		internalopencost.WriteCostResponse(w, set.Cost, resp)
 		return
 	}
 
@@ -152,19 +157,12 @@ func (s *Server) handleOpenCostWorkloadTrend(w http.ResponseWriter, r *http.Requ
 		Kind:      kind,
 		Name:      name,
 	})
-	result.Currency = s.resolvedOpenCostCurrency()
+	result.Currency = set.Currency.Resolve()
 	result.Source = "prometheus"
-	s.writeJSON(w, result)
+	internalopencost.WriteCostResponse(w, set.Cost, result)
 }
 
-func (s *Server) resolvedOpenCostCurrency() string {
-	if s.openCostCurrency == nil {
-		return pkgopencost.DefaultCurrency
-	}
-	return s.openCostCurrency.Resolve()
-}
-
-func (s *Server) parseOpenCostWorkloadRequest(w http.ResponseWriter, r *http.Request) (kind, namespace, name string, ok bool) {
+func (s *Server) parseOpenCostWorkloadRequest(w http.ResponseWriter, r *http.Request, cache *k8s.ResourceCache) (kind, namespace, name string, ok bool) {
 	kind, supported := pkgopencost.CanonicalWorkloadKind(chi.URLParam(r, "kind"))
 	if !supported {
 		s.writeError(w, http.StatusBadRequest, "only deployments, statefulsets, and daemonsets are supported")
@@ -177,15 +175,15 @@ func (s *Server) parseOpenCostWorkloadRequest(w http.ResponseWriter, r *http.Req
 		return "", "", "", false
 	}
 
-	if failure := s.preflightResourceGet(r, normalizeKind(kind), namespace, name, "apps"); failure != nil {
+	if failure := s.preflightResourceGetFrom(r, cache, normalizeKind(kind), namespace, name, "apps"); failure != nil {
 		s.writeReadFailure(w, kind, failure, nil)
 		return "", "", "", false
 	}
 	return kind, namespace, name, true
 }
 
-func (s *Server) loadOpenCostWorkloadResource(w http.ResponseWriter, kind, namespace, name string) (any, int, bool) {
-	lookup := s.lookupOpenCostWorkloadResource(kind, namespace, name)
+func (s *Server) loadOpenCostWorkloadResource(w http.ResponseWriter, cache *k8s.ResourceCache, kind, namespace, name string) (any, int, bool) {
+	lookup := lookupOpenCostWorkloadResource(cache, kind, namespace, name)
 	if lookup.Status != 0 {
 		s.writeError(w, lookup.Status, lookup.Message)
 		return nil, 0, false
@@ -193,8 +191,7 @@ func (s *Server) loadOpenCostWorkloadResource(w http.ResponseWriter, kind, names
 	return lookup.Resource, lookup.DesiredReplicas, true
 }
 
-func (s *Server) lookupOpenCostWorkloadResource(kind, namespace, name string) openCostWorkloadLookup {
-	cache := k8s.GetResourceCache()
+func lookupOpenCostWorkloadResource(cache *k8s.ResourceCache, kind, namespace, name string) openCostWorkloadLookup {
 	if cache == nil {
 		return openCostWorkloadLookup{
 			Status:  http.StatusServiceUnavailable,

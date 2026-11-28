@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"reflect"
 	"strings"
 	"syscall"
 	"time"
@@ -29,7 +30,7 @@ type localConnectionResponse struct {
 }
 
 func (s *Server) requireLocalConnections(w http.ResponseWriter) bool {
-	if s.configManagement() != "local" || s.localConnections == nil || s.localRuntime == nil {
+	if s.configManagement() != "local" || s.localConnections == nil || s.integrationRuntime == nil {
 		s.writeError(w, http.StatusForbidden, "Saved connections are available only in local CLI and Desktop Radar. Change this installation's integrations through its operator configuration.")
 		return false
 	}
@@ -93,9 +94,12 @@ func (s *Server) handleUpdateLocalConnection(w http.ResponseWriter, r *http.Requ
 	metadata := request.Action == "forget" || request.Action == "dismiss_previous_notice"
 	response := localConnectionResponse{}
 	var pending connections.Pending
+	var build *k8s.Connection
+	var edit connectionruntime.Edit
 	var probe func(context.Context) error
 	prepare := func() error {
-		target, err := k8s.CurrentProfileTarget()
+		build = k8s.Current()
+		target, err := k8s.ProfileTargetFor(build)
 		if err != nil && !metadata {
 			return err
 		}
@@ -103,24 +107,41 @@ func (s *Server) handleUpdateLocalConnection(w http.ResponseWriter, r *http.Requ
 		if err != nil {
 			return err
 		}
+		if !metadata {
+			var rebuild []config.Integration
+			switch {
+			case request.Action == "reconfirm":
+				rebuild = request.Kinds
+			case pending.Probe:
+				rebuild = []config.Integration{request.Kind}
+			}
+			edit = s.integrationRuntime.PrepareProfiles(build, target, pending.Selected, rebuild...)
+		}
 		if !pending.Probe {
 			return nil
 		}
+		offline := edit.Set().Cost == nil
 		switch request.Kind {
 		case config.IntegrationArgoCD:
-			probe = argocd.PrepareCandidate(*pending.Candidate.Settings.ArgoCD)
+			candidate := *pending.Candidate.Settings.ArgoCD
+			if candidate.URL != "" || !offline {
+				probe = argocd.PrepareCandidateFor(build, false, target.Binding, candidate)
+			}
 		case config.IntegrationCost:
-			probe, err = opencost.PrepareCandidate(connectionruntime.CostConfig(connections.Selection{Bundle: pending.Candidate}, target))
+			candidate := connectionruntime.CostConfig(connections.Selection{Bundle: pending.Candidate}, target)
+			if candidate.URL != "" || !offline {
+				probe, err = opencost.PrepareCandidateFor(build, false, candidate)
+				if offline && errors.Is(err, opencost.ErrKubecostClusterID) {
+					response.Error = "Saved, but Radar could not verify Kubecost without this cluster's ID. Connect to Kubernetes to check the cost source."
+					err = nil
+				}
+			}
 		}
 		return err
 	}
-	var err error
-	if metadata {
-		err = prepare()
-	} else {
-		err = k8s.TryClusterConfiguration(prepare)
-	}
+	err := prepare()
 	if err != nil {
+		edit.Discard()
 		s.connectionError(w, err)
 		return
 	}
@@ -155,44 +176,40 @@ func (s *Server) handleUpdateLocalConnection(w http.ResponseWriter, r *http.Requ
 			if errors.Is(err, argocd.ErrTokenInvalid) {
 				message = "Argo CD rejected the token; the previous connection is unchanged"
 			}
+			edit.Discard()
 			s.connectionError(w, errors.New(message))
 			return
 		}
 		response.Connected, response.Checked = true, true
 	}
-	var selection connections.Selection
-	var probeClient *prometheuspkg.Client
 	commit := func() error {
-		target, targetErr := k8s.CurrentProfileTarget()
+		target, targetErr := k8s.ProfileTargetFor(build)
 		if !metadata && (targetErr != nil || !target.Same(pending.Target)) {
 			return config.ErrProfileConflict
 		}
-		if err := s.localConnections.Commit(r.Context(), pending); err != nil {
-			return err
-		}
-		if !metadata {
-			s.localRuntime.Apply(target, false)
-			selection = s.localConnections.Resolve(target, request.Kind, false)
-			if pending.Probe && request.Kind == config.IntegrationMetrics {
-				probeClient = prometheuspkg.GetClient()
-			}
-		}
-		return nil
+		return s.localConnections.Commit(r.Context(), pending)
 	}
 	if metadata {
 		err = commit()
 	} else {
-		err = k8s.TryClusterConfiguration(commit)
+		err = edit.Commit(commit)
 	}
 	if err != nil {
 		s.connectionError(w, err)
 		return
 	}
-	if !metadata {
-		// A save can change Argo CD settings whatever its kind (a reconfirm
-		// covers several). Connect now rather than on the first page that
-		// asks; a no-op when the connection is in place.
-		argocd.Prewarm()
+	selection := pending.Selected[request.Kind]
+	var probeClient *prometheuspkg.Client
+	var isolatedProbe bool
+	if pending.Probe && request.Kind == config.IntegrationMetrics && selection.Err == nil {
+		if edit.Set().Metrics != nil {
+			probeClient = edit.Set().Metrics
+		} else if settings := selection.Settings.Prometheus; settings != nil && settings.URL != "" {
+			probeClient = prometheuspkg.NewClient(nil, nil, selection.View.Target.Context, nil, false, nil)
+			probeClient.Configure(settings.URL, settings.Headers)
+			isolatedProbe = true
+			defer probeClient.Close()
+		}
 	}
 	response.Profiles = s.readLocalConnectionViews()
 	if err := s.fillConnectionCatalog(&response); err != nil {
@@ -209,7 +226,10 @@ func (s *Server) handleUpdateLocalConnection(w http.ResponseWriter, r *http.Requ
 			log.Printf("[connections] Saved metrics connection check failed: %s", sanitizeForLog(prom.RedactURLs(err.Error())))
 			response.Error = "Saved, but the metrics backend could not be reached. Check its URL, authentication, network access and TLS configuration."
 		}
-		if prometheuspkg.GetClient() != probeClient || s.localRuntime.CheckCurrent(selection.View.Target, selection) != nil {
+		current, err := k8s.CurrentProfileTarget()
+		if err != nil || !current.Same(selection.View.Target) ||
+			(!isolatedProbe && connectionruntime.SetFor(build).Metrics != probeClient) ||
+			!reflect.DeepEqual(selection.Settings, s.localConnections.Resolve(current, request.Kind, false).Settings) {
 			response.Connected = false
 			response.Error = "Settings changed during the connection check; reload Settings for the current connection"
 		}
@@ -232,4 +252,23 @@ func (s *Server) connectionError(w http.ResponseWriter, err error) {
 		log.Printf("[connections] Failed to access local settings: %v", prom.RedactURLs(err.Error()))
 	}
 	s.writeError(w, status, prom.RedactURLs(err.Error()))
+}
+
+func (s *Server) integrationCommitError(w http.ResponseWriter, integration string, err error) {
+	if errors.Is(err, config.ErrProfileConflict) || errors.Is(err, config.ErrProfileBusy) || errors.Is(err, k8s.ErrContextConfigurationBusy) {
+		s.connectionError(w, err)
+		return
+	}
+	message := prom.RedactURLs(err.Error())
+	log.Printf("[config] Failed to persist %s configuration: %s", integration, message)
+	s.writeError(w, http.StatusInternalServerError, message)
+}
+
+func (s *Server) refreshIntegrationProfiles(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.integrationRuntime != nil {
+			s.integrationRuntime.RefreshProfiles()
+		}
+		next.ServeHTTP(w, r)
+	})
 }

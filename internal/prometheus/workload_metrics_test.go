@@ -172,12 +172,12 @@ func TestMetricCoveragePreservesStaleness(t *testing.T) {
 
 func TestWorkloadWithoutConfigurationRequiresReadyCache(t *testing.T) {
 	previous := k8s.GetConnectionStatus()
-	t.Cleanup(func() { k8s.SetConnectionStatus(previous) })
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
-	Initialize(nil, nil, "setup-test", nil)
+	t.Cleanup(func() { k8s.PublishTestConnectionStatus(previous) })
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	client := testClient(t, "setup-test", nil)
 	SetAuthGate(nil)
 	router := chi.NewRouter()
-	RegisterRoutes(router)
+	testRoutes(client).RegisterRoutes(router)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/prometheus/workload/Deployment/shop/api", nil))
 	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "cluster cache not ready") {
@@ -215,8 +215,8 @@ func TestWorkloadCollectionKeepsObserversSeparate(t *testing.T) {
 
 func TestWorkloadMetricsGateBeforeCacheOrPrometheus(t *testing.T) {
 	previous := k8s.GetConnectionStatus()
-	t.Cleanup(func() { k8s.SetConnectionStatus(previous) })
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	t.Cleanup(func() { k8s.PublishTestConnectionStatus(previous) })
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
 	t.Cleanup(func() { SetAuthGate(nil) })
 	for _, denied := range []string{"deployments", "pods"} {
 		SetAuthGate(func(_ *http.Request, _, resource, namespace, verb string) bool {
@@ -226,7 +226,7 @@ func TestWorkloadMetricsGateBeforeCacheOrPrometheus(t *testing.T) {
 			return resource != denied
 		})
 		router := chi.NewRouter()
-		RegisterRoutes(router)
+		testRoutes(nil).RegisterRoutes(router)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/prometheus/workload/Deployment/shop/api", nil))
 		if w.Code != http.StatusForbidden {
@@ -240,11 +240,11 @@ func TestWorkloadMetricsGateBeforeCacheOrPrometheus(t *testing.T) {
 
 func TestWorkloadMetricsInvalidSourceExplainsChoices(t *testing.T) {
 	previous := k8s.GetConnectionStatus()
-	t.Cleanup(func() { k8s.SetConnectionStatus(previous) })
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	t.Cleanup(func() { k8s.PublishTestConnectionStatus(previous) })
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
 	SetAuthGate(nil)
 	router := chi.NewRouter()
-	RegisterRoutes(router)
+	testRoutes(nil).RegisterRoutes(router)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/prometheus/workload/Deployment/shop/api?source=unknown", nil))
 	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "use beyla or istio") {
@@ -254,10 +254,10 @@ func TestWorkloadMetricsInvalidSourceExplainsChoices(t *testing.T) {
 
 func TestWorkloadMetricsDisconnected(t *testing.T) {
 	previous := k8s.GetConnectionStatus()
-	t.Cleanup(func() { k8s.SetConnectionStatus(previous) })
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateDisconnected})
+	t.Cleanup(func() { k8s.PublishTestConnectionStatus(previous) })
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateDisconnected})
 	router := chi.NewRouter()
-	RegisterRoutes(router)
+	testRoutes(nil).RegisterRoutes(router)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/prometheus/workload/Deployment/shop/api", nil))
 	if w.Code != http.StatusServiceUnavailable {
@@ -268,24 +268,27 @@ func TestWorkloadMetricsDisconnected(t *testing.T) {
 func TestWorkloadScopeDoesNotFollowConnectionChanges(t *testing.T) {
 	for _, change := range []struct {
 		name string
-		run  func()
+		run  func(*Client) *Client
 	}{
-		{"url", func() { SetManualURL("http://different:9090") }},
-		{"headers", func() { SetHeaders(map[string]string{"X-Scope-OrgID": "other"}) }},
-		{"configure URL", func() { Configure("http://different:9090", nil) }},
-		{"configure headers", func() { Configure("", map[string]string{"X-Scope-OrgID": "other"}) }},
-		{"context", func() { Reinitialize(nil, nil, "other", nil) }},
+		{"url", func(c *Client) *Client { c.Configure("http://different:9090", nil); return c }},
+		{"headers", func(c *Client) *Client { c.Configure("", map[string]string{"X-Scope-OrgID": "other"}); return c }},
+		{"context", func(c *Client) *Client {
+			_ = c.Close()
+			next := testClient(t, "other", nil)
+			next.NoteWorkloadScopeCleared()
+			return next
+		}},
 	} {
 		t.Run(change.name, func(t *testing.T) {
-			Initialize(nil, nil, "original", nil)
-			if err := SetWorkloadMetricsScope(prom.WorkloadMetricsScope{SingleCluster: true}, ""); err != nil {
+			client := testClient(t, "original", nil)
+			if err := client.SetWorkloadMetricsScope(prom.WorkloadMetricsScope{SingleCluster: true}, ""); err != nil {
 				t.Fatal(err)
 			}
-			change.run()
-			if _, _, ok := GetClient().workloadMetricsConfig(); ok {
+			client = change.run(client)
+			if _, _, ok := client.workloadMetricsConfig(); ok {
 				t.Fatal("scope followed connection change")
 			}
-			notice := GetClient().workloadScopeNotice()
+			notice := client.workloadScopeNotice()
 			if !strings.Contains(notice, "cluster or metrics connection changed") || strings.Contains(notice, "--prometheus-") {
 				t.Fatalf("misleading scope recovery notice: %s", notice)
 			}
@@ -295,24 +298,22 @@ func TestWorkloadScopeDoesNotFollowConnectionChanges(t *testing.T) {
 
 func TestWorkloadScopeSurvivesUnchangedStartupAndSettings(t *testing.T) {
 	config := &rest.Config{Host: "https://cluster-a"}
-	Initialize(nil, config, "original", nil)
-	SetManualURL("http://metrics:9090")
-	SetHeaders(map[string]string{"X-Scope-OrgID": "tenant-a"})
-	if err := SetWorkloadMetricsScope(prom.WorkloadMetricsScope{SingleCluster: true}, ""); err != nil {
+	client := NewClient(nil, config, "original", nil, false, nil)
+	t.Cleanup(func() { _ = client.Close() })
+	client.Configure("http://metrics:9090", map[string]string{"X-Scope-OrgID": "tenant-a"})
+	if err := client.SetWorkloadMetricsScope(prom.WorkloadMetricsScope{SingleCluster: true}, ""); err != nil {
 		t.Fatal(err)
 	}
-	Reinitialize(nil, rest.CopyConfig(config), "original", nil)
-	SetManualURL("http://metrics:9090/")
-	SetHeaders(map[string]string{"X-Scope-OrgID": "tenant-a"})
-	if _, _, ok := GetClient().workloadMetricsConfig(); !ok {
+	client.Configure("http://metrics:9090/", map[string]string{"X-Scope-OrgID": "tenant-a"})
+	if _, _, ok := client.workloadMetricsConfig(); !ok {
 		t.Fatal("startup or unchanged settings discarded scope")
 	}
-	Configure("http://metrics:9090/", map[string]string{"X-Scope-OrgID": "tenant-a"})
-	if _, _, ok := GetClient().workloadMetricsConfig(); !ok {
+	client.Configure("http://metrics:9090/", map[string]string{"X-Scope-OrgID": "tenant-a"})
+	if _, _, ok := client.workloadMetricsConfig(); !ok {
 		t.Fatal("unchanged atomic configuration discarded scope")
 	}
-	Reinitialize(nil, &rest.Config{Host: "https://cluster-b"}, "original", nil)
-	if _, _, ok := GetClient().workloadMetricsConfig(); ok {
+	client = NewClient(nil, &rest.Config{Host: "https://cluster-b"}, "original", nil, false, nil)
+	if _, _, ok := client.workloadMetricsConfig(); ok {
 		t.Fatal("same display name carried scope to another cluster")
 	}
 }

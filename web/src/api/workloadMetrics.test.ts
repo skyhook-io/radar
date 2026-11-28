@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
+import { ApiError } from './client'
 import type { WorkloadMetrics } from './workloadMetrics'
 
 vi.mock('@tanstack/react-query', () => ({ useQuery: (options: unknown) => options }))
-vi.mock('./client', () => ({
+vi.mock('./client', async importOriginal => ({
+  ...(await importOriginal<typeof import('./client')>()),
   useClusterInfo: () => ({ data: { context: 'cluster-a' } }),
   fetchJSON: vi.fn(),
-  ApiError: class extends Error {},
 }))
 vi.mock('./config', () => ({ getApiBase: () => '/api' }))
 const { useWorkloadMetrics: workloadQueryOptions } = await import('./workloadMetrics')
@@ -15,6 +16,7 @@ describe('workload source-switch placeholders', () => {
     queryKey: unknown[]
     placeholderData: (data: WorkloadMetrics, query: { queryKey: unknown[] }) => WorkloadMetrics | undefined
     refetchInterval: (query: { state: { data: WorkloadMetrics } }) => number
+    retry: (failureCount: number, error: Error) => boolean
   }
   const data: WorkloadMetrics = {
     state: 'available', sources: [], pods: 1, podsTotal: 1,
@@ -30,6 +32,13 @@ describe('workload source-switch placeholders', () => {
   it('polls pending current attribution even while history is available', () => {
     expect(options().refetchInterval({ state: { data } })).toBe(30_000)
     expect(options().refetchInterval({ state: { data: { ...data, comparison: { cpu: { state: 'detecting', unit: 'cores', series: [] } } } } })).toBe(3_000)
+  })
+  it.each([409, 503])('retries an HTTP %s once on connection replacement', (status) => {
+    const { retry } = options()
+    const error = new ApiError('Metrics connection closed. Retry the request', status)
+    expect(retry(0, error)).toBe(true)
+    expect(retry(1, error)).toBe(false)
+    expect(retry(0, new ApiError('Forbidden', 403))).toBe(false)
   })
   it.each([1, 2, 3, 4, 5, 6])('drops the previous payload when identity field %s changes', (index) => {
     const query = options()

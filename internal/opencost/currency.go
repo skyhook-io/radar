@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/skyhook-io/radar/internal/config"
@@ -21,23 +20,39 @@ import (
 const currencyDetectionTTL = 30 * time.Second
 
 type CurrencyResolver struct {
+	cache          currencyCache
+	cost           *Manager
+	metrics        *prometheuspkg.Client
 	mu             sync.Mutex
 	override       string
 	cached         string
 	cachedDetected bool
 	expiresAt      time.Time
+	metricsEpoch   uint64
 }
 
 func NewCurrencyResolver(override string) *CurrencyResolver {
 	return &CurrencyResolver{override: override}
 }
 
-func (r *CurrencyResolver) Resolve() string {
-	var cache currencyCache
-	if resourceCache := k8s.GetResourceCache(); resourceCache != nil {
-		cache = resourceCache
+func NewConnectionCurrencyResolver(override string, conn *k8s.Connection, cost *Manager, client *prometheuspkg.Client) *CurrencyResolver {
+	r := &CurrencyResolver{override: override, cost: cost, metrics: client}
+	if cache := conn.ResourceCache(); cache != nil {
+		r.cache = cache
 	}
-	return r.resolve(cache, clusterCurrencyDetectionAllowed(), time.Now())
+	return r
+}
+
+func (r *CurrencyResolver) Resolve() string {
+	if r == nil {
+		return pkgopencost.DefaultCurrency
+	}
+	return r.resolve(r.cache, r.clusterDetectionAllowed(), time.Now())
+}
+
+func (r *CurrencyResolver) clusterDetectionAllowed() bool {
+	return r.cost == nil || r.cost.ConfigSnapshot().Source == SourceKubecost || r.cost.SelectedSourceSnapshot() == SourceKubecost ||
+		r.metrics == nil || !r.metrics.HasManualURL()
 }
 
 func (r *CurrencyResolver) resolve(cache currencyCache, detectionAllowed bool, now time.Time) string {
@@ -49,6 +64,12 @@ func (r *CurrencyResolver) resolve(cache currencyCache, detectionAllowed bool, n
 	}
 	if !detectionAllowed {
 		return pkgopencost.DefaultCurrency
+	}
+	epoch := r.metrics.BackendEpoch()
+	if epoch != r.metricsEpoch {
+		r.cachedDetected = false
+		r.expiresAt = time.Time{}
+		r.metricsEpoch = epoch
 	}
 	if now.Before(r.expiresAt) {
 		return r.cached
@@ -84,14 +105,6 @@ func (r *CurrencyResolver) Invalidate() {
 	r.cachedDetected = false
 	r.expiresAt = time.Time{}
 	r.mu.Unlock()
-}
-
-func clusterCurrencyDetectionAllowed() bool {
-	if ConfigSnapshot().Source == SourceKubecost || SelectedSourceSnapshot() == SourceKubecost {
-		return true
-	}
-	client := prometheuspkg.GetClient()
-	return client == nil || !client.HasManualURL()
 }
 
 type currencyCache interface {
@@ -340,22 +353,3 @@ func normalizedDetectedCurrency(value string) string {
 // CurrencyResolver built from --opencost-currency. Publishing it here keeps
 // both surfaces on one resolver so they share the override and its detection
 // cache instead of disagreeing about the cluster's currency.
-var processCurrencyResolver atomic.Pointer[CurrencyResolver]
-
-func PublishCurrencyResolver(resolver *CurrencyResolver) {
-	processCurrencyResolver.Store(resolver)
-}
-
-func InvalidateCurrency() {
-	if resolver := processCurrencyResolver.Load(); resolver != nil {
-		resolver.Invalidate()
-	}
-}
-
-func ResolveCurrency() string {
-	resolver := processCurrencyResolver.Load()
-	if resolver == nil {
-		return pkgopencost.DefaultCurrency
-	}
-	return resolvedCurrency(resolver.Resolve)
-}

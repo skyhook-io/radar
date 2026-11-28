@@ -3,13 +3,16 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/skyhook-io/radar/internal/connectionruntime"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 )
@@ -103,6 +106,40 @@ func TestHandleRightsizingScanExplicitDeniedNamespaceReturnsForbidden(t *testing
 	}
 }
 
+func TestRightsizingScanKeepsUnavailableSettingsResult(t *testing.T) {
+	reason := errors.New("saved metrics configuration is invalid")
+	s := serverWithTestIntegrations(t, connectionruntime.Settings{MetricsError: reason})
+	request := func(method string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(method, "/api/prometheus/rightsizing/scan", nil)
+		w := httptest.NewRecorder()
+		s.handleRightsizingScan(w, r)
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s status = %d, body = %s", method, w.Code, w.Body)
+		}
+		return w
+	}
+	if w := request(http.MethodGet); w.Body.String() != "null\n" {
+		t.Fatalf("initial snapshot = %s", w.Body)
+	}
+	request(http.MethodPost)
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		w := request(http.MethodGet)
+		var result prometheuspkg.RightsizingScanResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+			t.Fatal(err)
+		}
+		if result.ScanStatus == "finished" {
+			if result.State != prometheuspkg.RightsizingScanUnavailable || result.Reason != reason.Error() {
+				t.Fatalf("unavailable result = %+v", result)
+			}
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("scan did not retain the settings failure")
+}
+
 func TestHasExplicitNamespaceFilter(t *testing.T) {
 	for _, tt := range []struct {
 		url  string
@@ -122,7 +159,7 @@ func TestHasExplicitNamespaceFilter(t *testing.T) {
 
 func TestScanIDUsesOriginalScopeAndRechecksPermissions(t *testing.T) {
 	s := newTestServer(t)
-	manager := prometheuspkg.RightsizingScans()
+	manager := installTestMetrics(t, "").RightsizingScans()
 	manager.Invalidate()
 	t.Cleanup(manager.Invalidate)
 	s.permCache = pkgauth.NewPermissionCache().WithConnectionKey(currentPermissionConnection)

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -225,6 +226,27 @@ func TestOpenObserveSetupSavesAndNeverReturnsTheToken(t *testing.T) {
 	}
 	if w := ooRequest(s, http.MethodPost, "/api/integrations/openobserve/setup", `{"unknown":1}`); w.Code != http.StatusBadRequest {
 		t.Fatalf("unknown field = %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestOpenObserveSetupResaveRebuildsMetrics(t *testing.T) {
+	s := setupOpenObserveTest(t)
+	backend := oofake.Start(t, &oofake.Server{IDs: map[string]string{ooSetupUID: "dev"}})
+	const path = "/api/integrations/openobserve/setup"
+	if w := ooRequest(s, http.MethodPost, path, `{"baseUrl":"`+backend.URL+`","org":"default","user":"test","token":"oo-token"}`); w.Code != http.StatusOK {
+		t.Fatalf("initial setup = %d %s", w.Code, w.Body.String())
+	}
+	before := currentTestIntegrations()
+	saved := config.Load().OpenObserve
+	if w := ooRequest(s, http.MethodPost, path, `{"useSaved":true}`); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"outcome":"saved"`) {
+		t.Fatalf("re-save = %d %s", w.Code, w.Body.String())
+	}
+	if !reflect.DeepEqual(saved, config.Load().OpenObserve) {
+		t.Fatal("re-save changed the stored settings")
+	}
+	after := currentTestIntegrations()
+	if before.Metrics == after.Metrics || !before.Metrics.Closed() || after.ArgoCD != before.ArgoCD {
+		t.Fatal("re-save did not replace Metrics while preserving Argo CD")
 	}
 }
 

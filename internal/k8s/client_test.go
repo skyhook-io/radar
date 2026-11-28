@@ -758,6 +758,7 @@ func TestInClusterRuntimeReconnectPublishesConnectedAfterReinit(t *testing.T) {
 	clusterName = "service-account-cluster"
 	kubeconfigMode = "in-cluster"
 	initializationStarted = true
+	installedConn.Store(installedConnectionLocked(nil, nil))
 	clientMu.Unlock()
 	t.Cleanup(func() {
 		clientMu.Lock()
@@ -789,6 +790,10 @@ func TestInClusterRuntimeReconnectPublishesConnectedAfterReinit(t *testing.T) {
 		contextSwitchMu.Unlock()
 	})
 
+	previousDeadline := ContextSwitchTimeout
+	ContextSwitchTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { ContextSwitchTimeout = previousDeadline })
+
 	initialized := false
 	err := reinitializeCurrentContextIfOperationCurrent(
 		"in-cluster",
@@ -798,6 +803,10 @@ func TestInClusterRuntimeReconnectPublishesConnectedAfterReinit(t *testing.T) {
 				t.Fatalf("invalid subsystem init inputs: ctxErr=%v progressNil=%t", ctx.Err(), progress == nil)
 			}
 			initialized = true
+			<-ctx.Done()
+			if !errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				t.Fatalf("init context ended with %v", ctx.Err())
+			}
 			return nil
 		},
 	)

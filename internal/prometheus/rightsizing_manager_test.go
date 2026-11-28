@@ -158,14 +158,14 @@ func TestScanSkipsDaemonSetsThatMatchNoNode(t *testing.T) {
 
 	// Named directly, the skipped DaemonSet is a node pool scaled away: its
 	// retained history is served as a scaled-to-zero workload.
-	single, err := loadRightsizingWorkload(context.Background(), "DaemonSet", "kube-system", "nvidia-gpu-device-plugin")
+	single, err := loadRightsizingWorkload(context.Background(), k8s.GetResourceCache(), "DaemonSet", "kube-system", "nvidia-gpu-device-plugin")
 	if err != nil {
 		t.Fatalf("loadRightsizingWorkload: %v", err)
 	}
 	if !single.scaledToZero || single.replicas != 0 {
 		t.Errorf("single DaemonSet with no nodes = replicas %d scaledToZero %v, want 0 and true", single.replicas, single.scaledToZero)
 	}
-	unobserved, err := loadRightsizingWorkload(context.Background(), "DaemonSet", "kube-system", "node-exporter")
+	unobserved, err := loadRightsizingWorkload(context.Background(), k8s.GetResourceCache(), "DaemonSet", "kube-system", "node-exporter")
 	if err != nil {
 		t.Fatalf("loadRightsizingWorkload: %v", err)
 	}

@@ -511,7 +511,7 @@ func TestRuntimeAuthFailureIgnoresNonConnectedState(t *testing.T) {
 	for _, state := range []ConnectionState{StateConnecting, StateDisconnected} {
 		t.Run(string(state), func(t *testing.T) {
 			generation := prepareRuntimeAuthTest(t)
-			SetConnectionStatus(ConnectionStatus{State: state, Context: "test-context"})
+			PublishTestConnectionStatus(ConnectionStatus{State: state, Context: "test-context"})
 			var probes atomic.Int32
 			setRuntimeAuthProbe(func(context.Context) error {
 				probes.Add(1)
@@ -660,7 +660,7 @@ func TestRuntimeAuthRecoveryRearmsThroughSwitchContext(t *testing.T) {
 	if err := SwitchContext("recovered"); err != nil {
 		t.Fatalf("SwitchContext() error = %v", err)
 	}
-	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "recovered"})
+	PublishTestConnectionStatus(ConnectionStatus{State: StateConnected, Context: "recovered"})
 
 	clientMu.RLock()
 	recoveredGeneration := installedConn.Load().ClientGeneration()
@@ -740,13 +740,13 @@ func TestRuntimeAuthRecoveryReconnectsWhenCredentialsReturn(t *testing.T) {
 		reconnects.Add(1)
 		// The real reconnect (performContextSwitch) publishes Connected
 		// while holding contextOpMu; the stub mirrors that contract.
-		SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: contextName})
+		PublishTestConnectionStatus(ConnectionStatus{State: StateConnected, Context: contextName})
 		return nil
 	})
 
 	// The publish-side hook alone must set the debt and start the worker —
 	// this is the startup-expired-credentials path, no demotion involved.
-	SetConnectionStatus(ConnectionStatus{
+	PublishTestConnectionStatus(ConnectionStatus{
 		State:     StateDisconnected,
 		Context:   "recovery-context",
 		ErrorType: "auth",
@@ -788,12 +788,12 @@ func TestRuntimeAuthRecoveryStopsWhenNoLongerNeeded(t *testing.T) {
 		return nil
 	})
 
-	SetConnectionStatus(ConnectionStatus{
+	PublishTestConnectionStatus(ConnectionStatus{
 		State:     StateDisconnected,
 		Context:   "recovery-context",
 		ErrorType: "auth",
 	})
-	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "recovery-context"})
+	PublishTestConnectionStatus(ConnectionStatus{State: StateConnected, Context: "recovery-context"})
 
 	deadline := time.Now().Add(2 * time.Second)
 	for runtimeAuthRecoveryActive.Load() {
@@ -840,11 +840,11 @@ func TestRuntimeAuthRecoveryContinuesWhenSuperseded(t *testing.T) {
 		if reconnects.Add(1) == 1 {
 			return ErrReconnectSuperseded
 		}
-		SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: contextName})
+		PublishTestConnectionStatus(ConnectionStatus{State: StateConnected, Context: contextName})
 		return nil
 	})
 
-	SetConnectionStatus(ConnectionStatus{
+	PublishTestConnectionStatus(ConnectionStatus{
 		State:     StateDisconnected,
 		Context:   "recovery-context",
 		ErrorType: "auth",
@@ -885,11 +885,11 @@ func TestRuntimeAuthRecoveryRetargetsNewEpisode(t *testing.T) {
 			return ErrReconnectSuperseded
 		}
 		reconnectedContext.Store(contextName)
-		SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: contextName})
+		PublishTestConnectionStatus(ConnectionStatus{State: StateConnected, Context: contextName})
 		return nil
 	})
 
-	SetConnectionStatus(ConnectionStatus{
+	PublishTestConnectionStatus(ConnectionStatus{
 		State:     StateDisconnected,
 		Context:   "context-a",
 		ErrorType: "auth",
@@ -897,7 +897,7 @@ func TestRuntimeAuthRecoveryRetargetsNewEpisode(t *testing.T) {
 
 	// New episode on a different context: the publish-side hook nudges the
 	// worker awake so it retargets without waiting out the backoff.
-	SetConnectionStatus(ConnectionStatus{
+	PublishTestConnectionStatus(ConnectionStatus{
 		State:     StateDisconnected,
 		Context:   "context-b",
 		ErrorType: "auth",
@@ -933,11 +933,11 @@ func TestRuntimeAuthRecoverySurvivesErrorTypeFlip(t *testing.T) {
 	var reconnects atomic.Int32
 	setRuntimeAuthReconnect(func(contextName string, _ uint64) error {
 		reconnects.Add(1)
-		SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: contextName})
+		PublishTestConnectionStatus(ConnectionStatus{State: StateConnected, Context: contextName})
 		return nil
 	})
 
-	SetConnectionStatus(ConnectionStatus{
+	PublishTestConnectionStatus(ConnectionStatus{
 		State:     StateDisconnected,
 		Context:   "recovery-context",
 		ErrorType: "auth",
@@ -947,7 +947,7 @@ func TestRuntimeAuthRecoverySurvivesErrorTypeFlip(t *testing.T) {
 	// A failed user retry with a hung plugin republishes as "timeout", and a
 	// Helm handler marking the cluster unreachable does the same with no user
 	// action at all. Neither settles the recovery debt.
-	SetConnectionStatus(ConnectionStatus{
+	PublishTestConnectionStatus(ConnectionStatus{
 		State:     StateDisconnected,
 		Context:   "recovery-context",
 		Error:     "cluster connection failed: auth plugin timeout: context deadline exceeded",
@@ -1030,7 +1030,7 @@ func TestInconclusiveStreakResetsOnConclusiveOutcomes(t *testing.T) {
 
 	// A connected publish is conclusive: the next episode's first
 	// inconclusive probe must restart at the short cooldown.
-	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "test-context"})
+	PublishTestConnectionStatus(ConnectionStatus{State: StateConnected, Context: "test-context"})
 	if got := nextInconclusiveCooldown(); got != runtimeAuthInconclusiveProbeCooldown {
 		t.Fatalf("cooldown after connected publish = %v, want %v", got, runtimeAuthInconclusiveProbeCooldown)
 	}
@@ -1182,12 +1182,12 @@ func TestRuntimeAuthRecoveryYieldsToActiveContextOperation(t *testing.T) {
 		return nil
 	})
 	setRuntimeAuthReconnect(func(contextName string, _ uint64) error {
-		SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: contextName})
+		PublishTestConnectionStatus(ConnectionStatus{State: StateConnected, Context: contextName})
 		return nil
 	})
 
 	activeContextOperations.Add(1)
-	SetConnectionStatus(ConnectionStatus{
+	PublishTestConnectionStatus(ConnectionStatus{
 		State:     StateDisconnected,
 		Context:   "recovery-context",
 		ErrorType: "auth",
@@ -1218,7 +1218,7 @@ func TestSetConnectionStatusStartsRecoveryForAuthTypes(t *testing.T) {
 			t.Cleanup(ResetTestState)
 			setRuntimeAuthRecoveryIntervalsForTest(time.Hour, time.Hour)
 
-			SetConnectionStatus(ConnectionStatus{
+			PublishTestConnectionStatus(ConnectionStatus{
 				State:     StateDisconnected,
 				Context:   "some-context",
 				ErrorType: errorType,
@@ -1248,11 +1248,11 @@ func TestRuntimeAuthRecoveryStaticCredentialsReconnectViaDiskReread(t *testing.T
 		if reconnects.Add(1) == 1 {
 			return errors.New("cluster connection failed: Unauthorized")
 		}
-		SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: contextName})
+		PublishTestConnectionStatus(ConnectionStatus{State: StateConnected, Context: contextName})
 		return nil
 	})
 
-	SetConnectionStatus(ConnectionStatus{
+	PublishTestConnectionStatus(ConnectionStatus{
 		State:     StateDisconnected,
 		Context:   "openshift-context",
 		ErrorType: "auth",
@@ -1283,7 +1283,7 @@ func TestResetTestStateWaitsForRecoveryWorker(t *testing.T) {
 		<-release
 		return errors.New("dial tcp: connection refused")
 	})
-	SetConnectionStatus(ConnectionStatus{State: StateDisconnected, Context: "previous-test", ErrorType: "auth"})
+	PublishTestConnectionStatus(ConnectionStatus{State: StateDisconnected, Context: "previous-test", ErrorType: "auth"})
 	select {
 	case <-started:
 	case <-time.After(2 * time.Second):
@@ -1369,7 +1369,7 @@ func TestRuntimeAuthRecoveryStaticCredentialsSkipDiskRereadWhenOffline(t *testin
 		return nil
 	})
 
-	SetConnectionStatus(ConnectionStatus{
+	PublishTestConnectionStatus(ConnectionStatus{
 		State:     StateDisconnected,
 		Context:   "openshift-context",
 		ErrorType: "auth",
@@ -1409,7 +1409,7 @@ func TestRuntimeAuthRecoveryExecCredentialsSkipDiskRereadAttempts(t *testing.T) 
 		return nil
 	})
 
-	SetConnectionStatus(ConnectionStatus{
+	PublishTestConnectionStatus(ConnectionStatus{
 		State:     StateDisconnected,
 		Context:   "eks-context",
 		ErrorType: "auth",
@@ -1476,7 +1476,7 @@ func prepareRuntimeAuthTest(t *testing.T) uint64 {
 		kubeconfigPath = previousPath
 		clientMu.Unlock()
 	})
-	SetConnectionStatus(ConnectionStatus{
+	PublishTestConnectionStatus(ConnectionStatus{
 		State:       StateConnected,
 		Context:     "test-context",
 		ClusterName: "test-cluster",
@@ -1572,7 +1572,7 @@ func TestRuntimeAuthExecCredentialExpiry(t *testing.T) {
 		kubeconfigPath = previousPath
 		clientMu.Unlock()
 	})
-	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "exec-test"})
+	PublishTestConnectionStatus(ConnectionStatus{State: StateConnected, Context: "exec-test"})
 
 	if _, err := clients.clientset.Discovery().RESTClient().Get().AbsPath("/version").DoRaw(context.Background()); err != nil {
 		t.Fatalf("initial GET /version error = %v", err)
@@ -1613,7 +1613,7 @@ func TestRuntimeAuthExecCredentialExpiry(t *testing.T) {
 	clientMu.Lock()
 	installedConn.Store(installedConnectionLocked(config, recoveredClients))
 	clientMu.Unlock()
-	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "exec-test"})
+	PublishTestConnectionStatus(ConnectionStatus{State: StateConnected, Context: "exec-test"})
 
 	time.Sleep(150 * time.Millisecond)
 	if err := os.WriteFile(statePath, []byte("fail"), 0o600); err != nil {

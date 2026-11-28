@@ -9,11 +9,12 @@ import (
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/cloud"
+	"github.com/skyhook-io/radar/internal/portforward"
 )
 
 func scanTestManager(t *testing.T, run scanRunner) *RightsizingScanManager {
 	t.Helper()
-	m := newRightsizingScanManager()
+	m := (&Client{}).newRightsizingScanManager()
 	m.prepare = func() (scanRunner, func() bool) { return run, func() bool { return true } }
 	t.Cleanup(m.Invalidate)
 	return m
@@ -132,6 +133,47 @@ func TestScanIdentityScopeAndGenerationIsolation(t *testing.T) {
 	m.Invalidate()
 	if _, err := m.Resolve(alice, request); !errors.Is(err, ErrRightsizingScanScopeChanged) {
 		t.Fatalf("old generation: %v", err)
+	}
+}
+
+func TestScanWaiterReportsClosedMetricsMember(t *testing.T) {
+	client := NewClient(nil, nil, "test", nil, false, nil)
+	t.Cleanup(func() { _ = client.Close() })
+	m := client.RightsizingScans()
+	started := make(chan struct{})
+	m.prepare = func() (scanRunner, func() bool) {
+		return func(ctx context.Context, scope RightsizingScanScope, _ func(RightsizingScanResponse)) RightsizingScanResponse {
+			close(started)
+			<-ctx.Done()
+			return newRightsizingScanResponse(time.Now(), scope)
+		}, func() bool { return true }
+	}
+	request := scanTestRequest(m)
+	request.ID = "unknown"
+	if _, err := m.Resolve(t.Context(), request); !errors.Is(err, ErrRightsizingScanNotFound) {
+		t.Fatalf("unknown ID on live member: %v", err)
+	}
+	request.ID, request.Wait = "", time.Minute
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	result := make(chan error, 1)
+	go func() {
+		_, err := m.Resolve(ctx, request)
+		result <- err
+	}()
+	select {
+	case <-started:
+	case <-ctx.Done():
+		t.Fatal("scan did not start")
+	}
+	_ = client.Close()
+	select {
+	case err := <-result:
+		if !portforward.IsMemberClosed(ctx, err) {
+			t.Fatalf("waiter returned %v, want a closed member error", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("closing Metrics did not wake the waiter")
 	}
 }
 

@@ -1,12 +1,10 @@
 package connectionruntime
 
 import (
-	"errors"
-	"log"
-	"maps"
+	"context"
+	"io"
 	"reflect"
-	"strings"
-	"sync"
+	"sync/atomic"
 
 	"github.com/skyhook-io/radar/internal/argocd"
 	"github.com/skyhook-io/radar/internal/config"
@@ -15,175 +13,237 @@ import (
 	"github.com/skyhook-io/radar/internal/opencost"
 	"github.com/skyhook-io/radar/internal/openobserve"
 	"github.com/skyhook-io/radar/internal/prometheus"
-	"github.com/skyhook-io/radar/internal/traffic"
 	"github.com/skyhook-io/radar/pkg/prom"
 )
 
 type Runtime struct {
-	Resolver       *connections.Resolver
-	mu             sync.Mutex
-	target         k8s.ProfileTarget
-	active         map[config.Integration]connections.Selection
-	restartTraffic func() error
+	Resolver          *connections.Resolver
+	settings          atomic.Pointer[Settings]
+	scopeCleared      atomic.Bool
+	scopeConfigured   bool
+	launchBinding     string
+	launchFingerprint string
 }
 
-func New(resolver *connections.Resolver, restartTraffic func() error) *Runtime {
-	return &Runtime{Resolver: resolver, active: map[config.Integration]connections.Selection{}, restartTraffic: restartTraffic}
+func (s *Settings) SetMetrics(metrics prom.Connection) {
+	if len(metrics.Headers) == 0 {
+		metrics.Headers = nil
+	}
+	s.Metrics = metrics
 }
 
-func (r *Runtime) Refresh(kind config.Integration) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if k8s.GetConnectionStatus().State != k8s.StateConnected {
-		return errors.New("connect to Kubernetes before using this context's integrations")
-	}
-	target, err := k8s.CurrentProfileTarget()
-	if err != nil {
-		return err
-	}
-	selected := r.resolve(target, false)
-	changed := false
-	for _, integration := range config.IntegrationKinds {
-		changed = changed || r.changed(target, integration, selected[integration])
-	}
-	if changed {
-		err = k8s.TryClusterConfiguration(func() error {
-			current, err := k8s.CurrentProfileTarget()
-			if err != nil || !current.Same(target) {
-				return k8s.ErrContextConfigurationBusy
-			}
-			r.activate(target, selected, false)
-			return nil
-		})
-		if err != nil {
-			return err
+func New(resolver *connections.Resolver, startup Settings) *Runtime {
+	launch := k8s.Current()
+	r := &Runtime{Resolver: resolver, launchBinding: launch.ContextBinding(), scopeConfigured: startup.Scope.SingleCluster || len(startup.Scope.ClusterLabels) != 0}
+	if startup.ArgoEnv && startup.ArgoCD.URL == "" && startup.ArgoCD.Token != "" {
+		startup.ArgoTokenBinding = r.launchBinding
+		if k8s.IsInCluster() {
+			startup.ArgoTokenBinding = argocd.InClusterTokenBinding
+		}
+		if startup.ArgoTokenBinding != "" {
+			startup.ArgoTokenContext = launch.ContextName()
 		}
 	}
-	current, err := k8s.CurrentProfileTarget()
-	if err != nil || !current.Same(target) {
+	if r.scopeConfigured {
+		target, _ := k8s.CurrentProfileTarget()
+		r.launchFingerprint = target.Fingerprint
+	}
+	startup.SetMetrics(startup.Metrics)
+	r.settings.Store(&startup)
+	return r
+}
+
+func (r *Runtime) Snapshot() *Settings { return r.settings.Load() }
+
+func (r *Runtime) Settings() Settings {
+	if r == nil {
+		return Settings{}
+	}
+	settings := *r.settings.Load()
+	cleared := r.scopeConfigured && r.scopeCleared.Load()
+	if cleared {
+		settings.Scope = prom.WorkloadMetricsScope{}
+	}
+	settings.scopeCleared = cleared
+	return settings
+}
+
+func (r *Runtime) ClearLaunchScope() { r.scopeCleared.Store(true) }
+
+func (r *Runtime) Build(_ context.Context, conn *k8s.Connection) (io.Closer, func()) {
+	if conn.ContextBinding() != r.launchBinding {
+		r.ClearLaunchScope()
+	}
+	if r.Resolver == nil && r.launchFingerprint != "" && !r.scopeCleared.Load() {
+		if target, err := k8s.ProfileTargetFor(conn); err != nil || target.Fingerprint != r.launchFingerprint {
+			r.ClearLaunchScope()
+		}
+	}
+	settings := r.Settings()
+	if r.Resolver != nil {
+		target, err := k8s.ProfileTargetFor(conn)
+		if err != nil {
+			settings.MetricsError, settings.ArgoError, settings.CostError = err, err, err
+		} else {
+			settings = r.profiles(conn, target, r.Resolver.ResolveAll(target, false))
+		}
+	}
+	if settings.scopeCleared {
+		r.ClearLaunchScope()
+	}
+	s := build(conn, settings, nil, nil)
+	return s, func() { s.start(nil) }
+}
+
+func (r *Runtime) profiles(conn *k8s.Connection, target k8s.ProfileTarget, selected map[config.Integration]connections.Selection) Settings {
+	settings := r.Settings()
+	settings.observeConfig = config.Load().OpenObserve
+	settings.observeTarget = openobserve.Target{Context: target.Context, Fingerprint: target.Fingerprint, Client: conn.ClientInterface()}
+	metrics, argo, cost := selected[config.IntegrationMetrics], selected[config.IntegrationArgoCD], selected[config.IntegrationCost]
+	if metrics.Settings.Prometheus != nil {
+		settings.SetMetrics(*metrics.Settings.Prometheus)
+	}
+	settings.MetricsError, settings.ArgoError, settings.CostError = settingsError(config.IntegrationMetrics, metrics), settingsError(config.IntegrationArgoCD, argo), settingsError(config.IntegrationCost, cost)
+	settings.ArgoCD = *argo.Settings.ArgoCD
+	settings.ArgoTokenContext, settings.ArgoTokenBinding = target.Context, target.Binding
+	settings.Cost = CostConfig(cost, target)
+	if target.Fingerprint != r.launchFingerprint || !reflect.DeepEqual(settings.Metrics, r.settings.Load().Metrics) || settings.MetricsError != nil {
+		settings.Scope = prom.WorkloadMetricsScope{}
+		settings.scopeCleared = r.scopeConfigured
+	}
+	return settings
+}
+
+func settingsError(kind config.Integration, selected connections.Selection) error {
+	if selected.Err == nil {
+		return nil
+	}
+	return &connections.SettingsError{Kind: kind, Launch: selected.View.State == "launch", Err: selected.Err}
+}
+
+type Edit struct {
+	runtime       *Runtime
+	conn          *k8s.Connection
+	before, after *Set
+	id            string
+	base, next    *Settings
+	clearScope    bool
+}
+
+func (e Edit) Set() Set {
+	if e.after == nil {
+		return Set{}
+	}
+	return *e.after
+}
+
+func (e Edit) Discard() {
+	e.after.closeDisplaced(e.before)
+}
+
+func (r *Runtime) PrepareProfiles(conn *k8s.Connection, target k8s.ProfileTarget, selected map[config.Integration]connections.Selection, rebuild ...config.Integration) Edit {
+	edit := r.captureEdit(conn)
+	r.prepare(&edit, r.profiles(conn, target, selected), rebuild)
+	return edit
+}
+
+func (r *Runtime) captureEdit(conn *k8s.Connection) Edit {
+	return Edit{runtime: r, conn: conn, before: ownedSetFor(conn), id: k8s.ServingConnectionID()}
+}
+
+func (r *Runtime) prepare(edit *Edit, settings Settings, rebuild []config.Integration) {
+	edit.clearScope = settings.scopeCleared
+	if edit.id == "" {
+		return
+	}
+	edit.after = edit.before
+	if len(rebuild) != 0 || edit.before == nil || !sameSettings(settings, edit.before.settings, edit.before.observe) {
+		edit.after = build(edit.conn, settings, edit.before, rebuild)
+	}
+}
+
+func (e *Edit) Commit(persist func() error) error {
+	if err := k8s.TryClusterConfiguration(func() error { return e.commitLocked(persist) }); err != nil {
+		e.Discard()
+		return err
+	}
+	e.finish()
+	return nil
+}
+
+func (e *Edit) commitLocked(persist func() error) error {
+	if (e.base != nil && e.runtime.Snapshot() != e.base) || k8s.Current() != e.conn || k8s.ServingConnectionID() != e.id || ownedSetFor(e.conn) != e.before {
 		return k8s.ErrContextConfigurationBusy
 	}
-	if s := selected[kind]; s.Err != nil {
-		return &connections.SettingsError{Kind: kind, Launch: s.View.State == "launch", Err: s.Err}
+	if err := persist(); err != nil {
+		return err
+	}
+	if e.clearScope {
+		e.runtime.ClearLaunchScope()
+	}
+	if e.next != nil {
+		e.runtime.settings.Store(e.next)
+	}
+	var before io.Closer
+	if e.before != nil {
+		before = e.before
+	}
+	if e.after == e.before && k8s.ServingConnectionID() != e.id ||
+		e.after != e.before && !k8s.ReplaceIntegrations(e.conn, before, e.after) {
+		// Retirement won after persistence. The next admission reads the saved settings.
+		e.Discard()
+		e.before, e.after = nil, nil
 	}
 	return nil
 }
 
-// Apply never probes a remote integration. A caller without the cluster
-// configuration lock can race a switch; Refresh re-resolves the current target
-// before any integration is used, so a stale activation is not acted on.
-func (r *Runtime) Apply(target k8s.ProfileTarget, details bool) map[config.Integration]connections.Selection {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	selected := r.resolve(target, details)
-	if k8s.GetConnectionStatus().State == k8s.StateConnected {
-		r.activate(target, selected, false)
-	}
-	return selected
-}
-
-// ActivateSwitch runs after the switch has rebuilt clients, before it publishes
-// Connected. It skips the traffic restart because the switch already
-// reinitialized traffic.
-func (r *Runtime) ActivateSwitch(target k8s.ProfileTarget) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.activate(target, r.resolve(target, false), true)
-}
-
-func (r *Runtime) resolve(target k8s.ProfileTarget, details bool) map[config.Integration]connections.Selection {
-	return r.Resolver.ResolveAll(target, details)
-}
-
-func (r *Runtime) changed(target k8s.ProfileTarget, kind config.Integration, s connections.Selection) bool {
-	old, exists := r.active[kind]
-	return !exists || r.target.Binding != target.Binding || r.target.Fingerprint != target.Fingerprint || !reflect.DeepEqual(old.Settings, s.Settings) || errorText(old.Err) != errorText(s.Err)
-}
-
-func (r *Runtime) activate(target k8s.ProfileTarget, selected map[config.Integration]connections.Selection, switching bool) {
-	metricsChanged := false
-	for _, kind := range config.IntegrationKinds {
-		s := selected[kind]
-		if !r.changed(target, kind, s) {
-			continue
-		}
-		if s.Err != nil {
-			log.Printf("[connections] %s disabled for context %q: %s", kind, k8s.SanitizeForLog(target.Context), k8s.SanitizeForLog(prom.RedactURLs(s.Err.Error())))
-		}
-		switch kind {
-		case config.IntegrationMetrics:
-			if s.Err != nil {
-				openobserve.Default.Clear()
-				metricsChanged = prometheus.GetClient() != nil
-				prometheus.Retire()
-				traffic.SetMetricsConfig("", nil)
-			} else {
-				if prometheus.GetClient() == nil {
-					conn := k8s.Current()
-					prometheus.Initialize(conn.ClientInterface(), conn.Config(), conn.ContextName(), conn.PortForwards())
-				}
-				// Precedence: the shared OpenObserve connection for a cluster
-				// matched to it, then a URL set by hand for this context (saved
-				// or --prometheus-url), then discovery. The OpenObserve relay
-				// layers over the configured client, so the hand-set URL stays
-				// configured and serves again once the match is removed.
-				url, headers := prometheus.CurrentConfig()
-				metricsChanged = url != strings.TrimRight(s.Settings.Prometheus.URL, "/") || !maps.Equal(headers, s.Settings.Prometheus.Headers)
-				if metricsChanged {
-					prometheus.Configure(s.Settings.Prometheus.URL, s.Settings.Prometheus.Headers)
-				}
-				openobserve.Default.Apply(openObserveTarget(target))
-				traffic.SetMetricsConfig(s.Settings.Prometheus.URL, s.Settings.Prometheus.Headers)
-			}
-			opencost.Reset()
-			opencost.InvalidateCurrency()
-		case config.IntegrationArgoCD:
-			if s.Err != nil {
-				argocd.SeedFromEnvFailed(s.Err.Error())
-			} else {
-				c := *s.Settings.ArgoCD
-				argocd.SetConfig(c.URL, c.Token, c.InsecureTLS, true)
-			}
-		case config.IntegrationCost:
-			if s.Err != nil {
-				opencost.DisableLocal(s.Err.Error())
-			} else if err := opencost.Configure(CostConfig(s, target)); err != nil {
-				opencost.DisableLocal(err.Error())
-			}
-			opencost.InvalidateCurrency()
-		}
-		r.active[kind] = s
-	}
-	r.target = target
-	if metricsChanged && !switching && r.restartTraffic != nil {
-		go func() {
-			if err := r.restartTraffic(); err != nil {
-				log.Printf("[connections] Refreshing traffic: %v", err)
-			}
-		}()
+func (e Edit) finish() {
+	e.before.closeDisplaced(e.after)
+	if e.after != nil {
+		e.after.start(e.before)
 	}
 }
 
-func openObserveTarget(target k8s.ProfileTarget) openobserve.Target {
-	return openobserve.Target{Context: target.Context, Fingerprint: target.Fingerprint, Client: k8s.Current().ClientInterface()}
-}
-
-// RefreshOpenObserve applies the saved OpenObserve connection again for the
-// active context after it or one of its matches changed. It does nothing
-// while the context's metrics are off or failed to resolve. While Kubernetes
-// is unreachable it forgets the active metrics selection instead, so the
-// Apply on reconnect activates metrics again with the change.
-func (r *Runtime) RefreshOpenObserve() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if k8s.GetConnectionStatus().State != k8s.StateConnected {
-		delete(r.active, config.IntegrationMetrics)
+func (r *Runtime) RefreshProfiles(rebuild ...config.Integration) {
+	id := k8s.ServingConnectionID()
+	if r.Resolver == nil || id == "" {
 		return
 	}
-	if s, ok := r.active[config.IntegrationMetrics]; !ok || s.Err != nil {
+	conn := k8s.Current()
+	before := ownedSetFor(conn)
+	target, err := k8s.ProfileTargetFor(conn)
+	if err != nil || before == nil {
 		return
 	}
-	openobserve.Default.Refresh(openObserveTarget(r.target))
+	settings := r.profiles(conn, target, r.Resolver.ResolveAll(target, false))
+	edit := Edit{runtime: r, conn: conn, before: before, id: id}
+	r.prepare(&edit, settings, rebuild)
+	if edit.after != before {
+		_ = edit.Commit(func() error { return nil })
+	}
+}
+
+func (r *Runtime) PrepareShared(conn *k8s.Connection, base *Settings, update func(*Settings), rebuild ...config.Integration) Edit {
+	edit := r.captureEdit(conn)
+	next := *base
+	update(&next)
+	settings := next
+	if r.Resolver != nil {
+		if before := edit.before; before != nil {
+			settings = before.settings
+			update(&settings)
+		}
+	}
+	if r.scopeCleared.Load() || !reflect.DeepEqual(next.Metrics, base.Metrics) {
+		settings.Scope = prom.WorkloadMetricsScope{}
+		settings.scopeCleared = r.scopeConfigured
+	}
+	r.prepare(&edit, settings, rebuild)
+	if !sameSettings(next, *base, nil) {
+		edit.next = &next
+	}
+	edit.base = base
+	return edit
 }
 
 func CostConfig(s connections.Selection, target k8s.ProfileTarget) opencost.ManagerConfig {
@@ -201,10 +261,38 @@ func errorText(err error) string {
 	return ""
 }
 
-func (r *Runtime) CheckCurrent(target k8s.ProfileTarget, selection connections.Selection) error {
-	current, err := k8s.CurrentProfileTarget()
-	if err != nil || !current.Same(target) || !r.Resolver.IsCurrent(selection) {
-		return errors.New("connection changed during the operation; reload Settings")
+func sameSettings(a, b Settings, observe *openobserve.Activator) bool {
+	if a.relay != b.relay || errorText(a.MetricsError) != errorText(b.MetricsError) ||
+		errorText(a.ArgoError) != errorText(b.ArgoError) || errorText(a.CostError) != errorText(b.CostError) ||
+		!observe.SameActivation(a.observeTarget, b.observeConfig, a.observeConfig) {
+		return false
 	}
-	return nil
+	a.relay, b.relay = nil, nil
+	a.MetricsError, b.MetricsError = nil, nil
+	a.ArgoError, b.ArgoError = nil, nil
+	a.CostError, b.CostError = nil, nil
+	a.observeConfig, b.observeConfig = nil, nil
+	return reflect.DeepEqual(a, b)
+}
+
+func (r *Runtime) SetRelay(relay *prometheus.RelayConfig) error {
+	if err := relay.Validate(); err != nil {
+		return err
+	}
+	var edit Edit
+	var applyErr error
+	k8s.WithClusterConfiguration(func() {
+		edit = r.PrepareShared(k8s.Current(), r.Snapshot(), func(s *Settings) { s.relay = relay })
+		if err := edit.commitLocked(func() error { return nil }); err != nil {
+			edit.Discard()
+			edit = Edit{}
+			applyErr = err
+			return
+		}
+		if relay != nil && edit.before != nil && edit.after != nil && edit.after.Metrics != nil && edit.after.Metrics == edit.before.Metrics {
+			applyErr = edit.after.Metrics.EnableRelay(*relay)
+		}
+	})
+	edit.finish()
+	return applyErr
 }

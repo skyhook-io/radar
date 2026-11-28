@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"net/url"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -18,6 +20,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/portforward"
 	"github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/pkg/prom"
 	oo "github.com/skyhook-io/radar/pkg/prom/openobserve"
@@ -48,14 +51,16 @@ type cached struct {
 }
 
 // Activator decides, per context, whether the shared OpenObserve connection
-// serves metrics, and configures the global metrics client accordingly.
+// serves metrics, and configures its connection's metrics client accordingly.
 type Activator struct {
-	mu      sync.Mutex
-	gen     uint64
-	enabled bool // the metrics relay is ours
-	uids    map[string]string
-	cache   map[string]cached
-	ignored sync.Once
+	metrics  *prometheus.Client
+	lifetime context.Context
+	mu       sync.Mutex
+	gen      uint64
+	enabled  bool // the metrics relay is ours
+	uids     map[string]string
+	cache    map[string]cached
+	ignored  sync.Once
 	// done, when set, is told each time an asynchronous match finishes; tests.
 	done func()
 
@@ -63,7 +68,7 @@ type Activator struct {
 	inCluster   func() bool
 	now         func() time.Time
 	resolve     func(context.Context, oo.Connection, config.OpenObserveConfig, string, string) decision
-	saveIDMatch func(uid string, m config.OpenObserveMatch)
+	saveIDMatch func(config.OpenObserveConfig, string, config.OpenObserveMatch)
 	retryAfter  time.Duration
 }
 
@@ -88,8 +93,11 @@ func NewActivator() *Activator {
 	}
 }
 
-// Default is the process-wide activator used by local connection activation.
-var Default = NewActivator()
+func NewConnectionActivator(client *prometheus.Client, lifetime context.Context) *Activator {
+	a := NewActivator()
+	a.metrics, a.lifetime = client, lifetime
+	return a
+}
 
 // LogIfIgnored logs once when Radar runs in a cluster and the config file
 // carries an OpenObserve entry. It reports whether the entry is ignored.
@@ -114,7 +122,10 @@ func (a *Activator) Apply(t Target) {
 		a.Clear()
 		return
 	}
-	cfg := a.loadConfig()
+	a.ApplyConfig(t, a.loadConfig())
+}
+
+func (a *Activator) ApplyConfig(t Target, cfg *config.OpenObserveConfig) {
 	if cfg == nil || len(cfg.Matches) == 0 {
 		a.Clear()
 		return
@@ -133,7 +144,7 @@ func (a *Activator) Apply(t Target) {
 		return
 	}
 	a.disableLocked()
-	prometheus.SetSourceNote(nil)
+	a.metrics.SetSourceNote(nil)
 	go func() {
 		defer a.finished()
 		a.matchAfterUID(gen, t, *cfg, false)
@@ -147,7 +158,7 @@ func (a *Activator) Apply(t Target) {
 func (a *Activator) matchAfterUID(gen uint64, t Target, cfg config.OpenObserveConfig, retry bool) {
 	uid, err := a.clusterUID(context.Background(), t)
 	a.mu.Lock()
-	if a.gen != gen {
+	if a.gen != gen || (a.lifetime != nil && a.lifetime.Err() != nil) {
 		a.mu.Unlock()
 		return
 	}
@@ -157,11 +168,11 @@ func (a *Activator) matchAfterUID(gen uint64, t Target, cfg config.OpenObserveCo
 			log.Printf("[openobserve] Couldn't read the cluster ID of context %q: %v", k8s.SanitizeForLog(t.Context), err)
 		}
 		if savedFromContext(cfg, t.Context) {
-			prometheus.SetSourceNote(&prom.MetricsSource{Kind: "openobserve", Via: "local", Error: "Couldn't read this cluster's ID to find it in OpenObserve: " + err.Error()})
+			a.metrics.SetSourceNote(&prom.MetricsSource{Kind: "openobserve", Via: "local", Error: "Couldn't read this cluster's ID to find it in OpenObserve: " + err.Error()})
 		}
 		time.AfterFunc(a.retryAfter, func() {
 			a.mu.Lock()
-			current := a.gen == gen
+			current := a.gen == gen && (a.lifetime == nil || a.lifetime.Err() == nil)
 			a.mu.Unlock()
 			if current {
 				a.matchAfterUID(gen, t, cfg, true)
@@ -182,13 +193,13 @@ func (a *Activator) matchAfterUID(gen uint64, t Target, cfg config.OpenObserveCo
 func (a *Activator) startLocked(gen uint64, t Target, cfg config.OpenObserveConfig, uid string) func() {
 	if _, ok := cfg.Matches[uid]; !ok {
 		a.disableLocked()
-		prometheus.SetSourceNote(nil)
+		a.metrics.SetSourceNote(nil)
 		return nil
 	}
 	conn, err := Connection(cfg)
 	if err != nil {
 		a.disableLocked()
-		prometheus.SetSourceNote(&prom.MetricsSource{Kind: "openobserve", Via: "local", Error: "OpenObserve connection in ~/.radar/config.json can't be used: " + err.Error()})
+		a.metrics.SetSourceNote(&prom.MetricsSource{Kind: "openobserve", Via: "local", Error: "OpenObserve connection in ~/.radar/config.json can't be used: " + err.Error()})
 		return nil
 	}
 	if c, ok := a.cache[cacheKey(uid, connKey(conn), cfg)]; ok && a.now().Sub(c.at) < cacheTTL {
@@ -196,7 +207,7 @@ func (a *Activator) startLocked(gen uint64, t Target, cfg config.OpenObserveConf
 		return nil
 	}
 	a.disableLocked()
-	prometheus.SetSourceNote(&prom.MetricsSource{Kind: "openobserve", Via: "local", Warning: checkingNote, Pending: true})
+	a.metrics.SetSourceNote(&prom.MetricsSource{Kind: "openobserve", Via: "local", Warning: checkingNote, Pending: true})
 	return func() { a.run(gen, t, conn, cfg, uid) }
 }
 
@@ -233,17 +244,19 @@ func (a *Activator) Clear() {
 	defer a.mu.Unlock()
 	a.gen++
 	a.disableLocked()
-	prometheus.SetSourceNote(nil)
+	a.metrics.SetSourceNote(nil)
 }
 
 func (a *Activator) run(gen uint64, t Target, conn oo.Connection, cfg config.OpenObserveConfig, uid string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*matchTimeout)
+	ctx, release := portforward.WithLifetime(context.Background(), a.lifetime)
+	defer release()
+	ctx, cancel := context.WithTimeout(ctx, 2*matchTimeout)
 	d := a.resolve(ctx, conn, cfg, uid, t.Context)
-	cancel()
+	defer cancel()
 
-	if d.outcome == outcomeMatched && d.match.By == config.OpenObserveMatchByID {
+	if ctx.Err() == nil && d.outcome == outcomeMatched && d.match.By == config.OpenObserveMatchByID {
 		if stored := cfg.Matches[uid]; stored.By == config.OpenObserveMatchByID && (stored.Label != d.match.Label || stored.Value != d.match.Value) {
-			a.saveIDMatch(uid, config.OpenObserveMatch{Label: d.match.Label, Value: d.match.Value, By: config.OpenObserveMatchByID})
+			a.saveIDMatch(cfg, uid, config.OpenObserveMatch{Label: d.match.Label, Value: d.match.Value, By: config.OpenObserveMatchByID})
 		}
 	}
 
@@ -252,14 +265,14 @@ func (a *Activator) run(gen uint64, t Target, conn oo.Connection, cfg config.Ope
 	if d.outcome != outcomeUnreachable {
 		a.cache[cacheKey(uid, connKey(conn), cfg)] = cached{d: d, at: a.now()}
 	}
-	if a.gen != gen {
+	if a.gen != gen || (a.lifetime != nil && a.lifetime.Err() != nil) {
 		return
 	}
 	a.applyLocked(d, conn, cfg, uid)
 	if d.outcome == outcomeUnreachable {
 		time.AfterFunc(a.retryAfter, func() {
 			a.mu.Lock()
-			current := a.gen == gen
+			current := a.gen == gen && (a.lifetime == nil || a.lifetime.Err() == nil)
 			a.mu.Unlock()
 			if current {
 				a.run(gen, t, conn, cfg, uid)
@@ -285,6 +298,8 @@ func (a *Activator) clusterUID(ctx context.Context, t Target) (string, error) {
 	if t.Client == nil {
 		return "", errors.New("no Kubernetes client")
 	}
+	ctx, release := portforward.WithLifetime(ctx, a.lifetime)
+	defer release()
 	ctx, cancel := context.WithTimeout(ctx, uidReadTimeout)
 	defer cancel()
 	uid, err := ReadClusterUID(ctx, t.Client)
@@ -343,7 +358,7 @@ func (a *Activator) applyLocked(d decision, conn oo.Connection, cfg config.OpenO
 			// A stored default name never scoped anything: the cluster's own
 			// Prometheus, if any, still serves.
 			a.disableLocked()
-			prometheus.SetSourceNote(&prom.MetricsSource{Kind: "openobserve", Via: "local", Error: d.reason + " Radar couldn't check whether OpenObserve has this cluster's metrics."})
+			a.metrics.SetSourceNote(&prom.MetricsSource{Kind: "openobserve", Via: "local", Error: d.reason + " Radar couldn't check whether OpenObserve has this cluster's metrics."})
 			return
 		}
 		reason := d.reason
@@ -359,17 +374,17 @@ func (a *Activator) applyLocked(d decision, conn oo.Connection, cfg config.OpenO
 		})
 	default:
 		a.disableLocked()
-		prometheus.SetSourceNote(&prom.MetricsSource{Kind: "openobserve", Via: "local", Error: d.reason})
+		a.metrics.SetSourceNote(&prom.MetricsSource{Kind: "openobserve", Via: "local", Error: d.reason})
 	}
 }
 
 func (a *Activator) enableLocked(cfg prometheus.RelayConfig) {
-	if err := prometheus.EnableRelay(cfg); err != nil {
+	if err := a.metrics.EnableRelay(cfg); err != nil {
 		log.Printf("[openobserve] Metrics not routed to OpenObserve: %v", err)
 		return
 	}
 	a.enabled = true
-	prometheus.SetSourceNote(nil)
+	a.metrics.SetSourceNote(nil)
 }
 
 func (a *Activator) disableLocked() {
@@ -377,8 +392,8 @@ func (a *Activator) disableLocked() {
 		return
 	}
 	a.enabled = false
-	if prometheus.DisableRelay() {
-		prometheus.Prewarm()
+	if a.metrics.DisableRelay() {
+		a.metrics.Prewarm()
 	}
 }
 
@@ -401,14 +416,68 @@ func connKey(conn oo.Connection) string {
 	return hex.EncodeToString(sum[:8])
 }
 
+// SameActivation compares the settings used by this target. Until its UID is
+// known, any stored match could be the target's. A nil activator has no UID yet.
+func (a *Activator) SameActivation(t Target, before, after *config.OpenObserveConfig) bool {
+	if before == after {
+		return true
+	}
+	var uid string
+	if a != nil {
+		a.mu.Lock()
+		uid = a.uids[t.Fingerprint]
+		a.mu.Unlock()
+	}
+	return sameActivation(before, after, uid, t.Context)
+}
+
+func sameActivation(before, after *config.OpenObserveConfig, uid, contextName string) bool {
+	var left, right config.OpenObserveConfig
+	if before != nil {
+		left = *before
+	}
+	if after != nil {
+		right = *after
+	}
+	if uid != "" {
+		l, leftMatch := left.Matches[uid]
+		r, rightMatch := right.Matches[uid]
+		if !leftMatch || !rightMatch {
+			return leftMatch == rightMatch
+		}
+		if activationMatch(l) != activationMatch(r) {
+			return false
+		}
+	} else {
+		if len(left.Matches) == 0 || len(right.Matches) == 0 {
+			return len(left.Matches) == len(right.Matches)
+		}
+		if savedFromContext(left, contextName) != savedFromContext(right, contextName) ||
+			!maps.EqualFunc(left.Matches, right.Matches, func(l, r config.OpenObserveMatch) bool {
+				return activationMatch(l) == activationMatch(r)
+			}) {
+			return false
+		}
+	}
+	left.Matches, right.Matches = nil, nil
+	// ClusterLabel guides setup suggestions. Activation uses the saved match.
+	left.ClusterLabel, right.ClusterLabel = "", ""
+	return reflect.DeepEqual(left, right)
+}
+
+func activationMatch(m config.OpenObserveMatch) config.OpenObserveMatch {
+	if m.By != config.OpenObserveMatchByName {
+		// Cached ID labels and values are Radar's own record.
+		m.Label, m.Value = "", ""
+	}
+	m.ConfirmedAt, m.Context = "", ""
+	return m
+}
+
 // cacheKey includes the stored match so a name confirmed with the CLI
 // applies on the next activation instead of after the cache expires.
 func cacheKey(uid, conn string, cfg config.OpenObserveConfig) string {
-	m := cfg.Matches[uid]
-	if m.By != config.OpenObserveMatchByName {
-		// Cached ID matches are Radar's own record and change no decision.
-		m = config.OpenObserveMatch{}
-	}
+	m := activationMatch(cfg.Matches[uid])
 	return strings.Join([]string{uid, conn, m.Label, m.Value}, "|")
 }
 
@@ -423,13 +492,13 @@ func optionsKey(o oo.RewriteOptions) string {
 
 // saveIDMatch refreshes the cached label of a stored ID match. It never
 // creates an entry: a match removed meanwhile stays removed.
-func saveIDMatch(uid string, m config.OpenObserveMatch) {
+func saveIDMatch(checked config.OpenObserveConfig, uid string, m config.OpenObserveMatch) {
 	if _, err := config.Update(func(c *config.Config) {
-		if c.OpenObserve == nil {
+		if c.OpenObserve == nil || !sameActivation(c.OpenObserve, &checked, uid, "") {
 			return
 		}
-		existing, ok := c.OpenObserve.Matches[uid]
-		if !ok || existing.By != config.OpenObserveMatchByID {
+		existing := c.OpenObserve.Matches[uid]
+		if existing.By != config.OpenObserveMatchByID || existing != checked.Matches[uid] {
 			return
 		}
 		m.Context = existing.Context

@@ -152,7 +152,7 @@ export function LocalConnectionSettings({
   kind: IntegrationKind
   profiles: IntegrationProfiles
   cliSession?: { server: string; user: string; insecure?: boolean }
-  onChange: (profiles: IntegrationProfiles) => void
+  onChange: (profiles: IntegrationProfiles, changed?: IntegrationKind[]) => void
   onDirtyChange: (dirty: boolean) => void
   onBusyChange?: (busy: boolean) => void
   status?: ReactNode
@@ -389,15 +389,15 @@ export function LocalConnectionSettings({
       }
     }
   }
-  const receive = (data: ConnectionResponse) => {
+  const receive = (data: ConnectionResponse, changed?: IntegrationKind[]) => {
     setSnapshot(data.profiles)
     setCatalog(data.connections)
-    onChange(data.profiles)
+    onChange(data.profiles, changed)
     resetDraft(data.profiles[kind])
   }
   const save = async (update: Update) => {
     const data = await fetchConnections(update)
-    receive(data)
+    receive(data, update.action === 'reconfirm' ? update.kinds : [kind])
     onDirtyChange(false)
     setConfirmBack(false)
     setTask('main')

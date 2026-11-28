@@ -66,14 +66,14 @@ func chartBindingCases() []chartBindingCase {
 func TestChartCheckOnAMovedConnectionWithholds(t *testing.T) {
 	for _, tc := range chartBindingCases() {
 		t.Run(tc.name, func(t *testing.T) {
-			initBindingTestCluster(t)
+			client := testClient(t, "chart-binding", initBindingTestCluster(t))
 			storeA, queriesA := bindingTestStore(t)
 			storeB, queriesB := bindingTestStore(t)
-			client := connectBindingTestClient(t, storeA.URL)
+			connectBindingTestClient(t, client, storeA.URL)
 			ctx := context.Background()
 			d := productionChartDeps(ctx, client)
 			checks := replaceChartResolver(t, func() {})
-			connectBindingTestClient(t, storeB.URL)
+			connectBindingTestClient(t, client, storeB.URL)
 			d.resolve = BoundResolver(client, d.q.(boundStore).conn, chartResolverFor(client, d.cache))
 
 			withheld, err := tc.run(ctx, d)
@@ -106,13 +106,13 @@ func TestProductionChartDepsBindTheCheck(t *testing.T) {
 				name = tc.name + "/moved during the check"
 			}
 			t.Run(name, func(t *testing.T) {
-				initBindingTestCluster(t)
+				client := testClient(t, "chart-binding", initBindingTestCluster(t))
 				storeA, queriesA := bindingTestStore(t)
 				storeB, queriesB := bindingTestStore(t)
-				client := connectBindingTestClient(t, storeA.URL)
+				connectBindingTestClient(t, client, storeA.URL)
 				checks := replaceChartResolver(t, func() {
 					if moved {
-						connectBindingTestClient(t, storeB.URL)
+						connectBindingTestClient(t, client, storeB.URL)
 					}
 				})
 				ctx := context.Background()
@@ -150,9 +150,9 @@ func TestProductionChartDepsBindTheCheck(t *testing.T) {
 func TestChartOnAnUnreachableStoreFailsItsQuery(t *testing.T) {
 	for _, tc := range chartBindingCases() {
 		t.Run(tc.name, func(t *testing.T) {
-			initBindingTestCluster(t)
+			client := testClient(t, "chart-binding", initBindingTestCluster(t))
 			store, queries := bindingTestStore(t)
-			client := connectBindingTestClient(t, store.URL)
+			connectBindingTestClient(t, client, store.URL)
 			store.Close()
 			checks := replaceChartResolver(t, func() {})
 			ctx := context.Background()
@@ -178,9 +178,9 @@ func TestChartOnAnUnreachableStoreFailsItsQuery(t *testing.T) {
 // A connect that fails while a handle is still around (a refresh error, say)
 // must not let a single-cluster chart query that handle.
 func TestChartWithAFailedConnectQueriesNothing(t *testing.T) {
-	initBindingTestCluster(t)
+	client := testClient(t, "chart-binding", initBindingTestCluster(t))
 	store, queries := bindingTestStore(t)
-	client := connectBindingTestClient(t, store.URL)
+	connectBindingTestClient(t, client, store.URL)
 	handle, conn := client.PromSnapshot()
 	replaceChartResolver(t, func() {})
 	d := chartDeps{

@@ -134,8 +134,8 @@ func effectOf(ev PolicyEvaluation, name string) string {
 
 func TestEvaluateNetworkPolicies(t *testing.T) {
 	prev := k8s.GetConnectionStatus()
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
-	t.Cleanup(func() { k8s.SetConnectionStatus(prev) })
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	t.Cleanup(func() { k8s.PublishTestConnectionStatus(prev) })
 	useTestResourceCache(t, fake.NewClientset(evaluateFixtureObjects()...))
 	seedEmptyDiscovery(t)
 
@@ -302,8 +302,8 @@ func TestEvaluateNetworkPolicies(t *testing.T) {
 
 func TestEvaluateNetworkPolicies_RequiresNamedPod(t *testing.T) {
 	prev := k8s.GetConnectionStatus()
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
-	t.Cleanup(func() { k8s.SetConnectionStatus(prev) })
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	t.Cleanup(func() { k8s.PublishTestConnectionStatus(prev) })
 	useTestResourceCache(t, fake.NewClientset(evaluateFixtureObjects()...))
 	seedEmptyDiscovery(t)
 
@@ -319,8 +319,8 @@ func TestEvaluateNetworkPolicies_RequiresNamedPod(t *testing.T) {
 
 func TestEvaluateNetworkPolicies_GatedPerCaller(t *testing.T) {
 	prev := k8s.GetConnectionStatus()
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
-	t.Cleanup(func() { k8s.SetConnectionStatus(prev) })
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	t.Cleanup(func() { k8s.PublishTestConnectionStatus(prev) })
 	useTestResourceCache(t, fake.NewClientset(evaluateFixtureObjects()...))
 	seedEmptyDiscovery(t)
 
@@ -390,8 +390,8 @@ func TestEvaluateNetworkPolicies_GatedPerCaller(t *testing.T) {
 
 func TestEvaluateNetworkPolicies_NamespaceOutsideCacheIsUndecidable(t *testing.T) {
 	prev := k8s.GetConnectionStatus()
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
-	t.Cleanup(func() { k8s.SetConnectionStatus(prev) })
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	t.Cleanup(func() { k8s.PublishTestConnectionStatus(prev) })
 	t.Cleanup(func() {
 		k8s.ResetResourceCache()
 		if err := k8s.InitTestResourceCache(testFakeClient); err != nil {
@@ -418,8 +418,8 @@ func TestEvaluateNetworkPolicies_NamespaceOutsideCacheIsUndecidable(t *testing.T
 
 func TestEvaluateNetworkPolicies_CiliumPresenceCapsVerdict(t *testing.T) {
 	prev := k8s.GetConnectionStatus()
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
-	t.Cleanup(func() { k8s.SetConnectionStatus(prev) })
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	t.Cleanup(func() { k8s.PublishTestConnectionStatus(prev) })
 	useTestResourceCache(t, fake.NewClientset(evaluateFixtureObjects()...))
 
 	cnpGVR := schema.GroupVersionResource{Group: "cilium.io", Version: "v2", Resource: "ciliumnetworkpolicies"}

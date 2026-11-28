@@ -335,16 +335,16 @@ func TestGKEMetricsCharts(t *testing.T) {
 
 func TestGKECuratedRoutesKeepRawStoreSeparate(t *testing.T) {
 	c := gkeFixture(t, fixtureIssuer, 1)
-	Initialize(c.k8sClient, c.k8sConfig, "fixture", nil)
-	GetClient().inCluster = false
-	t.Cleanup(func() { SetAuthGate(nil); Reset(); Initialize(nil, nil, "", nil) })
+	t.Cleanup(func() { SetAuthGate(nil) })
 	created := time.Now().Add(-20 * time.Minute).Truncate(time.Minute)
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "nginx-abc-111", Namespace: "default", UID: "current-pod", CreationTimestamp: metav1.NewTime(created)}}
 	if err := k8s.InitScopedTestResourceCache(fake.NewClientset(pod), map[string]k8score.ResourceScope{string(k8score.Pods): {Enabled: true}}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(k8s.ResetResourceCache)
-	router := metricsRouter()
+	client := NewClient(c.k8sClient, c.k8sConfig, "fixture", nil, false, k8s.GetResourceCache())
+	t.Cleanup(func() { _ = client.Close() })
+	router := metricsRouter(client)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/prometheus/connect?optional=true", nil))
 	var status prom.Status
@@ -369,7 +369,7 @@ func TestGKECuratedRoutesKeepRawStoreSeparate(t *testing.T) {
 	if r := getMetrics(t, router, "/prometheus/query?query=up"); r.Code == http.StatusOK {
 		t.Errorf("raw query unexpectedly admitted: %s", r.Body)
 	}
-	if GetClient().PromForMCP() != nil {
+	if client.PromForMCP() != nil {
 		t.Error("MCP raw query store unexpectedly available")
 	}
 	SetAuthGate(func(*http.Request, string, string, string, string) bool { return false })
@@ -382,16 +382,16 @@ func TestGKECuratedRoutesKeepRawStoreSeparate(t *testing.T) {
 
 func TestGKEConfiguredFrontendWithoutScrapeTargets(t *testing.T) {
 	c := gkeFixture(t, fixtureIssuer, 1)
-	Initialize(c.k8sClient, c.k8sConfig, "fixture", nil)
-	t.Cleanup(func() { Reset(); Initialize(nil, nil, "", nil) })
+	client := NewClient(c.k8sClient, c.k8sConfig, "fixture", nil, false, k8s.GetResourceCache())
+	t.Cleanup(func() { _ = client.Close() })
 	url := c.k8sConfig.Host + "/api/v1/namespaces/gmp-public/services/frontend:web/proxy"
-	SetManualURL(url)
-	client := GetClient()
+	client.Configure(url, nil)
+
 	addr, _, err := client.connectWithGKE(t.Context())
 	if err != nil || addr != url || !client.GetStatus().GKESystemMetrics || !client.GetStatus().Connected || !client.gkeChartStore().configured {
 		t.Fatalf("manual endpoint was replaced or not recognized: addr=%s status=%+v err=%v", addr, client.GetStatus(), err)
 	}
-	if err := SetWorkloadMetricsScope(prom.WorkloadMetricsScope{ClusterLabels: map[string]string{"cluster": "wrong"}}, ""); err != nil {
+	if err := client.SetWorkloadMetricsScope(prom.WorkloadMetricsScope{ClusterLabels: map[string]string{"cluster": "wrong"}}, ""); err != nil {
 		t.Fatal(err)
 	}
 	if client.gkeChartStore() != nil {
@@ -445,11 +445,10 @@ func TestGKEConfiguredCapabilityRefresh(t *testing.T) {
 
 func TestGKEConfiguredWorkloadWithUnverifiedConventionalIdentity(t *testing.T) {
 	c := gkeFixture(t, fixtureIssuer, 1)
-	Initialize(c.k8sClient, c.k8sConfig, "fixture", nil)
-	t.Cleanup(func() { SetAuthGate(nil); Reset(); Initialize(nil, nil, "", nil) })
+	t.Cleanup(func() { SetAuthGate(nil) })
 	previous := k8s.GetConnectionStatus()
-	t.Cleanup(func() { k8s.SetConnectionStatus(previous) })
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	t.Cleanup(func() { k8s.PublishTestConnectionStatus(previous) })
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
 	deployment := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "nginx", UID: "nginx-uid"}}
 	rs := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "nginx-abc", UID: "nginx-abc-uid", OwnerReferences: []metav1.OwnerReference{scopeOwner("Deployment", "nginx")}}}
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "nginx-abc-111", UID: "pod-uid", CreationTimestamp: metav1.NewTime(time.Now().Add(-2 * time.Hour)), OwnerReferences: []metav1.OwnerReference{scopeOwner("ReplicaSet", "nginx-abc")}}}
@@ -457,9 +456,11 @@ func TestGKEConfiguredWorkloadWithUnverifiedConventionalIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(k8s.ResetResourceCache)
-	SetManualURL(c.k8sConfig.Host + "/api/v1/namespaces/gmp-public/services/frontend:web/proxy")
-	client := GetClient()
-	first := getMetrics(t, metricsRouter(), "/prometheus/workload/Deployment/default/nginx?range=1h")
+	client := NewClient(c.k8sClient, c.k8sConfig, "fixture", nil, false, k8s.GetResourceCache())
+	t.Cleanup(func() { _ = client.Close() })
+	client.Configure(c.k8sConfig.Host+"/api/v1/namespaces/gmp-public/services/frontend:web/proxy", nil)
+
+	first := getMetrics(t, metricsRouter(client), "/prometheus/workload/Deployment/default/nginx?range=1h")
 	var cold workloadMetricsResponse
 	if first.Code != http.StatusOK || json.Unmarshal(first.Body.Bytes(), &cold) != nil || cold.State != "detecting" || len(cold.Panels) != 0 {
 		t.Fatalf("cold conventional attribution must retain its quick poll: %d %s", first.Code, first.Body)
@@ -479,7 +480,7 @@ func TestGKEConfiguredWorkloadWithUnverifiedConventionalIdentity(t *testing.T) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	r := getMetrics(t, metricsRouter(), "/prometheus/workload/Deployment/default/nginx?range=1h")
+	r := getMetrics(t, metricsRouter(client), "/prometheus/workload/Deployment/default/nginx?range=1h")
 	var got workloadMetricsResponse
 	if json.Unmarshal(r.Body.Bytes(), &got) != nil || r.Code != http.StatusOK || got.State != "partial" || got.ResourceSource != "gke" || !strings.Contains(got.Reason, "Metrics identity could not be checked. Retrying automatically.") || got.Pods != 1 {
 		t.Fatalf("workload response %d: %s", r.Code, r.Body)
@@ -674,7 +675,7 @@ func TestGKEFrontendPodReadyInvalidatesSupplementWithConventionalConnection(t *t
 		t.Fatal(err)
 	}
 	t.Cleanup(k8s.ResetResourceCache)
-	c := &Client{k8sClient: cs, baseURL: "http://ordinary", gkeChecked: time.Now()}
+	c := &Client{k8sClient: cs, cache: k8s.GetResourceCache(), baseURL: "http://ordinary", gkeChecked: time.Now()}
 	pod := readyPod(svc.Namespace, "frontend-0", map[string]string{"app": "unrelated"}, true)
 	c.observeResourceChange(cs, "add", pod, nil)
 	if c.gkeChecked.IsZero() {
@@ -769,10 +770,9 @@ func TestGKEExplicitConnectRetriesNegativeAutomaticCapability(t *testing.T) {
 		}
 		return false
 	})
-	Initialize(c.k8sClient, c.k8sConfig, "fixture", nil)
-	GetClient().inCluster = false
-	t.Cleanup(func() { Reset(); Initialize(nil, nil, "", nil) })
-	router := metricsRouter()
+	client := NewClient(c.k8sClient, c.k8sConfig, "fixture", nil, false, k8s.GetResourceCache())
+	t.Cleanup(func() { _ = client.Close() })
+	router := metricsRouter(client)
 	connect := func(path string) prom.Status {
 		t.Helper()
 		w := httptest.NewRecorder()

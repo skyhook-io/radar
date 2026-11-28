@@ -223,7 +223,7 @@ func TestHubbleClosedForwardManagerSkipsDirectDial(t *testing.T) {
 			if timeout, ok := acceptErr.(net.Error); !ok || !timeout.Timeout() {
 				t.Fatal(acceptErr)
 			}
-			if ctx.Err() != nil || err != nil || info == nil || info.Connected || !strings.Contains(info.Error, portforward.ErrClosed.Error()) {
+			if ctx.Err() != nil || info != nil || !errors.Is(err, portforward.ErrClosed) {
 				t.Fatalf("Connect did not promptly report the closed manager: info=%+v err=%v context=%v", info, err, ctx.Err())
 			}
 		})

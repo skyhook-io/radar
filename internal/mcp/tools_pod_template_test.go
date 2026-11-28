@@ -25,7 +25,7 @@ func TestGetResourcePodTemplateContextIsOptIn(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { k8s.ResetTestState(); getPermCache().Invalidate() })
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "fake-test"})
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "fake-test"})
 	ctx := withClusterAdmin(t, "template-context")
 	getPermCache().Get("template-context", nil).SetCanI("get", "apps", "replicasets", "test", true)
 	for _, tc := range []struct {

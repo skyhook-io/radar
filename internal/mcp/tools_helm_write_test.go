@@ -131,12 +131,12 @@ func setupHelmUninstallPreflight(t *testing.T, readRevision func()) (*driver.Sec
 	if err != nil {
 		t.Fatal(err)
 	}
-	helm.Initialize()
+	helm.Initialize(nil)
 	t.Cleanup(helm.ResetTestClient)
 	t.Cleanup(k8s.SnapshotTestConnection())
 	k8s.SetTestClient(client)
 	k8s.SetTestConfig(cfg)
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
 	return storage, rel
 }
 
@@ -270,7 +270,7 @@ func TestManageHelmUninstallConfirmationAfterPreflight(t *testing.T) {
 
 func TestManageHelmUninstallConfirmationRequiresSameAdmission(t *testing.T) {
 	t.Cleanup(k8s.SnapshotTestConnection())
-	helm.Initialize()
+	helm.Initialize(nil)
 	t.Cleanup(helm.ResetTestClient)
 	in := manageHelmInput{Action: "uninstall", Namespace: "team-a", Name: "demo"}
 	const key = "sh.helm.release.v1.demo.v1"
@@ -426,8 +426,8 @@ func TestManageHelmDeniesBeforeFetchingChart(t *testing.T) {
 		k8s.SetRBACNamespaces(oldNamespaces)
 	}()
 	status := k8s.GetConnectionStatus()
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
-	defer k8s.SetConnectionStatus(status)
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	defer k8s.PublishTestConnectionStatus(status)
 	for _, user := range []*auth.User{nil, {Username: "helm-mcp-denied"}} {
 		ctx := auth.ContextWithUser(context.Background(), user)
 		_, _, err = handleManageHelm(ctx, nil, manageHelmInput{Action: "install", Namespace: "team-a", Name: "cache", Chart: "redis", Repository: repo.URL, Version: "1.2.3"})
@@ -464,8 +464,8 @@ func TestManageHelmDisabledCatalogAndDispatch(t *testing.T) {
 	}
 	// A stale or direct dispatch must also refuse before any API or chart request.
 	status := k8s.GetConnectionStatus()
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
-	t.Cleanup(func() { k8s.SetConnectionStatus(status) })
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	t.Cleanup(func() { k8s.PublishTestConnectionStatus(status) })
 	_, _, err := handleManageHelm(t.Context(), nil, manageHelmInput{Action: "install", Namespace: "team-a", Name: "cache", Chart: "redis", Repository: "https://charts.example", Version: "1.2.3"})
 	if err == nil || !strings.Contains(err.Error(), "--disable-helm-write") {
 		t.Fatalf("want operator-disabled refusal, got %v", err)
@@ -551,14 +551,14 @@ func TestManageHelmRollbackPreviewReadsLiveObjectsAsCaller(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	helm.Initialize()
+	helm.Initialize(nil)
 	t.Cleanup(helm.ResetTestClient)
 	oldClient, oldConfig, oldStatus := k8s.SetTestClient(client), k8s.SetTestConfig(cfg), k8s.GetConnectionStatus()
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
 	defer func() {
 		k8s.SetTestClient(oldClient)
 		k8s.SetTestConfig(oldConfig)
-		k8s.SetConnectionStatus(oldStatus)
+		k8s.PublishTestConnectionStatus(oldStatus)
 	}()
 	ctx := auth.ContextWithUser(t.Context(), &auth.User{Username: "rollback-previewer"})
 
@@ -609,8 +609,8 @@ func TestManageHelmRollbackPreviewReadsLiveObjectsAsCaller(t *testing.T) {
 
 func TestManageHelmRedactsStructuredErrors(t *testing.T) {
 	old := k8s.GetConnectionStatus()
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateDisconnected, Error: "dial https://api: password=supersecretpassword123"})
-	defer k8s.SetConnectionStatus(old)
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateDisconnected, Error: "dial https://api: password=supersecretpassword123"})
+	defer k8s.PublishTestConnectionStatus(old)
 	_, _, err := handleManageHelm(t.Context(), nil, manageHelmInput{Action: "uninstall", Namespace: "team-a", Name: "demo"})
 	result, ok := readErrorResult(err)
 	if !ok {
@@ -679,14 +679,14 @@ func TestManageHelmReportsLostRevisionRaceAsNoChange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	helm.Initialize()
+	helm.Initialize(nil)
 	t.Cleanup(helm.ResetTestClient)
 	oldClient, oldConfig, oldStatus := k8s.SetTestClient(client), k8s.SetTestConfig(cfg), k8s.GetConnectionStatus()
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
 	defer func() {
 		k8s.SetTestClient(oldClient)
 		k8s.SetTestConfig(oldConfig)
-		k8s.SetConnectionStatus(oldStatus)
+		k8s.PublishTestConnectionStatus(oldStatus)
 	}()
 	ctx := auth.ContextWithUser(t.Context(), &auth.User{Username: "helm-mcp-race"})
 	_, _, err = handleManageHelm(ctx, nil, manageHelmInput{Action: "rollback", Namespace: "team-a", Name: "demo", Revision: 1, ExpectedRevision: 2})

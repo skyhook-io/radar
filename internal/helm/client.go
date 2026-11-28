@@ -78,11 +78,13 @@ type Client struct {
 	*repositorySettings
 	conn       *k8s.Connection
 	restConfig *rest.Config
+	uninstall  *UninstallMemo
 }
 
 type repositorySettings struct {
-	mu       sync.RWMutex
-	settings *cli.EnvSettings
+	mu           sync.RWMutex
+	settings     *cli.EnvSettings
+	uninstallFor func(*k8s.Connection) *UninstallMemo
 	// chartPathLocator is a test seam for chart transport. Production callers
 	// leave it nil and use locateChartPath, which wires Helm's registry client
 	// for OCI references.
@@ -138,11 +140,11 @@ func isDirWritable(dir string) bool {
 }
 
 // Initialize sets up the global Helm client
-func Initialize() {
+func Initialize(uninstallFor func(*k8s.Connection) *UninstallMemo) {
 	clientOnce.Do(func() {
 		ensureHelmWritablePaths()
 		settings := cli.New()
-		globalClient = &Client{repositorySettings: &repositorySettings{settings: settings}}
+		globalClient = &Client{repositorySettings: &repositorySettings{settings: settings, uninstallFor: uninstallFor}}
 		log.Printf("Helm client initialized (cache=%s, config=%s, data=%s)",
 			settings.RepositoryCache, settings.RepositoryConfig, settings.PluginsDirectory)
 	})
@@ -159,6 +161,7 @@ func InitializeWithRESTConfig(restCfg *rest.Config) error {
 		globalClient = &Client{
 			repositorySettings: &repositorySettings{settings: cli.New()},
 			restConfig:         restCfg,
+			uninstall:          NewUninstallMemo(),
 		}
 	})
 	return nil
@@ -183,7 +186,18 @@ func GetClient(ctx context.Context) *Client {
 }
 
 func (c *Client) forConnection(conn *k8s.Connection) *Client {
-	return &Client{repositorySettings: c.repositorySettings, conn: conn}
+	var memo *UninstallMemo
+	if c.repositorySettings != nil && c.uninstallFor != nil {
+		memo = c.uninstallFor(conn)
+	}
+	return &Client{repositorySettings: c.repositorySettings, conn: conn, uninstall: memo}
+}
+
+func (c *Client) memo() *UninstallMemo {
+	if c.uninstall != nil {
+		return c.uninstall
+	}
+	return NewUninstallMemo()
 }
 
 func (c *Client) capture(ctx context.Context) (*Client, context.Context) {
@@ -276,23 +290,21 @@ func (c *Client) ListReleasesAsUser(ctx context.Context, namespace string, user 
 	if user == nil {
 		return c.ListReleases(ctx, namespace, access)
 	}
-	contextName := c.conn.ContextName()
 	actionConfig, err := c.getActionConfigForUser(namespace, user)
 	if err != nil {
 		return nil, err
 	}
-	return c.listReleasesWith(ctx, actionConfig, contextName, namespace, user, access)
+	return c.listReleasesWith(ctx, actionConfig, namespace, user, access)
 }
 
 // ListReleases returns all Helm releases, optionally filtered by namespace
 func (c *Client) ListReleases(ctx context.Context, namespace string, access StatusAccess) ([]HelmRelease, error) {
 	c, ctx = c.capture(ctx)
-	contextName := c.conn.ContextName()
 	actionConfig, err := c.getActionConfig(namespace)
 	if err != nil {
 		return nil, err
 	}
-	return c.listReleasesWith(ctx, actionConfig, contextName, namespace, nil, access)
+	return c.listReleasesWith(ctx, actionConfig, namespace, nil, access)
 }
 
 // ListReleasesAcrossNamespaces lists releases for an explicit set of namespaces
@@ -313,12 +325,11 @@ func (c *Client) ListReleasesAcrossNamespaces(ctx context.Context, namespaces []
 	if namespaces != nil && len(namespaces) == 0 {
 		return []HelmRelease{}, nil
 	}
-	contextName := c.conn.ContextName()
 	client, err := c.storageClient(user)
 	if err != nil {
 		return nil, err
 	}
-	return listReleasesAcrossNamespacesWithClient(ctx, client, contextName, namespaces, true, access)
+	return c.memo().listReleasesAcrossNamespacesWithClient(ctx, client, namespaces, true, access)
 }
 
 // ListReleasesRecordingAccess is ListReleasesAcrossNamespaces that also says
@@ -335,13 +346,11 @@ func (c *Client) ListReleasesRecordingAccess(ctx context.Context, namespaces []s
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	return listReleasesRecordingAccess(ctx, client, c.conn.ContextName(), namespaces, access)
+	return c.memo().listReleasesRecordingAccess(ctx, client, namespaces, access)
 }
 
-// contextName is the cluster context the read started on; a release history
-// analysed after a switch away from it records no uninstall start.
-func listReleasesAcrossNamespacesWithClient(ctx context.Context, client kubernetes.Interface, contextName string, namespaces []string, includeResourceHealth bool, access StatusAccess) ([]HelmRelease, error) {
-	rows, err := listReleaseRows(ctx, contextName, namespaces, includeResourceHealth, access, false, ReleaseReadDeniedForCaller, func(ctx context.Context, namespace string) (*helmReleaseStorageSnapshot, error) {
+func (m *UninstallMemo) listReleasesAcrossNamespacesWithClient(ctx context.Context, client kubernetes.Interface, namespaces []string, includeResourceHealth bool, access StatusAccess) ([]HelmRelease, error) {
+	rows, err := m.listReleaseRows(ctx, namespaces, includeResourceHealth, access, false, ReleaseReadDeniedForCaller, func(ctx context.Context, namespace string) (*helmReleaseStorageSnapshot, error) {
 		return helmReleaseStorageSnapshotWithClient(ctx, client, namespace)
 	})
 	if err != nil {
@@ -373,7 +382,7 @@ func (e *PartialReadError) Unwrap() error { return e.Err }
 // failure fails the whole read, unless keepGoing is set: then the remaining
 // namespaces are still read, and when at least one namespace was read the
 // rows come back with a *PartialReadError naming the namespaces that failed.
-func listReleaseRows(ctx context.Context, contextName string, namespaces []string, includeResourceHealth bool, access StatusAccess, keepGoing bool, denied func(error) bool, read func(context.Context, string) (*helmReleaseStorageSnapshot, error)) ([]HelmRelease, error) {
+func (m *UninstallMemo) listReleaseRows(ctx context.Context, namespaces []string, includeResourceHealth bool, access StatusAccess, keepGoing bool, denied func(error) bool, read func(context.Context, string) (*helmReleaseStorageSnapshot, error)) ([]HelmRelease, error) {
 	scopes := namespaces
 	if scopes == nil {
 		scopes = []string{""}
@@ -403,7 +412,7 @@ func listReleaseRows(ctx context.Context, contextName string, namespaces []strin
 		snapshot, err := read(ctx, ns)
 		if err == nil {
 			var rows []HelmRelease
-			rows, err = helmReleaseRowsFromStorageSnapshot(ctx, snapshot, fluxMap, k3sMap, contextName, access)
+			rows, err = m.helmReleaseRowsFromStorageSnapshot(ctx, snapshot, fluxMap, k3sMap, access)
 			if err == nil {
 				authorized = true
 				all = append(all, rows...)
@@ -556,7 +565,7 @@ func (c *Client) listManifestResourcesAsUser(ctx context.Context, namespace stri
 	return resources, parseErrors, nil
 }
 
-func (c *Client) listReleasesWith(ctx context.Context, actionConfig *action.Configuration, contextName, namespace string, user *pkgauth.User, access StatusAccess) ([]HelmRelease, error) {
+func (c *Client) listReleasesWith(ctx context.Context, actionConfig *action.Configuration, namespace string, user *pkgauth.User, access StatusAccess) ([]HelmRelease, error) {
 	if err := actionConfig.KubeClient.IsReachable(); err != nil {
 		return nil, fmt.Errorf("failed to list helm releases: %w", err)
 	}
@@ -565,10 +574,10 @@ func (c *Client) listReleasesWith(ctx context.Context, actionConfig *action.Conf
 	if err != nil {
 		return nil, err
 	}
-	return listReleasesAcrossNamespacesWithClient(ctx, client, contextName, []string{namespace}, true, access)
+	return c.memo().listReleasesAcrossNamespacesWithClient(ctx, client, []string{namespace}, true, access)
 }
 
-func helmReleaseRowsFromStorageSnapshot(ctx context.Context, snapshot *helmReleaseStorageSnapshot, fluxMap map[string]string, k3sMap map[string]k3sOwner, contextName string, access StatusAccess) ([]HelmRelease, error) {
+func (m *UninstallMemo) helmReleaseRowsFromStorageSnapshot(ctx context.Context, snapshot *helmReleaseStorageSnapshot, fluxMap map[string]string, k3sMap map[string]k3sOwner, access StatusAccess) ([]HelmRelease, error) {
 	if snapshot == nil {
 		return nil, nil
 	}
@@ -587,7 +596,7 @@ func helmReleaseRowsFromStorageSnapshot(ctx context.Context, snapshot *helmRelea
 			effectiveStorage = rel.Namespace
 		}
 		historyKey := releaseHistoryKey(rel)
-		analysis := analyzeReleaseHistory(contextName, effectiveStorage, rel.Name, rel.Version, snapshot.histories[historyKey], helmhistory.Options{MaxOperations: releaseListMaxOperations})
+		analysis := m.analyzeReleaseHistory(effectiveStorage, rel.Name, rel.Version, snapshot.histories[historyKey], helmhistory.Options{MaxOperations: releaseListMaxOperations})
 		hr.LastOperation = analysis.LastOperation
 		hr.Operations = analysis.Operations
 		hr.ManagedByFlux, hr.ManagedByFluxHelmRelease = scopedFluxOwnership(k8s.ConnectionFrom(ctx).Discovery(), rel.Name, effectiveStorage, fluxMap, access)
@@ -604,27 +613,25 @@ func (c *Client) GetReleaseAsUser(ctx context.Context, namespace, name string, u
 	if user == nil {
 		return c.GetRelease(ctx, namespace, name, access)
 	}
-	contextName := c.conn.ContextName()
 	actionConfig, err := c.getActionConfigForUser(namespace, user)
 	if err != nil {
 		return nil, err
 	}
-	return getReleaseWith(ctx, c.conn, actionConfig, contextName, namespace, name, access)
+	return c.memo().getReleaseWith(ctx, c.conn, actionConfig, namespace, name, access)
 }
 
 // GetRelease returns details for a specific release. Its resources carry live
 // status only where access allows; see StatusAccess.
 func (c *Client) GetRelease(ctx context.Context, namespace, name string, access StatusAccess) (*HelmReleaseDetail, error) {
 	c, ctx = c.capture(ctx)
-	contextName := c.conn.ContextName()
 	actionConfig, err := c.getActionConfig(namespace)
 	if err != nil {
 		return nil, err
 	}
-	return getReleaseWith(ctx, c.conn, actionConfig, contextName, namespace, name, access)
+	return c.memo().getReleaseWith(ctx, c.conn, actionConfig, namespace, name, access)
 }
 
-func getReleaseWith(ctx context.Context, conn *k8s.Connection, actionConfig *action.Configuration, contextName, namespace, name string, access StatusAccess) (*HelmReleaseDetail, error) {
+func (m *UninstallMemo) getReleaseWith(ctx context.Context, conn *k8s.Connection, actionConfig *action.Configuration, namespace, name string, access StatusAccess) (*HelmReleaseDetail, error) {
 	// Get the latest release
 	getAction := action.NewGet(actionConfig)
 	rel, err := getAction.Run(name)
@@ -660,7 +667,7 @@ func getReleaseWith(ctx context.Context, conn *k8s.Connection, actionConfig *act
 	if effectiveStorage == "" {
 		effectiveStorage = rel.Namespace
 	}
-	analysis := analyzeReleaseHistory(contextName, effectiveStorage, rel.Name, rel.Version, revisions, helmhistory.Options{})
+	analysis := m.analyzeReleaseHistory(effectiveStorage, rel.Name, rel.Version, revisions, helmhistory.Options{})
 
 	resources := parseManifestResources(conn, rel.Manifest, rel.Namespace)
 	health, issue, summary := readReleaseStatus(conn, resources, access)

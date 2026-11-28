@@ -16,7 +16,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/skyhook-io/radar/internal/errorlog"
-	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/portforward"
 	"github.com/skyhook-io/radar/pkg/prom"
 )
@@ -259,7 +258,7 @@ func (c *Client) discover(ctx context.Context, gen uint64) (discoveredEndpoint, 
 		c.mu.Lock()
 		c.discoveryService = nil
 		c.mu.Unlock()
-		blocked := c.attributeNetworkPolicyBlock(ctx, k8s.GetResourceCache(), candidates, reasons)
+		blocked := c.attributeNetworkPolicyBlock(ctx, c.cache, candidates, reasons)
 		// Attribution reads the API; a run superseded or timed out during it
 		// must end as such, not be recorded as a cluster without Prometheus.
 		if err := ctx.Err(); err != nil {
@@ -310,6 +309,9 @@ func (c *Client) discover(ctx context.Context, gen uint64) (discoveredEndpoint, 
 			cand.Namespace, cand.Name, cand.TargetPort, cand.Source, cand.Score)
 
 		handle, pfErr := c.forwards.Start(ctx, portforward.OwnerPrometheus, cand.Namespace, cand.Name, cand.TargetPort)
+		if pfErr == nil {
+			pfErr = c.handles.Track(handle)
+		}
 		if pfErr != nil {
 			if errors.Is(pfErr, portforward.ErrClosed) {
 				return discoveredEndpoint{}, pfErr
@@ -631,6 +633,12 @@ func (c *Client) markConnectedLocked(addr, basePath, identity string, gen uint64
 	}
 	c.forward.Stop()
 	c.forward = forward
+	if forward != nil {
+		go func() {
+			<-forward.Done()
+			c.onForwardLost(forward)
+		}()
+	}
 	c.connectedIdentity = identity
 	c.baseURL = addr
 	c.basePath = basePath

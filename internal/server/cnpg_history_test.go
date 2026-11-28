@@ -11,6 +11,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/auth"
 	cnpgsvc "github.com/skyhook-io/radar/internal/cnpg"
+	"github.com/skyhook-io/radar/internal/k8s"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 )
 
@@ -64,13 +65,8 @@ func useCNPGHistoryPrometheusAnswering(t *testing.T, answer func(q string) strin
 			_, _ = io.WriteString(w, empty("vector"))
 		}
 	}))
-	prometheuspkg.Initialize(nil, nil, "test", nil)
-	prometheuspkg.SetManualURL(srv.URL)
-	t.Cleanup(func() {
-		srv.Close()
-		prometheuspkg.Reset()
-		prometheuspkg.Initialize(nil, nil, "", nil)
-	})
+	installTestMetrics(t, srv.URL)
+	t.Cleanup(srv.Close)
 	return &seen
 }
 
@@ -89,7 +85,7 @@ func getCNPGHistory(t *testing.T, path string) (int, cnpgsvc.CNPGClusterHistoryR
 
 func TestCNPGClusterHistory_NoPrometheusSaysSo(t *testing.T) {
 	seedCNPGStorageCluster(t, "pghi1")
-	prometheuspkg.Reset()
+	t.Cleanup(k8s.SetTestIntegrations(nil))
 	status, got, body := getCNPGHistory(t, "/api/cnpg/clusters/pghi1/pg-orders/history?range=15m")
 	if status != http.StatusOK {
 		t.Fatalf("status = %d: %s", status, body)

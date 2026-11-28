@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/prom"
@@ -67,17 +68,17 @@ func TestPVCUsageAvailability(t *testing.T) {
 				_, _ = fmt.Fprintf(w, `{"status":"success","data":{"resultType":"vector","result":%s}}`, result)
 			}))
 			defer upstream.Close()
-			Initialize(nil, nil, "pvc-test", nil)
-			SetManualURL(upstream.URL)
+			client := testClient(t, "pvc-test", k8s.GetResourceCache())
+			client.Configure(upstream.URL, nil)
 			SetAuthGate(func(_ *http.Request, group, resource, namespace, verb string) bool {
 				if group != "" || resource != "persistentvolumeclaims" || namespace != "demo" || verb != "get" {
 					t.Errorf("unexpected authorization: %s/%s %s %s", group, resource, namespace, verb)
 				}
 				return !tc.denied
 			})
-			defer func() { SetAuthGate(nil); Reset(); Initialize(nil, nil, "", nil) }()
+			defer func() { SetAuthGate(nil) }()
 			w := httptest.NewRecorder()
-			metricsRouter().ServeHTTP(w, httptest.NewRequest("GET", "/prometheus/pvc/demo/disk", nil))
+			metricsRouter(client).ServeHTTP(w, httptest.NewRequest("GET", "/prometheus/pvc/demo/disk", nil))
 			if tc.denied {
 				if w.Code != 403 || calls != 0 {
 					t.Fatalf("denied: status=%d queries=%d", w.Code, calls)
@@ -159,12 +160,14 @@ func TestPVCUsageHandlerRefusesMergedClusters(t *testing.T) {
 		_, _ = fmt.Fprintf(w, `{"status":"success","data":{"resultType":"vector","result":%s}}`, result)
 	}))
 	defer upstream.Close()
-	Initialize(nil, nil, "pvc-test", nil)
-	SetManualURL(upstream.URL)
+	client := testClient(t, "pvc-test", k8s.GetResourceCache())
+	client.Configure(upstream.URL, nil)
 	SetAuthGate(func(*http.Request, string, string, string, string) bool { return true })
-	defer func() { SetAuthGate(nil); Reset(); Initialize(nil, nil, "", nil) }()
+	defer func() { SetAuthGate(nil) }()
 	w := httptest.NewRecorder()
-	metricsRouter().ServeHTTP(w, httptest.NewRequest("GET", "/prometheus/pvc/demo/disk", nil))
+	router := chi.NewRouter()
+	Routes{Capture: func(context.Context) (*Client, error) { return client, nil }}.RegisterRoutes(router)
+	router.ServeHTTP(w, httptest.NewRequest("GET", "/prometheus/pvc/demo/disk", nil))
 	var response PVCUsageResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
 		t.Fatal(err)
@@ -211,12 +214,12 @@ func TestPVCUsageSingleClusterScrapes(t *testing.T) {
 				_, _ = fmt.Fprintf(w, `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"persistentvolumeclaim":"disk"},"value":[1700000000,"%d"]}]}}`, value)
 			}))
 			defer upstream.Close()
-			Initialize(nil, nil, "pvc-test", nil)
-			SetManualURL(upstream.URL)
+			client := testClient(t, "pvc-test", k8s.GetResourceCache())
+			client.Configure(upstream.URL, nil)
 			SetAuthGate(func(*http.Request, string, string, string, string) bool { return true })
-			defer func() { SetAuthGate(nil); Reset(); Initialize(nil, nil, "", nil) }()
+			defer func() { SetAuthGate(nil) }()
 			w := httptest.NewRecorder()
-			metricsRouter().ServeHTTP(w, httptest.NewRequest("GET", "/prometheus/pvc/demo/disk", nil))
+			metricsRouter(client).ServeHTTP(w, httptest.NewRequest("GET", "/prometheus/pvc/demo/disk", nil))
 			var response PVCUsageResponse
 			if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
 				t.Fatal(err)
@@ -256,16 +259,16 @@ func TestPVCUsageHandlerKeepsCapturedClient(t *testing.T) {
 		_, _ = fmt.Fprintf(w, `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"persistentvolumeclaim":"disk"},"value":[1700000000,"%d"]}]}}`, value)
 	}))
 	defer upstream.Close()
-	Initialize(nil, nil, "original", nil)
-	SetManualURL(upstream.URL)
+	client := testClient(t, "original", k8s.GetResourceCache())
+	client.Configure(upstream.URL, nil)
 	SetAuthGate(func(*http.Request, string, string, string, string) bool {
-		Initialize(nil, nil, "replacement", nil)
-		SetManualURL(replacement.URL)
+		client = testClient(t, "replacement", k8s.GetResourceCache())
+		client.Configure(replacement.URL, nil)
 		return true
 	})
-	defer func() { SetAuthGate(nil); Reset(); Initialize(nil, nil, "", nil) }()
+	defer func() { SetAuthGate(nil) }()
 	w := httptest.NewRecorder()
-	metricsRouter().ServeHTTP(w, httptest.NewRequest("GET", "/prometheus/pvc/demo/disk", nil))
+	metricsRouter(client).ServeHTTP(w, httptest.NewRequest("GET", "/prometheus/pvc/demo/disk", nil))
 	var response PVCUsageResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
 		t.Fatal(err)
@@ -581,22 +584,22 @@ func TestPVCUsageHandlerUsesNamespaceCacheProof(t *testing.T) {
 				_, _ = fmt.Fprintf(w, `{"status":"success","data":{"resultType":"vector","result":%s}}`, result)
 			}))
 			defer upstream.Close()
-			Initialize(nil, nil, "cache-proof", nil)
-			SetManualURL(upstream.URL)
+			client := testClient(t, "cache-proof", k8s.GetResourceCache())
+			client.Configure(upstream.URL, nil)
 			SetAuthGate(func(_ *http.Request, group, resource, namespace, verb string) bool {
 				return group == "" && resource == "persistentvolumeclaims" && namespace == "db" && verb == "get"
 			})
-			defer func() { SetAuthGate(nil); Reset(); Initialize(nil, nil, "", nil) }()
+			defer func() { SetAuthGate(nil) }()
 			wantProofs := 1
 			if tc.priorEmpty {
 				wantProofs++
-				proof, err := GetClient().historicalClusterScope(context.Background(), PodScope{Namespace: "db", Identities: []prom.WorkloadPodIdentity{{Name: "new-0", UID: "new-uid"}}}, nil)
+				proof, err := client.historicalClusterScope(context.Background(), PodScope{Namespace: "db", Identities: []prom.WorkloadPodIdentity{{Name: "new-0", UID: "new-uid"}}}, nil)
 				if err != nil || len(proof.ClusterLabels) != 0 {
 					t.Fatalf("unrelated workload probe: %+v err=%v", proof, err)
 				}
 			}
 			w := httptest.NewRecorder()
-			metricsRouter().ServeHTTP(w, httptest.NewRequest("GET", "/prometheus/pvc/db/pg-data", nil))
+			metricsRouter(client).ServeHTTP(w, httptest.NewRequest("GET", "/prometheus/pvc/db/pg-data", nil))
 			var response PVCUsageResponse
 			if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
 				t.Fatal(err)

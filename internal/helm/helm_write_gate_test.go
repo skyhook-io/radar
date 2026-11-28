@@ -53,8 +53,8 @@ func TestRequireHelmWrite_ChecksCallerInNamespace(t *testing.T) {
 	prev := k8s.SetTestClient(client)
 	t.Cleanup(func() { k8s.SetTestClient(prev) })
 	prevStatus := k8s.GetConnectionStatus()
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
-	t.Cleanup(func() { k8s.SetConnectionStatus(prevStatus) })
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	t.Cleanup(func() { k8s.PublishTestConnectionStatus(prevStatus) })
 
 	cases := []struct {
 		name      string
@@ -172,8 +172,8 @@ func TestRequireHelmWrite_NamespaceLimitedServiceAccount(t *testing.T) {
 		{"target permission lookup failed", []string{"app"}, "outage", http.StatusServiceUnavailable},
 	}
 	previousStatus := k8s.GetConnectionStatus()
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
-	t.Cleanup(func() { k8s.SetConnectionStatus(previousStatus) })
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	t.Cleanup(func() { k8s.PublishTestConnectionStatus(previousStatus) })
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			k8s.SetRBACNamespaces(tc.rbacNamespaces)
@@ -193,7 +193,7 @@ func TestRequireHelmWrite_NamespaceLimitedServiceAccount(t *testing.T) {
 	if status, err := CheckWritePermission(t.Context(), ""); status != 0 || err != nil {
 		t.Fatalf("seed grant: %d %v", status, err)
 	}
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateDisconnected})
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateDisconnected})
 	for _, namespace := range []string{"", "app"} {
 		if status, err := CheckWritePermission(t.Context(), namespace); status != http.StatusServiceUnavailable || err == nil {
 			t.Fatalf("namespace=%q: disconnected preflight: %d %v", namespace, status, err)

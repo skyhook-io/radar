@@ -73,11 +73,11 @@ func TestHelmListAndUpgradeCheckRecordOnlyRealFailures(t *testing.T) {
 	// A 5xx Helm error that reads as a connectivity failure can mark the
 	// cluster disconnected; keep that out of later tests.
 	previousStatus := k8s.GetConnectionStatus()
-	t.Cleanup(func() { k8s.SetConnectionStatus(previousStatus) })
+	t.Cleanup(func() { k8s.PublishTestConnectionStatus(previousStatus) })
 	ResetTestClient()
 	previousConfig := k8s.SetTestConfig(config)
 	t.Cleanup(func() { k8s.SetTestConfig(previousConfig) })
-	Initialize()
+	Initialize(nil)
 	t.Cleanup(func() {
 		ResetTestClient()
 		k8s.SetTestClient(previousClient)

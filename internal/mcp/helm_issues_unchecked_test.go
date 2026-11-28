@@ -91,7 +91,7 @@ func TestIssuesToolSaysWhenHelmReleasesCouldNotBeChecked(t *testing.T) {
 			helm.ResetTestClient()
 			previousConfig := k8s.SetTestConfig(&rest.Config{Host: storage.URL})
 			t.Cleanup(func() { k8s.SetTestConfig(previousConfig) })
-			helm.Initialize()
+			helm.Initialize(nil)
 			t.Cleanup(helm.ResetTestClient)
 
 			result, _, err := handleIssuesTool(context.Background(), nil, issuesInput{Namespace: "shop"})
@@ -120,7 +120,7 @@ func TestNativeHelmIssuesDoNotSayUncheckedWhenCallerLeft(t *testing.T) {
 	helm.ResetTestClient()
 	previousConfig := k8s.SetTestConfig(&rest.Config{Host: "http://127.0.0.1:1"})
 	t.Cleanup(func() { k8s.SetTestConfig(previousConfig) })
-	helm.Initialize()
+	helm.Initialize(nil)
 	t.Cleanup(helm.ResetTestClient)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -178,7 +178,7 @@ func TestDashboardHelmSeparatesDeniedFromFailed(t *testing.T) {
 			t.Cleanup(func() { k8s.SetTestClient(previousClient) })
 			previousConfig := k8s.SetTestConfig(config)
 			t.Cleanup(func() { k8s.SetTestConfig(previousConfig) })
-			helm.Initialize()
+			helm.Initialize(nil)
 			t.Cleanup(helm.ResetTestClient)
 
 			d := buildDashboard(context.Background(), k8s.GetResourceCache(), "shop", false, false)

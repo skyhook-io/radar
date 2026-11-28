@@ -220,6 +220,11 @@ func (m *Manager) startPortForward(ctx context.Context, snap probeSnapshot, name
 	if err != nil {
 		return nil, err
 	}
+	if m.handles != nil {
+		if err := m.handles.Track(handle); err != nil {
+			return nil, err
+		}
+	}
 	go m.watchForwardExit(handle, handle.Done())
 	return handle, nil
 }

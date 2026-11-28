@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { getRadarUpgradeRequirement } from '@skyhook-io/k8s-ui'
-import { ApiError } from './client'
+import { ApiError, shouldRetryReplacedMember } from './client'
 import {
   RADAR_FEATURES,
   RadarFeatureUnsupportedError,
@@ -183,6 +183,18 @@ describe('shouldRetryRadarQuery', () => {
     for (const error of [new ApiError('x', 408), new ApiError('x', 429), new ApiError('x', 503), new TypeError('Failed to fetch')]) {
       expect(shouldRetryRadarQuery(0, error)).toBe(true)
       expect(shouldRetryRadarQuery(1, error)).toBe(false)
+    }
+  })
+})
+
+describe('shouldRetryReplacedMember', () => {
+  it('retries only HTTP 409 and 503, once each', () => {
+    for (const status of [409, 503]) {
+      expect(shouldRetryReplacedMember(0, new ApiError('x', status))).toBe(true)
+      expect(shouldRetryReplacedMember(1, new ApiError('x', status))).toBe(false)
+    }
+    for (const error of [new ApiError('x', 404), new ApiError('x', 500), new TypeError('Failed to fetch')]) {
+      expect(shouldRetryReplacedMember(0, error)).toBe(false)
     }
   })
 })

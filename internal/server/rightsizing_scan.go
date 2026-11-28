@@ -6,8 +6,11 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/connectionruntime"
+
 	"github.com/go-chi/chi/v5"
 
+	"github.com/skyhook-io/radar/internal/portforward"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/internal/readscope"
 )
@@ -21,23 +24,34 @@ func (s *Server) handleRightsizingScan(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), rightsizingScanTimeout)
 	defer cancel()
 	r = r.WithContext(ctx)
-	manager := prometheuspkg.RightsizingScans()
-	generation := manager.Generation()
+	set := connectionruntime.Capture(ctx)
 	id := chi.URLParam(r, "scanId")
 	var namespaces []string
+	if id == "" {
+		namespaces = s.parseNamespacesForUser(r)
+		if readscope.NoNamespaceAccess(namespaces) && hasExplicitNamespaceFilter(r) {
+			s.writeError(w, http.StatusForbidden, "no access to the requested namespace(s)")
+			return
+		}
+	}
+	manager := set.RightsizingScans()
+	if manager == nil {
+		_, err := set.MetricsClient()
+		s.writeRightsizingScanError(w, ctx, err)
+		return
+	}
+	generation := manager.Generation()
 	if id != "" {
 		original, err := manager.Namespaces(ctx, id, generation)
 		if err != nil {
-			s.writeRightsizingScanError(w, err)
+			s.writeRightsizingScanError(w, ctx, err)
 			return
 		}
 		namespaces = s.getUserNamespaces(r, original)
-	} else {
-		namespaces = s.parseNamespacesForUser(r)
-	}
-	if readscope.NoNamespaceAccess(namespaces) && (id != "" || hasExplicitNamespaceFilter(r)) {
-		s.writeError(w, http.StatusForbidden, "no access to the requested namespace(s)")
-		return
+		if readscope.NoNamespaceAccess(namespaces) {
+			s.writeError(w, http.StatusForbidden, "no access to the requested namespace(s)")
+			return
+		}
 	}
 	request := prometheuspkg.RightsizingScanRequest{
 		Generation: generation, Namespaces: namespaces, Scope: s.resolveRightsizingScanScope(r, namespaces),
@@ -48,15 +62,18 @@ func (s *Server) handleRightsizingScan(w http.ResponseWriter, r *http.Request) {
 	}
 	result, err := manager.Resolve(ctx, request)
 	if err != nil {
-		s.writeRightsizingScanError(w, err)
+		s.writeRightsizingScanError(w, ctx, err)
 		return
 	}
 	s.writeJSON(w, result)
 }
 
-func (s *Server) writeRightsizingScanError(w http.ResponseWriter, err error) {
+func (s *Server) writeRightsizingScanError(w http.ResponseWriter, ctx context.Context, err error) {
 	status := http.StatusServiceUnavailable
 	switch {
+	case portforward.IsMemberClosed(ctx, err):
+		s.writeError(w, status, prometheuspkg.ConnectionClosedMessage)
+		return
 	case errors.Is(err, prometheuspkg.ErrRightsizingScanNotFound):
 		status = http.StatusNotFound
 	case errors.Is(err, prometheuspkg.ErrRightsizingScanScopeChanged):

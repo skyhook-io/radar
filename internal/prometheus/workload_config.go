@@ -1,41 +1,39 @@
 package prometheus
 
 import (
-	"fmt"
 	"maps"
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/prom"
 )
 
-// SetWorkloadMetricsScope binds an operator assertion to the current client.
-// URL/header changes and context reinitialization discard it deliberately.
-func SetWorkloadMetricsScope(scope prom.WorkloadMetricsScope, beylaJobSelector string) error {
+func (c *Client) SetWorkloadMetricsScope(scope prom.WorkloadMetricsScope, beylaJobSelector string) error {
 	if _, err := scope.Matchers(); err != nil {
 		return err
 	}
-	clientMu.RLock()
-	defer clientMu.RUnlock()
-	if globalClient == nil {
-		return fmt.Errorf("Prometheus client not initialized")
-	}
-	globalClient.mu.Lock()
-	defer globalClient.mu.Unlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	scope.ClusterLabels = maps.Clone(scope.ClusterLabels)
-	globalClient.gkeRevision++
-	globalClient.gke = nil
-	globalClient.gkeChecked = time.Time{}
-	if relay := globalClient.relay; relay != nil {
+	c.gkeRevision++
+	c.gke = nil
+	c.gkeChecked = time.Time{}
+	if relay := c.relay; relay != nil {
 		// The relay's scope stays bound; this one applies when it ends.
 		relay.setAside(func(s *prometheusSettings) {
 			s.scope, s.scopeEverSet, s.beylaJobSelector = &scope, true, beylaJobSelector
 		})
 		return nil
 	}
-	globalClient.workloadScope = &scope
-	globalClient.workloadScopeEverSet = true
-	globalClient.beylaJobSelector = beylaJobSelector
+	c.workloadScope = &scope
+	c.workloadScopeEverSet = true
+	c.beylaJobSelector = beylaJobSelector
 	return nil
+}
+
+func (c *Client) NoteWorkloadScopeCleared() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.workloadScopeEverSet = true
 }
 
 func (c *Client) workloadScopeNotice() string {

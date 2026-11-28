@@ -29,7 +29,7 @@ import (
 // A release a Flux HelmRelease owns is refused for every write, before Helm
 // runs, including when the controller reference is hidden.
 func TestManageHelmRefusesFluxManagedRelease(t *testing.T) {
-	helm.Initialize()
+	helm.Initialize(nil)
 	t.Cleanup(helm.ResetTestClient)
 	setupFakeCacheForFilterTests(t)
 	gvr := schema.GroupVersionResource{Group: "helm.toolkit.fluxcd.io", Version: "v2", Resource: "helmreleases"}
@@ -86,11 +86,11 @@ func TestManageHelmRefusesFluxManagedRelease(t *testing.T) {
 		t.Fatal(err)
 	}
 	oldClient, oldConfig, oldStatus := k8s.SetTestClient(client), k8s.SetTestConfig(cfg), k8s.GetConnectionStatus()
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
 	defer func() {
 		k8s.SetTestClient(oldClient)
 		k8s.SetTestConfig(oldConfig)
-		k8s.SetConnectionStatus(oldStatus)
+		k8s.PublishTestConnectionStatus(oldStatus)
 	}()
 
 	for _, caller := range []struct {

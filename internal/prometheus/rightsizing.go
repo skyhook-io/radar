@@ -16,6 +16,7 @@ import (
 	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/errorlog"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/portforward"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/prom"
 	"github.com/skyhook-io/radar/pkg/rightsizing"
@@ -114,8 +115,9 @@ const (
 // handleRightsizing returns rightsizing recommendations for a workload's containers.
 // Only Deployment / StatefulSet / DaemonSet supported — per-pod rightsizing
 // is wrong granularity (recs are per-container-template).
-func handleRightsizing(w http.ResponseWriter, r *http.Request) {
-	if _, connectionErr := ClientForOperation(); connectionErr != nil {
+func (h Routes) handleRightsizing(w http.ResponseWriter, r *http.Request) {
+	client, connectionErr := h.Capture(r.Context())
+	if connectionErr != nil {
 		writeError(w, http.StatusServiceUnavailable, connectionErr.Error())
 		return
 	}
@@ -137,9 +139,13 @@ func handleRightsizing(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, err := RightsizingForWorkload(r.Context(), kind, namespace, name)
+	resp, err := client.RightsizingForWorkload(r.Context(), kind, namespace, name)
 	if err != nil {
 		switch {
+		case r.Context().Err() != nil:
+			return
+		case portforward.IsMemberClosed(r.Context(), err):
+			writeChartError(w, r.Context(), err)
 		case errors.Is(err, errCacheNotReady):
 			writeError(w, http.StatusServiceUnavailable, err.Error())
 		case errors.Is(err, errKindRBACDenied):
@@ -162,16 +168,12 @@ func handleRightsizing(w http.ResponseWriter, r *http.Request) {
 // RightsizingForWorkload is the shared entry point behind the REST handler and
 // the get_rightsizing MCP tool. It performs no per-user RBAC check: callers own
 // that gate, because the cache is populated under Radar's ServiceAccount.
-func RightsizingForWorkload(ctx context.Context, kind, namespace, name string) (RightsizingResponse, error) {
-	client, connectionErr := ClientForOperation()
-	if connectionErr != nil {
-		return RightsizingResponse{}, connectionErr
-	}
+func (client *Client) RightsizingForWorkload(ctx context.Context, kind, namespace, name string) (RightsizingResponse, error) {
 	if !IsRightsizingKind(kind) {
 		return RightsizingResponse{}, ErrRightsizingKindUnsupported
 	}
 
-	workload, err := loadRightsizingWorkload(ctx, kind, namespace, name)
+	workload, err := loadRightsizingWorkload(ctx, client.cache, kind, namespace, name)
 	if err != nil {
 		return RightsizingResponse{}, err
 	}
@@ -189,31 +191,36 @@ func RightsizingForWorkload(ctx context.Context, kind, namespace, name string) (
 	defer cancel()
 	// The queries run on one store handle and the check must describe that
 	// handle's backend.
-	cache := k8s.GetResourceCache()
+	cache := client.cache
 	store, err := client.bindStore(queryCtx)
-	if err != nil {
-		if ctx.Err() != nil {
-			return RightsizingResponse{}, ctx.Err()
-		}
-		// With no store to check, the queries fail with the connect error,
-		// which is the answer, rather than a cluster scope that never ran.
-		return computeRightsizing(queryCtx, store, kind, namespace, name, workload, ViewScope{}), nil
+	var scope ViewScope
+	if err == nil {
+		scope, err = resolveOnConnection(func() bool { return client.ConnectionCurrent(store.conn) }, func() (ViewScope, error) {
+			return resolveRightsizingScope(queryCtx, client, singleRightsizingScopeRequest(kind, namespace, workload, cache), cache)
+		})
 	}
-	scope, err := resolveOnConnection(func() bool { return client.ConnectionCurrent(store.conn) }, func() (ViewScope, error) {
-		return resolveRightsizingScope(queryCtx, client, singleRightsizingScopeRequest(kind, namespace, workload, cache), cache)
-	})
+	if client.Closed() || portforward.IsMemberClosed(ctx, err) {
+		return RightsizingResponse{}, portforward.ErrClosed
+	}
 	if err != nil && ctx.Err() != nil {
 		return RightsizingResponse{}, ctx.Err()
 	}
+
+	var resp RightsizingResponse
 	if cloud.IsAuthenticatedTunnelRequest(ctx) && scope.State == ViewScopeUnlabeled && !scope.Withheld {
 		input := scanWorkload{kind: k8s.CanonicalWorkloadKind(kind), namespace: namespace, name: name, replicas: workload.replicas, workload: workload}
 		// Range reads for a large cohort run in bounded chunks. Give them
 		// a separate budget after the store and cluster have been verified.
 		rangeCtx, stop := context.WithTimeout(ctx, rightsizingScanQueryTimeout)
 		defer stop()
-		return currentPodRightsizingDetail(rangeCtx, store, input), nil
+		resp = currentPodRightsizingDetail(rangeCtx, store, input)
+	} else {
+		resp = computeRightsizing(queryCtx, store, kind, namespace, name, workload, scope)
 	}
-	return computeRightsizing(queryCtx, store, kind, namespace, name, workload, scope), nil
+	if client.Closed() {
+		return RightsizingResponse{}, portforward.ErrClosed
+	}
+	return resp, nil
 }
 
 // Use the scan's evidence and policy so a drill-down describes the same current replicas.
@@ -333,8 +340,7 @@ func workloadPodsOnceWarm(ctx context.Context, cache *k8s.ResourceCache, kind, n
 	}
 }
 
-func loadRightsizingWorkload(ctx context.Context, kind, namespace, name string) (rightsizingWorkload, error) {
-	cache := k8s.GetResourceCache()
+func loadRightsizingWorkload(ctx context.Context, cache *k8s.ResourceCache, kind, namespace, name string) (rightsizingWorkload, error) {
 	if cache == nil {
 		return rightsizingWorkload{}, errCacheNotReady
 	}
@@ -917,8 +923,8 @@ type PVCUsageResponse struct {
 // handlePVCUsage returns current usage for a PVC, computed from
 // kubelet_volume_stats_{used,capacity}_bytes. Missing measurements do not
 // establish whether the driver reports volume stats or kubelet is scraped.
-func handlePVCUsage(w http.ResponseWriter, r *http.Request) {
-	client, connectionErr := ClientForOperation()
+func (h Routes) handlePVCUsage(w http.ResponseWriter, r *http.Request) {
+	client, connectionErr := h.Capture(r.Context())
 	if connectionErr != nil {
 		writeError(w, http.StatusServiceUnavailable, connectionErr.Error())
 		return
@@ -943,7 +949,7 @@ func handlePVCUsage(w http.ResponseWriter, r *http.Request) {
 		var err error
 		g, err = stores.supplement(r.Context())
 		if err != nil {
-			writeChartError(w, err)
+			client.writeChartFailure(w, r.Context(), err)
 			return
 		}
 	}
@@ -952,19 +958,22 @@ func handlePVCUsage(w http.ResponseWriter, r *http.Request) {
 		if !g.fallback || native.HasData {
 			resp = native
 		}
-		if g != client.gkeChartStore() {
-			writeError(w, http.StatusConflict, "metrics connection changed; retry the request")
-			return
-		}
+	}
+	if client.writeChartFailure(w, r.Context(), nil) {
+		return
+	}
+	if g != nil && g != client.gkeChartStore() {
+		writeError(w, http.StatusConflict, "metrics connection changed; retry the request")
+		return
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
 func standardPVCUsage(ctx context.Context, client *Client, namespace, name string) PVCUsageResponse {
 	resp := PVCUsageResponse{Namespace: namespace, Name: name, Status: PVCUsageQueryFailed}
-	matchers, _, err := client.resolveScope(ctx, namespace, pvcScopeProbe(namespace, []string{name}, 0), nil, k8s.GetResourceCache())
+	matchers, _, err := client.resolveScope(ctx, namespace, pvcScopeProbe(namespace, []string{name}, 0), nil, client.cache)
 	if failed, bad := pvcScopeFailure(err); bad {
-		if failed.Status == PVCUsageQueryFailed {
+		if failed.Status == PVCUsageQueryFailed && !client.Closed() {
 			errorlog.Record("prometheus", "warning", "pvc usage scope check failed for %s/%s: %v", namespace, name, err)
 		}
 		resp.Status = failed.Status
@@ -973,7 +982,9 @@ func standardPVCUsage(ctx context.Context, client *Client, namespace, name strin
 
 	batch := queryPVCUsage(ctx, client, namespace, []string{name}, matchers)
 	if batch.Status != PVCUsageAvailable {
-		errorlog.Record("prometheus", "warning", "pvc usage query failed for %s/%s: %s", namespace, name, batch.Error)
+		if !client.Closed() {
+			errorlog.Record("prometheus", "warning", "pvc usage query failed for %s/%s: %s", namespace, name, batch.Error)
+		}
 		resp.Status = batch.Status
 	} else if usage, ok := batch.Usage[name]; ok {
 		resp.Used = usage.UsedBytes

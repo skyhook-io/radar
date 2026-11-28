@@ -9,7 +9,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/config"
-	internalopencost "github.com/skyhook-io/radar/internal/opencost"
+	"github.com/skyhook-io/radar/internal/connectionruntime"
 )
 
 // userWithGroups builds an authenticated user carrying the given groups, used
@@ -21,7 +21,7 @@ func userWithGroups(groups ...string) *auth.User {
 func TestPutConfigPersistsAndAppliesOpenCostCurrency(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("USERPROFILE", t.TempDir())
-	s := &Server{openCostCurrency: internalopencost.NewCurrencyResolver("JPY")}
+	s := serverWithTestIntegrations(t, connectionruntime.Settings{Currency: "JPY"})
 	r := httptest.NewRequest(http.MethodPut, "/api/config", strings.NewReader(`{"port":9280,"opencostCurrency":" gbp "}`))
 	w := httptest.NewRecorder()
 
@@ -33,7 +33,7 @@ func TestPutConfigPersistsAndAppliesOpenCostCurrency(t *testing.T) {
 	if got := config.Load().OpenCostCurrency; got != "GBP" {
 		t.Errorf("opencostCurrency = %q, want GBP", got)
 	}
-	if got := s.openCostCurrency.Resolve(); got != "GBP" {
+	if got := currentTestIntegrations().Currency.Resolve(); got != "GBP" {
 		t.Errorf("running currency = %q, want GBP", got)
 	}
 }
@@ -44,7 +44,7 @@ func TestPutConfigPreservesEmptyOpenCostCurrencyAsAuto(t *testing.T) {
 	if err := config.Save(config.Config{OpenCostCurrency: "GBP"}); err != nil {
 		t.Fatal(err)
 	}
-	s := &Server{openCostCurrency: internalopencost.NewCurrencyResolver("GBP")}
+	s := serverWithTestIntegrations(t, connectionruntime.Settings{Currency: "GBP"})
 	r := httptest.NewRequest(http.MethodPut, "/api/config", strings.NewReader(`{"opencostCurrency":""}`))
 	w := httptest.NewRecorder()
 
@@ -56,7 +56,7 @@ func TestPutConfigPreservesEmptyOpenCostCurrencyAsAuto(t *testing.T) {
 	if got := config.Load().OpenCostCurrency; got != "" {
 		t.Errorf("opencostCurrency = %q, want auto", got)
 	}
-	if got := s.openCostCurrency.Resolve(); got != "USD" {
+	if got := currentTestIntegrations().Currency.Resolve(); got != "USD" {
 		t.Errorf("running currency = %q, want auto fallback USD", got)
 	}
 }
@@ -64,10 +64,8 @@ func TestPutConfigPreservesEmptyOpenCostCurrencyAsAuto(t *testing.T) {
 func TestPutConfigDoesNotReplaceManagedOpenCostCurrency(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("USERPROFILE", t.TempDir())
-	s := &Server{
-		openCostCurrency: internalopencost.NewCurrencyResolver("GBP"),
-		currencyManaged:  true,
-	}
+	s := serverWithTestIntegrations(t, connectionruntime.Settings{Currency: "GBP"})
+	s.currencyManaged = true
 	r := httptest.NewRequest(http.MethodPut, "/api/config", strings.NewReader(`{"opencostCurrency":"JPY"}`))
 	w := httptest.NewRecorder()
 
@@ -79,7 +77,7 @@ func TestPutConfigDoesNotReplaceManagedOpenCostCurrency(t *testing.T) {
 	if got := config.Load().OpenCostCurrency; got != "JPY" {
 		t.Errorf("persisted opencostCurrency = %q, want JPY", got)
 	}
-	if got := s.openCostCurrency.Resolve(); got != "GBP" {
+	if got := currentTestIntegrations().Currency.Resolve(); got != "GBP" {
 		t.Errorf("running currency = %q, want managed GBP", got)
 	}
 }
@@ -143,7 +141,7 @@ func TestGetConfigClearsInvalidPersistedOpenCostCurrency(t *testing.T) {
 	if err := config.Save(config.Config{OpenCostCurrency: "EURO"}); err != nil {
 		t.Fatal(err)
 	}
-	s := &Server{}
+	s := serverWithTestIntegrations(t, connectionruntime.Settings{})
 	w := httptest.NewRecorder()
 
 	s.handleGetConfig(w, httptest.NewRequest(http.MethodGet, "/api/config", nil))
@@ -198,7 +196,7 @@ func putConfigStatus(t *testing.T, user *auth.User) (int, string) {
 	// reach config.Update() don't clobber the developer's real ~/.radar.
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("USERPROFILE", t.TempDir())
-	s := &Server{}
+	s := serverWithTestIntegrations(t, connectionruntime.Settings{})
 	r := httptest.NewRequest("PUT", "/api/config", strings.NewReader(`{}`))
 	if user != nil {
 		r = r.WithContext(auth.ContextWithUser(r.Context(), user))

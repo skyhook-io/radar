@@ -11,8 +11,10 @@ import (
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/config"
+	"github.com/skyhook-io/radar/internal/connectionruntime"
 	"github.com/skyhook-io/radar/internal/k8s"
 	internalopencost "github.com/skyhook-io/radar/internal/opencost"
+	"github.com/skyhook-io/radar/internal/portforward"
 	"github.com/skyhook-io/radar/pkg/urlutil"
 )
 
@@ -43,7 +45,9 @@ func (s *Server) handleApplyCostSource(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusConflict, "Use the cluster-scoped saved connections endpoint to change this local integration")
 		return
 	}
-	if internalopencost.IsEnvManaged() {
+	conn := k8s.Current()
+	base := s.integrationRuntime.Snapshot()
+	if base.CostEnv {
 		s.writeError(w, http.StatusConflict, "Cost source is configured from the environment — edit the deployment to change it.")
 		return
 	}
@@ -78,14 +82,14 @@ func (s *Server) handleApplyCostSource(w http.ResponseWriter, r *http.Request) {
 		apiKeyContext = ""
 	}
 	if apiKey != "" && rawURL == "" && apiKeyContext == "" {
-		apiKeyContext = k8s.GetContextName()
+		apiKeyContext = conn.ContextName()
 	} else if rawURL != "" {
 		apiKeyContext = ""
 	}
 	clusterID := strings.TrimSpace(body.ClusterID)
 	clusterIDContext := ""
 	if clusterID != "" {
-		clusterIDContext = k8s.GetContextName()
+		clusterIDContext = conn.ContextName()
 	}
 	candidate := internalopencost.ManagerConfig{
 		Source:           source,
@@ -95,45 +99,53 @@ func (s *Server) handleApplyCostSource(w http.ResponseWriter, r *http.Request) {
 		ClusterID:        clusterID,
 		ClusterIDContext: clusterIDContext,
 	}
-	previousManager := internalopencost.ConfigSnapshot()
-	ctx, cancel := context.WithTimeout(r.Context(), costSourceApplyTimeout)
-	defer cancel()
-	if source != internalopencost.SourcePrometheus && rawURL != "" {
-		if _, err := internalopencost.ProbeKubecost(ctx, candidate); err != nil {
-			log.Printf("[opencost] Kubecost configuration probe failed: %s", sanitizeForLog(err.Error()))
-			s.writeError(w, http.StatusBadRequest, kubecostConnectionGuidance(err, apiKey != ""))
+	edit := s.integrationRuntime.PrepareShared(conn, base, func(next *connectionruntime.Settings) { next.Cost = candidate }, config.IntegrationCost)
+	manager := edit.Set().Cost
+	if manager == nil {
+		metrics, metricsErr := connectionruntime.SetFor(conn).MetricsClient()
+		manager = internalopencost.NewManager(conn, k8s.IsInCluster(), metrics, metricsErr)
+		defer manager.Close()
+		if err := manager.Configure(candidate); err != nil {
+			s.connectionError(w, err)
 			return
 		}
 	}
-	if err := internalopencost.Configure(candidate); err != nil {
-		s.writeError(w, http.StatusBadRequest, err.Error())
-		return
+	ctx, cancel := context.WithTimeout(r.Context(), costSourceApplyTimeout)
+	defer cancel()
+	var connection internalopencost.Connection
+	var connectErr error
+	if source == internalopencost.SourceAuto && rawURL != "" {
+		var probe func(context.Context) error
+		probe, connectErr = internalopencost.PrepareCandidateFor(conn, k8s.IsInCluster(), candidate)
+		if connectErr == nil {
+			connectErr = probe(ctx)
+		}
 	}
-
-	connection, connectErr := internalopencost.Selected(ctx)
+	if connectErr == nil {
+		connection, connectErr = manager.Selected(ctx)
+	}
 	if connectErr != nil {
-		_ = internalopencost.Configure(previousManager)
+		edit.Discard()
+		if portforward.IsMemberClosed(ctx, connectErr) {
+			s.writeError(w, http.StatusServiceUnavailable, "Cost connection closed. Retry the request")
+			return
+		}
 		log.Printf("[opencost] Kubecost configuration probe failed: %s", sanitizeForLog(connectErr.Error()))
 		s.writeError(w, http.StatusBadRequest, kubecostConnectionGuidance(connectErr, apiKey != ""))
 		return
 	}
-
-	if _, err := config.Update(func(c *config.Config) {
-		c.CostSource = string(source)
-		c.KubecostURL = rawURL
-		c.KubecostAPIKey = apiKey
-		c.KubecostAPIKeyContext = apiKeyContext
-		c.KubecostClusterID = clusterID
-		c.KubecostClusterIDContext = clusterIDContext
+	if err := edit.Commit(func() error {
+		_, err := config.Update(func(c *config.Config) {
+			c.CostSource, c.KubecostURL = string(source), rawURL
+			c.KubecostAPIKey, c.KubecostAPIKeyContext = apiKey, apiKeyContext
+			c.KubecostClusterID, c.KubecostClusterIDContext = clusterID, clusterIDContext
+		})
+		return err
 	}); err != nil {
-		_ = internalopencost.Configure(previousManager)
-		log.Printf("[config] Failed to persist Kubecost configuration: %v", err)
-		s.writeError(w, http.StatusInternalServerError, err.Error())
+		s.integrationCommitError(w, "Kubecost", err)
 		return
 	}
-	if s.openCostCurrency != nil {
-		s.openCostCurrency.Invalidate()
-	}
+
 	var service *kubecostServiceRef
 	if connection.Service.Name != "" && connection.Service.Namespace != "" && connection.Service.Port > 0 {
 		service = &kubecostServiceRef{

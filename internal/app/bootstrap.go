@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"maps"
 	"net"
 	"os"
 	"path/filepath"
@@ -28,13 +27,12 @@ import (
 	internalopencost "github.com/skyhook-io/radar/internal/opencost"
 	"github.com/skyhook-io/radar/internal/openobserve"
 	"github.com/skyhook-io/radar/internal/portforward"
-	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/internal/server"
 	"github.com/skyhook-io/radar/internal/settings"
 	"github.com/skyhook-io/radar/internal/static"
 	"github.com/skyhook-io/radar/internal/timeline"
-	"github.com/skyhook-io/radar/internal/traffic"
 	versionpkg "github.com/skyhook-io/radar/internal/version"
+	"github.com/skyhook-io/radar/pkg/argoapi"
 	"github.com/skyhook-io/radar/pkg/prom"
 )
 
@@ -95,7 +93,7 @@ type AppConfig struct {
 	PrometheusEnvHeaderFlag     bool
 	PrometheusSavedURL          string
 	LocalConnections            *connections.Resolver
-	LocalRuntime                *connectionruntime.Runtime
+	IntegrationRuntime          *connectionruntime.Runtime
 	operatorSettingsLoaded      bool
 	BeylaJobSelector            string
 	WorkloadMetricsScope        prom.WorkloadMetricsScope
@@ -330,17 +328,26 @@ func BuildTimelineStoreConfig(cfg AppConfig) (timeline.StoreConfig, error) {
 	}
 }
 
-// RegisterCallbacks initializes Helm repository settings and registers timeline, traffic, and Prometheus reset/reinit
-// functions used for both initial cluster initialization and context switching,
-// and prepares local per-context integration settings. Must be called before
-// InitializeCluster; callers pass the returned config to CreateServer.
+func validateStartupWorkloadMetricsScope(scope prom.WorkloadMetricsScope) error {
+	if !scope.SingleCluster && len(scope.ClusterLabels) == 0 {
+		return nil
+	}
+	_, err := scope.Matchers()
+	return err
+}
+
+// RegisterCallbacks configures Helm repositories, timeline hooks and the integration builder.
+// Call it before InitializeCluster and pass the returned config to CreateServer.
 func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) AppConfig {
 	var err error
 	cfg, err = preparePrometheusConfiguration(cfg)
 	if err != nil {
 		log.Fatalf("Invalid startup configuration: %v", err)
 	}
-	helm.Initialize()
+	helm.Initialize(connectionruntime.HelmMemoFor)
+	if k8s.IsInCluster() && config.Load().OpenObserve != nil {
+		log.Print(openobserve.IgnoredInClusterMessage)
+	}
 
 	RegisterLastContextMemory(cfg)
 
@@ -351,145 +358,47 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) App
 		return nil
 	})
 
-	// Initialize Prometheus metrics client (must come before SetManualURL)
-	conn := k8s.Current()
-	prometheuspkg.Initialize(conn.ClientInterface(), conn.Config(), conn.ContextName(), conn.PortForwards())
-	prometheuspkg.RegisterRediscoverySignals()
-
 	if cfg.PrometheusURL != "" {
 		if err := validateStartupPrometheusURL(cfg.PrometheusURL); err != nil {
 			log.Fatalf("Invalid --prometheus-url: %v", err)
 		}
-		traffic.SetMetricsURL(cfg.PrometheusURL)
-		prometheuspkg.SetManualURL(cfg.PrometheusURL)
 	}
-	if len(cfg.PrometheusHeaders) > 0 {
-		traffic.SetMetricsHeaders(cfg.PrometheusHeaders)
-		prometheuspkg.SetHeaders(cfg.PrometheusHeaders)
-		if prom.HeadersRequireURL(cfg.PrometheusURL, cfg.PrometheusHeaders) {
-			log.Printf("[prometheus] Warning: %v", prom.ErrHeadersRequireURL)
-		}
+	if err := validateStartupWorkloadMetricsScope(cfg.WorkloadMetricsScope); err != nil {
+		log.Fatalf("Invalid workload metrics scope: %v", err)
+	}
+	startup := connectionruntime.Settings{
+		Metrics:  prom.Connection{URL: cfg.PrometheusURL, Headers: cfg.PrometheusHeaders},
+		Currency: cfg.OpenCostCurrency, Scope: cfg.WorkloadMetricsScope, BeylaSelector: cfg.BeylaJobSelector,
 	}
 	if cfg.LocalConnections == nil {
 		cfg = persistKubecostContextBindings(cfg)
-		if err := internalopencost.ConfigureStartup(internalopencost.ManagerConfig{
-			Source:           internalopencost.Source(cfg.CostSource),
-			URL:              cfg.KubecostURL,
-			APIKey:           cfg.KubecostAPIKey,
-			APIKeyContext:    cfg.KubecostAPIKeyContext,
-			ClusterID:        cfg.KubecostClusterID,
-			ClusterIDContext: cfg.KubecostClusterIDContext,
-		}); err != nil {
-			log.Printf("[opencost] Invalid cost source configuration: %v", err)
+		startup.Cost, startup.CostEnv, startup.CostError = internalopencost.ResolveEnvironmentConfig(internalopencost.ManagerConfig{
+			Source: internalopencost.Source(cfg.CostSource), URL: cfg.KubecostURL,
+			APIKey: cfg.KubecostAPIKey, APIKeyContext: cfg.KubecostAPIKeyContext,
+			ClusterID: cfg.KubecostClusterID, ClusterIDContext: cfg.KubecostClusterIDContext,
+		})
+		startup.ArgoCD, startup.ArgoEnv, startup.ArgoError = argocd.EnvironmentConfiguration()
+		if startup.ArgoError != nil {
+			log.Printf("[argocd] ERROR: ignoring the environment Argo CD config: %v", startup.ArgoError)
+		}
+		if !startup.ArgoEnv {
+			file := config.Load()
+			startup.ArgoCD = argoapi.Connection{URL: file.ArgoCDURL, Token: file.ArgoCDToken, InsecureTLS: file.ArgoCDInsecureTLS}
+			startup.ArgoTokenContext, startup.ArgoTokenBinding = file.ArgoCDTokenContext, file.ArgoCDTokenBinding
 		}
 	}
-	if cfg.BeylaJobSelector != "" {
-		traffic.SetBeylaJobSelector(cfg.BeylaJobSelector)
-	}
-	if cfg.WorkloadMetricsScope.SingleCluster || len(cfg.WorkloadMetricsScope.ClusterLabels) > 0 {
-		if err := prometheuspkg.SetWorkloadMetricsScope(cfg.WorkloadMetricsScope, cfg.BeylaJobSelector); err != nil {
-			log.Fatalf("Invalid workload metrics scope: %v", err)
-		}
-	}
-	if cfg.LocalConnections != nil {
-		if _, err := resolveLocalPrometheus(cfg.LocalConnections); err != nil {
-			prometheuspkg.Retire()
-			traffic.SetMetricsConfig("", nil)
-		}
-	}
-
-	k8s.RegisterTrafficFuncs(traffic.Reset, func() error {
-		if cfg.LocalConnections != nil {
-			selection, err := resolveLocalPrometheus(cfg.LocalConnections)
-			if err != nil {
-				traffic.SetMetricsConfig("", nil)
-			} else {
-				traffic.SetMetricsConfig(selection.Settings.Prometheus.URL, selection.Settings.Prometheus.Headers)
-			}
-		}
-		conn := k8s.Current()
-		traffic.ReinitializeWithPortForwards(conn.ClientInterface(), conn.PortForwards(), conn.ContextName())
-		return nil
-	})
-
-	// Shared installations: Reinitialize carries the current manual URL + headers
-	// forward (including any applied live via /integrations/prometheus).
-	// Re-applying the captured startup cfg would revert a live change on context
-	// switch. Local installations resolve the new context's own settings instead.
-	resetPrometheus := prometheuspkg.Reset
-	if cfg.LocalConnections != nil {
-		resetPrometheus = func() { prometheuspkg.Retire(); traffic.SetMetricsConfig("", nil) }
-	}
-	k8s.RegisterPrometheusFuncs(resetPrometheus, func() error {
-		if cfg.LocalConnections != nil {
-			selection, err := resolveLocalPrometheus(cfg.LocalConnections)
-			if err != nil {
-				prometheuspkg.Retire()
-				return err
-			}
-			if cfg.LocalConnections.HasLaunchOverride(config.IntegrationMetrics) && selection.View.State != "launch" {
-				log.Printf("[prometheus] --prometheus-url applies only to the context Radar was launched on; %q uses its own metrics settings", k8s.SanitizeForLog(k8s.GetContextName()))
-			}
-			conn := k8s.Current()
-			prometheuspkg.Reinitialize(conn.ClientInterface(), conn.Config(), conn.ContextName(), conn.PortForwards())
-			url, headers := prometheuspkg.CurrentConfig()
-			if url != strings.TrimRight(selection.Settings.Prometheus.URL, "/") || !maps.Equal(headers, selection.Settings.Prometheus.Headers) {
-				prometheuspkg.Configure(selection.Settings.Prometheus.URL, selection.Settings.Prometheus.Headers)
-			}
-			return nil
-		}
-		conn := k8s.Current()
-		prometheuspkg.Reinitialize(conn.ClientInterface(), conn.Config(), conn.ContextName(), conn.PortForwards())
-		return nil
-	})
-	k8s.RegisterCostResetFunc(internalopencost.Reset)
-	// The automatic cost source was chosen against the metrics backend; an
-	// OpenObserve relay starting, changing or ending makes it choose again,
-	// as a metrics settings change does.
-	prometheuspkg.OnRelayChange(func() {
-		internalopencost.Reset()
-		internalopencost.InvalidateCurrency()
-	})
-	openobserve.Default.LogIfIgnored()
-	if cfg.LocalConnections != nil {
-		cfg.LocalRuntime = connectionruntime.New(cfg.LocalConnections, k8s.RestartTrafficSubsystem)
-		argocd.SetConfig("", "", false, true)
-		internalopencost.DisableLocal("Connect to Kubernetes to load this context's cost connection")
-		connections.RegisterRefresh(cfg.LocalRuntime.Refresh)
-		if target, err := k8s.CurrentProfileTarget(); err == nil {
-			cfg.LocalRuntime.Apply(target, false)
-		} else {
-			log.Printf("[connections] Local integration settings not applied: %v", err)
-		}
-		runtime := cfg.LocalRuntime
-		activate := func(_ string) {
-			if target, err := k8s.CurrentProfileTarget(); err == nil {
-				runtime.ActivateSwitch(target)
-			} else {
-				log.Printf("[connections] Local integration settings not applied: %v", err)
-			}
-		}
-		k8s.OnContextSwitch(activate)
-		k8s.OnNamespaceRescope(activate)
-	}
-	// Context-switch callbacks run before Connected is published. Discovery
-	// must wait until the new integration clients are activated and readable.
-	localRuntime := cfg.LocalRuntime
-	k8s.OnConnectionChange(func(status k8s.ConnectionStatus) {
-		if status.State == k8s.StateConnected {
-			// The first connection has no switch callback, and Apply above ran
-			// before it, so activate this context's saved settings here.
-			if localRuntime != nil {
-				if target, err := k8s.CurrentProfileTarget(); err == nil {
-					localRuntime.Apply(target, false)
-				}
-			}
-			prometheuspkg.Prewarm()
-			argocd.Prewarm()
-		}
-	})
-	k8s.OnNamespaceRescope(func(_ string) { prometheuspkg.Prewarm() })
+	cfg.IntegrationRuntime = connectionruntime.New(cfg.LocalConnections, startup)
+	k8s.RegisterIntegrationBuilder(cfg.IntegrationRuntime.Build)
+	k8s.OnBeforeContextSwitch(clearLaunchScopeOnContextSwitch(cfg.IntegrationRuntime))
 	return cfg
+}
+
+func clearLaunchScopeOnContextSwitch(runtime *connectionruntime.Runtime) k8s.ContextSwitchCallback {
+	return func(next string) {
+		if next != k8s.GetContextName() {
+			runtime.ClearLaunchScope()
+		}
+	}
 }
 
 func persistKubecostContextBindings(cfg AppConfig) AppConfig {
@@ -540,8 +449,8 @@ func CreateServer(cfg AppConfig) *server.Server {
 	kubecostAPIKeyContext := cfg.KubecostAPIKeyContext
 	kubecostClusterID := cfg.KubecostClusterID
 	kubecostClusterIDContext := cfg.KubecostClusterIDContext
-	if internalopencost.IsEnvManaged() {
-		costConfig := internalopencost.ConfigSnapshot()
+	if cfg.IntegrationRuntime != nil && cfg.IntegrationRuntime.Settings().CostEnv {
+		costConfig := cfg.IntegrationRuntime.Settings().Cost
 		costSource = string(costConfig.Source)
 		kubecostURL = costConfig.URL
 		kubecostAPIKey = costConfig.APIKey
@@ -597,7 +506,7 @@ func CreateServer(cfg AppConfig) *server.Server {
 		PrometheusURLFlag:     cfg.PrometheusURLFlag,
 		PrometheusHeaderFlags: cfg.PrometheusHeaderFlags,
 		LocalConnections:      cfg.LocalConnections,
-		LocalRuntime:          cfg.LocalRuntime,
+		IntegrationRuntime:    cfg.IntegrationRuntime,
 		OpenCostCurrency:      cfg.OpenCostCurrency,
 		OpenCostManaged:       cfg.OpenCostFlagSet,
 		DiagConfig: &server.DiagConfig{
@@ -683,6 +592,7 @@ func InitializeCluster() {
 	// Cancel any in-flight API calls from previous attempts (e.g., browser
 	// polling /api/capabilities with RBAC checks through a broken exec plugin).
 	operation, _ := k8s.CancelOngoingOperations()
+	build := k8s.Current()
 
 	clusterStart := time.Now()
 
@@ -724,7 +634,7 @@ func InitializeCluster() {
 
 	subsystemErr := make(chan error, 1)
 	go func() {
-		subsystemErr <- k8s.InitAllSubsystems(ctx, func(msg string) {
+		subsystemErr <- build.InitSubsystems(ctx, func(msg string) {
 			if connected.Load() {
 				k8s.SetConnectionStatusIfCurrent(operation, k8s.ConnectionStatus{
 					State:       k8s.StateConnecting,
@@ -781,15 +691,14 @@ func InitializeCluster() {
 	}
 	k8s.LogTiming(" Total cluster init: %v", time.Since(clusterStart))
 
-	if !k8s.SetConnectionStatusIfCurrent(operation, k8s.ConnectionStatus{
+	if !k8s.AdmitStartup(operation, build, k8s.ConnectionStatus{
 		State:       k8s.StateConnected,
-		Context:     k8s.GetContextName(),
-		ClusterName: k8s.GetClusterName(),
+		Context:     build.ContextName(),
+		ClusterName: build.ClusterName(),
 	}) {
 		return
 	}
 
-	prometheuspkg.Prewarm()
 }
 
 // mcpPortFileDisabled suppresses port-file writes AND removals — an ephemeral
@@ -856,6 +765,7 @@ func Shutdown(srv *server.Server) {
 	RemoveMCPPortFile()
 	// Closed first, so nothing stopped below can admit a connection.
 	k8s.CloseConnectionAdmissions()
+	k8s.CancelOngoingOperations()
 	srv.Stop()
 	k8s.ResetAllSubsystems()
 }

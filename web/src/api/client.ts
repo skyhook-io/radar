@@ -256,6 +256,10 @@ export class ApiError extends Error {
   }
 }
 
+export function shouldRetryReplacedMember(failureCount: number, error: unknown): boolean {
+  return failureCount < 1 && error instanceof ApiError && (error.status === 409 || error.status === 503);
+}
+
 export function isForbiddenError(error: unknown): boolean {
   return error instanceof ApiError && error.status === 403;
 }
@@ -4739,6 +4743,8 @@ export function useRightsizingScan(namespaces: string[], context = "") {
     if (inaccessible) {
       previous.current = null;
       queryClient.setQueryData(cache.queryKey, null);
+    } else if (current === null) {
+      previous.current = null;
     } else if (current && current.coverage.workloadsEvaluated > 0) {
       previous.current = { scope, result: current };
     }

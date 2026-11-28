@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/prom"
 )
 
@@ -643,7 +642,7 @@ func alignSubstrateRange(start, end time.Time, step time.Duration) (time.Time, t
 }
 
 func clientScopeResolver(client *Client) substrateScopeResolver {
-	cache := k8s.GetResourceCache()
+	cache := client.cache
 	return func(ctx context.Context, probe scopeProbe) (string, SeriesIsolation, error) {
 		return client.resolveScope(ctx, trafficAnchorNamespace(cache), probe, nil, cache)
 	}
@@ -651,13 +650,13 @@ func clientScopeResolver(client *Client) substrateScopeResolver {
 
 // handleSubstrateWorkerPool returns the curated Substrate charts and the
 // capacity verdict for one WorkerPool, gated on reading that WorkerPool.
-func handleSubstrateWorkerPool(w http.ResponseWriter, r *http.Request) {
+func (h Routes) handleSubstrateWorkerPool(w http.ResponseWriter, r *http.Request) {
 	namespace, name := chi.URLParam(r, "namespace"), chi.URLParam(r, "name")
 	if !canRead(r, "ate.dev", "workerpools", namespace, "get") {
 		writeError(w, http.StatusForbidden, "Substrate metrics for a WorkerPool require permission to get it.")
 		return
 	}
-	serveSubstrate(w, r, func(ctx context.Context, q seriesQuerier, resolve substrateScopeResolver, rangeName string, start, end time.Time, step time.Duration) SubstrateHealthResponse {
+	h.serveSubstrate(w, r, func(ctx context.Context, q seriesQuerier, resolve substrateScopeResolver, rangeName string, start, end time.Time, step time.Duration) SubstrateHealthResponse {
 		return collectSubstratePool(ctx, q, resolve, namespace, name, rangeName, start, end, step)
 	})
 }
@@ -685,13 +684,13 @@ func collectSubstratePool(ctx context.Context, q seriesQuerier, resolve substrat
 
 // handleSubstrateNode returns atelet's curated charts and the snapshot
 // verdict for one Node, gated on reading Nodes like the Node resource charts.
-func handleSubstrateNode(w http.ResponseWriter, r *http.Request) {
+func (h Routes) handleSubstrateNode(w http.ResponseWriter, r *http.Request) {
 	node := chi.URLParam(r, "name")
 	if !canRead(r, "", "nodes", "", "get") {
 		writeError(w, http.StatusForbidden, "Substrate metrics for a Node require permission to get Nodes.")
 		return
 	}
-	serveSubstrate(w, r, func(ctx context.Context, q seriesQuerier, resolve substrateScopeResolver, rangeName string, start, end time.Time, step time.Duration) SubstrateHealthResponse {
+	h.serveSubstrate(w, r, func(ctx context.Context, q seriesQuerier, resolve substrateScopeResolver, rangeName string, start, end time.Time, step time.Duration) SubstrateHealthResponse {
 		return collectSubstrateNode(ctx, q, resolve, node, rangeName, start, end, step)
 	})
 }
@@ -742,18 +741,21 @@ func collectSubstrateNode(ctx context.Context, q seriesQuerier, resolve substrat
 
 type substrateCollect func(ctx context.Context, q seriesQuerier, resolve substrateScopeResolver, rangeName string, start, end time.Time, step time.Duration) SubstrateHealthResponse
 
-func serveSubstrate(w http.ResponseWriter, r *http.Request, collect substrateCollect) {
-	client, connectionErr := ClientForOperation()
+func (h Routes) serveSubstrate(w http.ResponseWriter, r *http.Request, collect substrateCollect) {
+	client, connectionErr := h.Capture(r.Context())
 	if connectionErr != nil {
 		writeError(w, http.StatusServiceUnavailable, connectionErr.Error())
 		return
 	}
-	generation, epoch := client.DiscoveryGeneration(), client.backendEpoch()
+	generation, epoch := client.DiscoveryGeneration(), client.BackendEpoch()
 	rangeName, start, end, step := substrateRequestBounds(r)
 	resp := collect(r.Context(), client, clientScopeResolver(client), rangeName, start, end, step)
 	resp.Start, resp.End, resp.StepSeconds = start.Unix(), end.Unix(), int64(step/time.Second)
 	// The charts and their scope checks must all come from one connection.
-	if client != GetClient() || generation != client.DiscoveryGeneration() || epoch != client.backendEpoch() {
+	if client.writeChartFailure(w, r.Context(), nil) {
+		return
+	}
+	if generation != client.DiscoveryGeneration() || epoch != client.BackendEpoch() {
 		writeError(w, http.StatusConflict, "metrics connection changed; retry the request")
 		return
 	}

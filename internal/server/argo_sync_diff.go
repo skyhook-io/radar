@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/skyhook-io/radar/internal/argocd"
+	"github.com/skyhook-io/radar/internal/connectionruntime"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/argoapi"
 	"github.com/skyhook-io/radar/pkg/gitops"
@@ -39,8 +39,9 @@ func (s *Server) handleArgoSyncDiff(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
 	defer cancel()
+	ctx = k8s.CaptureConnection(ctx)
 	r = r.WithContext(ctx)
-	conn := k8s.BoundOrCurrent(ctx)
+	conn := k8s.ConnectionFrom(ctx)
 	cache, discovery := conn.ResourceCache(), conn.Discovery()
 	if cache == nil || discovery == nil {
 		s.writeError(w, 503, "Kubernetes discovery is unavailable.")
@@ -63,10 +64,21 @@ func (s *Server) handleArgoSyncDiff(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, 409, "These revisions cannot be rendered with their recorded source settings on this cluster.")
 		return
 	}
-	client, ok := argocd.Get()
+	manager := connectionruntime.SetFor(conn).ArgoCD
+	if manager == nil {
+		s.writeError(w, 503, "Connect the Argo CD API to compare rendered resources.")
+		return
+	}
+	client, ok := manager.Get()
 	if !ok {
 		s.writeError(w, 503, "Connect the Argo CD API to compare rendered resources.")
 		return
+	}
+	admissionCurrent := func() bool {
+		return k8s.StillBound(ctx) && conn.ResourceCache() == cache && connectionruntime.SetFor(conn).ArgoCD == manager
+	}
+	changed := func() {
+		s.writeError(w, 409, "The Application or connection changed during comparison. Reopen this sync to retry.")
 	}
 	project, _, _ := unstructured.NestedString(app.Object, "spec", "project")
 	query := argoapi.ApplicationQuery{AppName: name, AppNamespace: ns, Project: project}
@@ -75,16 +87,28 @@ func (s *Server) handleArgoSyncDiff(w http.ResponseWriter, r *http.Request) {
 		return err == nil && uid == string(app.GetUID()) && generation == app.GetGeneration()
 	}
 	if !matches() {
+		if !admissionCurrent() {
+			changed()
+			return
+		}
 		s.writeError(w, 409, "The connected Argo CD server could not confirm this Application and its source settings.")
 		return
 	}
 	before, err := client.RevisionManifests(ctx, query, previous)
 	if err != nil {
+		if !admissionCurrent() {
+			changed()
+			return
+		}
 		s.writeError(w, 502, "Argo CD could not render the previous Git revision.")
 		return
 	}
 	after, err := client.RevisionManifests(ctx, query, revision)
 	if err != nil {
+		if !admissionCurrent() {
+			changed()
+			return
+		}
 		s.writeError(w, 502, "Argo CD could not render the selected Git revision.")
 		return
 	}
@@ -99,8 +123,8 @@ func (s *Server) handleArgoSyncDiff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	stillMatches := matches()
-	if current, ok := argocd.Get(); !stillMatches || !ok || current != client || k8s.Current() != conn || k8s.GetResourceCache() != cache {
-		s.writeError(w, 409, "The Application or connection changed during comparison. Reopen this sync to retry.")
+	if current, ok := manager.Get(); !stillMatches || !ok || current != client || !admissionCurrent() {
+		changed()
 		return
 	}
 	s.writeJSON(w, diff)

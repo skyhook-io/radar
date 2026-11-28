@@ -476,6 +476,9 @@ func (s *Reader) claimUsage(ctx context.Context, namespace string, claims []stri
 		return CNPGStorageCoverage{ReadSource: integration.ReadSource{State: cnpgUsageStateDenied, Grant: grant}}, prometheuspkg.PVCUsageBatch{}
 	}
 	batch := s.Metrics.PVCUsage(ctx, namespace, claims, anchors)
+	if s.Metrics.Closed != nil && s.Metrics.Closed() {
+		return CNPGStorageCoverage{ReadSource: integration.ReadSource{State: cnpgUsageStateError, Reason: prometheuspkg.ConnectionClosedMessage}}, prometheuspkg.PVCUsageBatch{}
+	}
 	switch batch.Status {
 	case prometheuspkg.PVCUsageNoPrometheus:
 		return CNPGStorageCoverage{ReadSource: integration.ReadSource{State: cnpgUsageStateNoPrometheus, Reason: cnpgNoPrometheusReason(batch.Error)}}, batch

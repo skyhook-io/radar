@@ -333,8 +333,8 @@ func TestReadBoundedTextBodyRejectsOversizeBodyWith413(t *testing.T) {
 // syntax that may be perfectly fine.
 func TestHandlePreviewResourcesRejectsOversizeBodyWith413(t *testing.T) {
 	prevConn := k8s.GetConnectionStatus()
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
-	t.Cleanup(func() { k8s.SetConnectionStatus(prevConn) })
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	t.Cleanup(func() { k8s.PublishTestConnectionStatus(prevConn) })
 
 	oversize := `{"yaml":"` + strings.Repeat("x", maxYAMLPreviewRequestBytes) + `"}`
 	recorder := httptest.NewRecorder()
@@ -363,8 +363,8 @@ func TestHandlePreviewResourcesRejectsOversizeBodyWith413(t *testing.T) {
 // the surface a file picker points at, and the body is the manifest itself.
 func TestHandleApplyResourceRejectsOversizeBody(t *testing.T) {
 	prevConn := k8s.GetConnectionStatus()
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
-	t.Cleanup(func() { k8s.SetConnectionStatus(prevConn) })
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	t.Cleanup(func() { k8s.PublishTestConnectionStatus(prevConn) })
 
 	oversize := strings.Repeat("x", maxYAMLApplyRequestBytes+1)
 	recorder := httptest.NewRecorder()
@@ -382,8 +382,8 @@ func TestHandleApplyResourceRejectsOversizeBody(t *testing.T) {
 // stops the two routes disagreeing about the same bundle.
 func TestHandleApplyResourceRejectsTooManyDocuments(t *testing.T) {
 	prevConn := k8s.GetConnectionStatus()
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
-	t.Cleanup(func() { k8s.SetConnectionStatus(prevConn) })
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	t.Cleanup(func() { k8s.PublishTestConnectionStatus(prevConn) })
 
 	doc := "apiVersion: v1\nkind: Namespace\nmetadata:\n  name: n\n"
 	body := strings.Repeat(doc+"---\n", maxYAMLApplyDocuments+1)
@@ -440,8 +440,8 @@ func TestPreviewEnvelopeAbsorbsWorstCaseEscaping(t *testing.T) {
 // survive review, not 413 somewhere short of it because of escaping.
 func TestPreviewAcceptsYAMLAtTheAdvertisedLimit(t *testing.T) {
 	prevConn := k8s.GetConnectionStatus()
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
-	t.Cleanup(func() { k8s.SetConnectionStatus(prevConn) })
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	t.Cleanup(func() { k8s.PublishTestConnectionStatus(prevConn) })
 
 	// Real manifest shape, padded to exactly the limit, with the newlines that
 	// make the encoded envelope larger than the document.
@@ -469,8 +469,8 @@ func TestPreviewAcceptsYAMLAtTheAdvertisedLimit(t *testing.T) {
 
 func TestPreviewRejectsYAMLOverTheLimitDespiteAFittingEnvelope(t *testing.T) {
 	prevConn := k8s.GetConnectionStatus()
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
-	t.Cleanup(func() { k8s.SetConnectionStatus(prevConn) })
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	t.Cleanup(func() { k8s.PublishTestConnectionStatus(prevConn) })
 
 	// Plain text, so the envelope stays well under its own bound while the
 	// document itself is over the limit — the case only a decoded check catches.
@@ -496,8 +496,8 @@ func TestPreviewRejectsYAMLOverTheLimitDespiteAFittingEnvelope(t *testing.T) {
 // entirely of characters that double under JSON encoding.
 func TestPreviewAcceptsFullyEscapedYAMLAtTheLimit(t *testing.T) {
 	prevConn := k8s.GetConnectionStatus()
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
-	t.Cleanup(func() { k8s.SetConnectionStatus(prevConn) })
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	t.Cleanup(func() { k8s.PublishTestConnectionStatus(prevConn) })
 
 	worstCase := strings.Repeat(`"`, maxYAMLContentBytes)
 	body, err := json.Marshal(yamlPreviewRequest{YAML: worstCase, Mode: "apply"})

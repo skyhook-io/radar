@@ -93,11 +93,11 @@ func TestConfigureStartupFailsClosedOnInvalidEnvironment(t *testing.T) {
 		}
 		return ""
 	})
-	if err == nil || !m.IsEnvManaged() || m.EnvManagedError() == "" {
-		t.Fatalf("configureStartup error=%v managed=%v envError=%q", err, m.IsEnvManaged(), m.EnvManagedError())
+	if err == nil || err.Error() == "" {
+		t.Fatalf("configureStartup error = %v, want the environment failure reason", err)
 	}
-	if _, selectedErr := m.Selected(context.Background()); !errors.Is(selectedErr, ErrCostSourceEnvConfig) {
-		t.Fatalf("Selected error = %v, want ErrCostSourceEnvConfig", selectedErr)
+	if _, selectedErr := m.Selected(context.Background()); !errors.Is(selectedErr, ErrCostSourceEnvConfig) || !errors.Is(selectedErr, err) {
+		t.Fatalf("Selected error = %v, want ErrCostSourceEnvConfig wrapping %v", selectedErr, err)
 	}
 }
 
@@ -139,7 +139,7 @@ func TestProbeKubecostUsesModelPathAndAPIKey(t *testing.T) {
 	}))
 	defer server.Close()
 
-	connection, err := ProbeKubecost(context.Background(), ManagerConfig{
+	connection, err := probeConfiguredKubecost(context.Background(), ManagerConfig{
 		Source: SourceKubecost, URL: server.URL + "/model", APIKey: "secret", ClusterID: "prod-a",
 	})
 	if err != nil {
@@ -163,7 +163,7 @@ func TestProbeKubecostTriesModelPathAfterRootAuthenticationFailure(t *testing.T)
 	}))
 	defer server.Close()
 
-	connection, err := ProbeKubecost(context.Background(), ManagerConfig{
+	connection, err := probeConfiguredKubecost(context.Background(), ManagerConfig{
 		Source: SourceKubecost, URL: server.URL, ClusterID: "prod-a",
 	})
 	if err != nil {
@@ -253,7 +253,7 @@ func TestProbeKubecostReturnsTypedAuthenticationFailureAfterAllPaths(t *testing.
 	}))
 	defer server.Close()
 
-	_, err := ProbeKubecost(context.Background(), ManagerConfig{
+	_, err := probeConfiguredKubecost(context.Background(), ManagerConfig{
 		Source: SourceKubecost, URL: server.URL, ClusterID: "prod-a",
 	})
 	if !errors.Is(err, ErrKubecostAuthentication) {
@@ -271,7 +271,7 @@ func TestProbeKubecostAuthenticationOutranksAlternatePathFailure(t *testing.T) {
 	}))
 	defer server.Close()
 
-	_, err := ProbeKubecost(context.Background(), ManagerConfig{
+	_, err := probeConfiguredKubecost(context.Background(), ManagerConfig{
 		Source: SourceKubecost, URL: server.URL, ClusterID: "prod-a",
 	})
 	if !errors.Is(err, ErrKubecostAuthentication) {
@@ -289,7 +289,7 @@ func TestProbeKubecostAuthenticationOutranksEmptyAlternatePath(t *testing.T) {
 	}))
 	defer server.Close()
 
-	_, err := ProbeKubecost(context.Background(), ManagerConfig{
+	_, err := probeConfiguredKubecost(context.Background(), ManagerConfig{
 		Source: SourceKubecost, URL: server.URL, ClusterID: "prod-a",
 	})
 	if !errors.Is(err, ErrKubecostAuthentication) {
@@ -303,7 +303,7 @@ func TestProbeKubecostRejectsClusterWithoutAllocationData(t *testing.T) {
 	}))
 	defer server.Close()
 
-	_, err := ProbeKubecost(context.Background(), ManagerConfig{
+	_, err := probeConfiguredKubecost(context.Background(), ManagerConfig{
 		Source: SourceKubecost, URL: server.URL + "/model", ClusterID: "missing-cluster",
 	})
 	if err == nil || !strings.Contains(err.Error(), "no allocation data") {
@@ -317,7 +317,7 @@ func TestProbeKubecostPreservesUpstreamFailure(t *testing.T) {
 	}))
 	defer server.Close()
 
-	_, err := ProbeKubecost(context.Background(), ManagerConfig{
+	_, err := probeConfiguredKubecost(context.Background(), ManagerConfig{
 		Source: SourceKubecost, URL: server.URL + "/model", ClusterID: "prod-a",
 	})
 	if err == nil || !strings.Contains(err.Error(), "503") || !strings.Contains(err.Error(), "aggregator warming up") {
@@ -326,7 +326,7 @@ func TestProbeKubecostPreservesUpstreamFailure(t *testing.T) {
 }
 
 func TestProbeKubecostRequiresExplicitURL(t *testing.T) {
-	_, err := ProbeKubecost(context.Background(), ManagerConfig{Source: SourceKubecost})
+	_, err := probeConfiguredKubecost(context.Background(), ManagerConfig{Source: SourceKubecost})
 	if err == nil || !strings.Contains(err.Error(), "requires an Aggregator URL") {
 		t.Fatalf("error = %v, want explicit URL requirement", err)
 	}
@@ -375,15 +375,13 @@ func TestAutoSourceSurfacesKubecostContextMismatch(t *testing.T) {
 		}
 		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
 	}))
-	prometheuspkg.Initialize(nil, nil, "test", nil)
-	prometheuspkg.SetManualURL(promServer.URL)
+	client := testMetrics(t, promServer.URL)
 	t.Cleanup(func() {
 		promServer.Close()
-		prometheuspkg.Reset()
-		prometheuspkg.Initialize(nil, nil, "", nil)
+
 	})
 
-	m := &Manager{}
+	m := &Manager{metrics: testMetricsSource(client)}
 	if err := m.Configure(ManagerConfig{Source: SourceAuto, URL: "https://cost.example.com/model", ClusterID: "prod-a", ClusterIDContext: "cluster-a"}); err != nil {
 		t.Fatal(err)
 	}
@@ -407,16 +405,14 @@ func TestAutoSourceSurfacesExplicitKubecostFailureAfterPrometheusIsAbsent(t *tes
 	kubecostServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "denied", http.StatusUnauthorized)
 	}))
-	prometheuspkg.Initialize(nil, nil, "test", nil)
-	prometheuspkg.SetManualURL(promServer.URL)
+	client := testMetrics(t, promServer.URL)
 	t.Cleanup(func() {
 		promServer.Close()
 		kubecostServer.Close()
-		prometheuspkg.Reset()
-		prometheuspkg.Initialize(nil, nil, "", nil)
+
 	})
 
-	m := &Manager{}
+	m := &Manager{metrics: testMetricsSource(client)}
 	if err := m.Configure(ManagerConfig{
 		Source: SourceAuto, URL: kubecostServer.URL, ClusterID: "prod-a", ClusterIDContext: "cluster-a",
 	}); err != nil {
@@ -475,16 +471,14 @@ func TestInconclusivePrometheusRecheckKeepsProvisionalKubecost(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "temporarily unavailable", http.StatusServiceUnavailable)
 	}))
-	prometheuspkg.Initialize(nil, nil, "test", nil)
-	prometheuspkg.SetManualURL(server.URL)
+	client := testMetrics(t, server.URL)
 	t.Cleanup(func() {
 		server.Close()
-		prometheuspkg.Reset()
-		prometheuspkg.Initialize(nil, nil, "", nil)
+
 	})
 
 	releases := 0
-	m := &Manager{
+	m := &Manager{metrics: testMetricsSource(client),
 		config:         ManagerConfig{Source: SourceAuto},
 		selected:       SourceKubecost,
 		address:        "http://localhost:12345",
@@ -515,15 +509,13 @@ func TestAutoPrometheusErrorUsesTemporaryFallback(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "temporarily unavailable", http.StatusServiceUnavailable)
 	}))
-	prometheuspkg.Initialize(nil, nil, "test", nil)
-	prometheuspkg.SetManualURL(server.URL)
+	client := testMetrics(t, server.URL)
 	t.Cleanup(func() {
 		server.Close()
-		prometheuspkg.Reset()
-		prometheuspkg.Initialize(nil, nil, "", nil)
+
 	})
 
-	m := &Manager{config: ManagerConfig{Source: SourceAuto}}
+	m := &Manager{metrics: testMetricsSource(client), config: ManagerConfig{Source: SourceAuto}}
 	connection, err := m.Selected(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -546,15 +538,13 @@ func TestAutoSourceFailsWhenPrometheusAndKubecostAreAbsent(t *testing.T) {
 		}
 		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
 	}))
-	prometheuspkg.Initialize(nil, nil, "test", nil)
-	prometheuspkg.SetManualURL(promServer.URL)
+	client := testMetrics(t, promServer.URL)
 	t.Cleanup(func() {
 		promServer.Close()
-		prometheuspkg.Reset()
-		prometheuspkg.Initialize(nil, nil, "", nil)
+
 	})
 
-	m := &Manager{config: ManagerConfig{Source: SourceAuto}}
+	m := &Manager{metrics: testMetricsSource(client), config: ManagerConfig{Source: SourceAuto}}
 	if _, err := m.Selected(context.Background()); !errors.Is(err, ErrNoCostSource) {
 		t.Fatalf("selection error = %v, want ErrNoCostSource", err)
 	}
@@ -577,15 +567,13 @@ func TestAutoSourceRetriesQuicklyBeforeKubecostDiscoveryIsReady(t *testing.T) {
 		}
 		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
 	}))
-	prometheuspkg.Initialize(nil, nil, "test", nil)
-	prometheuspkg.SetManualURL(promServer.URL)
+	client := testMetrics(t, promServer.URL)
 	t.Cleanup(func() {
 		promServer.Close()
-		prometheuspkg.Reset()
-		prometheuspkg.Initialize(nil, nil, "", nil)
+
 	})
 
-	m := &Manager{config: ManagerConfig{Source: SourceAuto}}
+	m := &Manager{metrics: testMetricsSource(client), config: ManagerConfig{Source: SourceAuto}}
 	if _, err := m.Selected(context.Background()); !errors.Is(err, ErrNoCostSource) {
 		t.Fatalf("selection error = %v, want ErrNoCostSource", err)
 	}
@@ -887,17 +875,14 @@ func TestCostDetectionCandidateFailuresRemainUnreachable(t *testing.T) {
 					return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "pods"}, "", errors.New(`cannot list resource "pods"`))
 				})
 			}
-			prometheuspkg.Initialize(cs, &rest.Config{}, "test", portforward.NewManager(cs, &rest.Config{}, "test"))
-			defer func() {
-				prometheuspkg.Reset()
-				prometheuspkg.Initialize(nil, nil, "", nil)
-			}()
+			client := prometheuspkg.NewClient(cs, &rest.Config{}, "test", portforward.NewManager(cs, &rest.Config{}, "test"), false, k8s.GetResourceCache())
+			defer client.Close()
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			if state := detectPrometheusCostState(ctx); state != prometheusCostUnreachable {
+			if state := detectPrometheusCostStateWith(ctx, testMetricsSource(client)); state != prometheusCostUnreachable {
 				t.Fatalf("state=%v, want unreachable", state)
 			}
-			_, _, err := prometheuspkg.GetClient().EnsureConnected(ctx)
+			_, _, err := client.EnsureConnected(ctx)
 			if err == nil || errors.Is(err, prometheuspkg.ErrPrometheusNotFound) {
 				t.Fatalf("discovery failure=%v, want failure without not-found", err)
 			}
@@ -977,11 +962,11 @@ func TestAutoUnreachablePrometheusUsesProvisionalKubecost(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer k8s.ResetResourceCache()
-			prometheuspkg.Initialize(cs, &rest.Config{}, "cost-scope", nil)
-			defer func() { prometheuspkg.Reset(); prometheuspkg.Initialize(nil, nil, "", nil) }()
+			client := prometheuspkg.NewClient(cs, &rest.Config{}, "cost-scope", nil, true, k8s.GetResourceCache())
+			defer client.Close()
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			_, _, probeErr := prometheuspkg.GetClient().EnsureConnected(ctx)
+			_, _, probeErr := client.EnsureConnected(ctx)
 			if !prometheuspkg.IsUnreachable(probeErr) || errors.Is(probeErr, prometheuspkg.ErrPrometheusNotFound) {
 				t.Fatalf("probe: %v", probeErr)
 			}
@@ -1001,7 +986,7 @@ func TestAutoUnreachablePrometheusUsesProvisionalKubecost(t *testing.T) {
 			if tc.kubecost {
 				config.URL, config.ClusterID, config.ClusterIDContext = costServer.URL, "prod-a", "cost-scope"
 			}
-			m := &Manager{config: config}
+			m := &Manager{config: config, metrics: testMetricsSource(client)}
 			connection, err := m.Selected(ctx)
 			if err != nil {
 				t.Fatal(err)
@@ -1025,7 +1010,8 @@ func TestAutoUnreachablePrometheusUsesProvisionalKubecost(t *testing.T) {
 				t.Fatalf("explicit metrics source switched: %s %v", connection.Source, err)
 			}
 			recovered.Store(true)
-			prometheuspkg.Reset()
+			client.Configure("http://127.0.0.1:1", nil)
+			client.Configure("", nil)
 			m.retryAt = time.Now().Add(-time.Second)
 			connection, err = m.Selected(ctx)
 			if err != nil || connection.Source != SourcePrometheus || !m.retryAt.IsZero() {

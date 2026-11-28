@@ -10,7 +10,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/cloud"
-	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/portforward"
 )
 
 const (
@@ -67,43 +67,41 @@ type RightsizingScanManager struct {
 	duration   time.Duration
 	retention  time.Duration
 	prepare    func() (scanRunner, func() bool)
+	member     *Client
 }
 
-var scanManager = sync.OnceValue(func() *RightsizingScanManager {
-	m := newRightsizingScanManager()
-	k8s.OnBeforeContextSwitch(func(string) { m.Invalidate() })
-	k8s.OnContextSwitch(func(string) { m.Invalidate() })
-	k8s.OnNamespaceRescope(func(string) { m.Invalidate() })
+func (client *Client) newRightsizingScanManager() *RightsizingScanManager {
+	m := newRightsizingScanManager(func() (scanRunner, func() bool) {
+		cache := client.cache
+		generation, epoch := client.DiscoveryGeneration(), client.BackendEpoch()
+		return func(ctx context.Context, scope RightsizingScanScope, publish func(RightsizingScanResponse)) RightsizingScanResponse {
+				return runRightsizingScan(ctx, scope, client, cache, publish)
+			}, func() bool {
+				return !client.Closed() && client.DiscoveryGeneration() == generation && client.BackendEpoch() == epoch
+			}
+	})
+	m.member = client
 	return m
-})
+}
 
-func RightsizingScans() *RightsizingScanManager { return scanManager() }
+func NewUnavailableRightsizingScans(reason error) *RightsizingScanManager {
+	return newRightsizingScanManager(func() (scanRunner, func() bool) {
+		return func(_ context.Context, scope RightsizingScanScope, _ func(RightsizingScanResponse)) RightsizingScanResponse {
+			result := newRightsizingScanResponse(time.Now().UTC(), scope)
+			result.Reason = reason.Error()
+			return result
+		}, func() bool { return true }
+	})
+}
 
-func newRightsizingScanManager() *RightsizingScanManager {
+func newRightsizingScanManager(prepare func() (scanRunner, func() bool)) *RightsizingScanManager {
 	return &RightsizingScanManager{
 		jobs: map[string]*rightsizingScanJob{}, duration: rightsizingScanDuration, retention: rightsizingScanRetention,
-		prepare: func() (scanRunner, func() bool) {
-			client, connectionErr := ClientForOperation()
-			cache := k8s.GetResourceCache()
-			var generation, epoch uint64
-			if client != nil {
-				generation, epoch = client.DiscoveryGeneration(), client.backendEpoch()
-			}
-			valid := func() bool {
-				return GetClient() == client && k8s.GetResourceCache() == cache &&
-					(client == nil || client.DiscoveryGeneration() == generation && client.backendEpoch() == epoch)
-			}
-			return func(ctx context.Context, scope RightsizingScanScope, publish func(RightsizingScanResponse)) RightsizingScanResponse {
-				if connectionErr != nil {
-					result := newRightsizingScanResponse(time.Now().UTC(), scope)
-					result.Reason = connectionErr.Error()
-					return result
-				}
-				return runRightsizingScan(ctx, scope, client, cache, publish)
-			}, valid
-		},
+		prepare: prepare,
 	}
 }
+
+func (client *Client) RightsizingScans() *RightsizingScanManager { return client.scans }
 
 func (m *RightsizingScanManager) Generation() uint64 {
 	m.mu.Lock()
@@ -129,7 +127,11 @@ func (m *RightsizingScanManager) Namespaces(ctx context.Context, id string, gene
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	job := m.jobs[id]
-	if generation != m.generation || job == nil || job.owner != scanOwner(ctx) || !job.valid() {
+	valid := generation == m.generation && job != nil && job.owner == scanOwner(ctx) && job.valid()
+	if m.member != nil && m.member.Closed() {
+		return nil, portforward.ErrClosed
+	}
+	if !valid {
 		return nil, ErrRightsizingScanNotFound
 	}
 	return slices.Clone(job.namespaces), nil
@@ -180,6 +182,10 @@ func (m *RightsizingScanManager) Resolve(ctx context.Context, request Rightsizin
 	}
 	owner, key := scanOwner(ctx), scanScopeKey(request.Namespaces, request.Scope)
 	m.mu.Lock()
+	if m.member != nil && m.member.Closed() {
+		m.mu.Unlock()
+		return nil, portforward.ErrClosed
+	}
 	if request.Generation != m.generation {
 		m.mu.Unlock()
 		return nil, ErrRightsizingScanScopeChanged
@@ -253,7 +259,11 @@ func (m *RightsizingScanManager) Resolve(ctx context.Context, request Rightsizin
 		}
 	}
 	defer m.mu.Unlock()
-	if m.generation != request.Generation || m.jobs[job.result.ScanID] != job || !job.valid() {
+	valid := m.generation == request.Generation && m.jobs[job.result.ScanID] == job && job.valid()
+	if m.member != nil && m.member.Closed() {
+		return nil, portforward.ErrClosed
+	}
+	if !valid {
 		return nil, ErrRightsizingScanNotFound
 	}
 	out := cloneScanSnapshot(job.result)

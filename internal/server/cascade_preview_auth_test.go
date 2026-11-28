@@ -19,8 +19,8 @@ import (
 func TestCascadePreviewUsesCallerAndOwnershipWithoutTopology(t *testing.T) {
 	env := newAuthTestServer(t)
 	old := k8s.GetConnectionStatus()
-	t.Cleanup(func() { k8s.SetConnectionStatus(old) })
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	t.Cleanup(func() { k8s.PublishTestConnectionStatus(old) })
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
 	env.srv.permCache.Set("preview-reader", nil, &auth.UserPermissions{AllowedNamespaces: []string{"default"}})
 	seedServerSecretListCanI(t, env, "preview-reader", nil, []string{"default"})
 	useTestResourceCache(t, kubefake.NewClientset(
@@ -73,8 +73,8 @@ func TestCascadePreviewUsesCallerAndOwnershipWithoutTopology(t *testing.T) {
 func TestCascadePreviewNormalizesSensitiveRootKinds(t *testing.T) {
 	env := newAuthTestServer(t)
 	old := k8s.GetConnectionStatus()
-	t.Cleanup(func() { k8s.SetConnectionStatus(old) })
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	t.Cleanup(func() { k8s.PublishTestConnectionStatus(old) })
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
 	perms := &auth.UserPermissions{AllowedNamespaces: []string{"default"}}
 	perms.SetCanI("get", "", "secrets", "default", false)
 	perms.SetCanI("get", "", "limitranges", "default", false)

@@ -19,6 +19,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/argocd"
 	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/connectionruntime"
 	"github.com/skyhook-io/radar/internal/connections"
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -68,7 +69,7 @@ func (s *Server) parseGitOpsRequest(w http.ResponseWriter, r *http.Request) (*gi
 		}
 	}
 
-	cache := k8s.GetResourceCache()
+	cache := k8s.ConnectionFrom(r.Context()).ResourceCache()
 	if cache == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "Resource cache not available")
 		return nil, false
@@ -109,10 +110,11 @@ func (s *Server) buildGitOpsTree(r *http.Request, req *gitopsRequest) (*gitopstr
 	opts.Namespaces = req.AllowedNamespaces
 	opts.IncludeReplicaSets = true
 	opts.ForRelationshipCache = true
+	conn := k8s.BoundOrCurrent(r.Context())
 
 	topo, err := s.topoMemo.GetScoped(req.Cache.Generation(), opts, func() (*topology.Topology, error) {
 		return topology.NewBuilder(k8s.NewTopologyResourceProvider(req.Cache)).
-			WithDynamic(k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery())).
+			WithDynamic(k8s.NewTopologyDynamicProvider(conn.DynamicResourceCache(), conn.Discovery())).
 			Build(opts)
 	})
 	if err != nil {
@@ -134,6 +136,8 @@ func (s *Server) buildGitOpsTree(r *http.Request, req *gitopsRequest) (*gitopstr
 // status doesn't drift if an upstream error message gets reworded.
 func (s *Server) writeGitOpsBuildError(w http.ResponseWriter, req *gitopsRequest, err error) {
 	switch {
+	case errors.Is(err, portforward.ErrClosed):
+		s.writeError(w, http.StatusServiceUnavailable, argoConnectionClosedMessage)
 	case errors.Is(err, context.Canceled):
 		// The client left mid-build; there is no one to answer.
 		return
@@ -153,6 +157,8 @@ func (s *Server) handleGitOpsTree(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
 	}
+	r = r.WithContext(k8s.CaptureConnection(r.Context()))
+	set := connectionruntime.Capture(r.Context())
 	req, ok := s.parseGitOpsRequest(w, r)
 	if !ok {
 		return
@@ -165,7 +171,7 @@ func (s *Server) handleGitOpsTree(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	tree, _, _, err := s.resolveGitOpsTree(r, req)
+	tree, _, _, err := s.resolveGitOpsTree(r, req, set)
 	if err != nil {
 		s.writeGitOpsBuildError(w, req, err)
 		return
@@ -181,7 +187,7 @@ func (s *Server) handleGitOpsTree(w http.ResponseWriter, r *http.Request) {
 // resolver already carries this request's access gate so insights can reuse
 // it (and its once-per-request issue-engine composition) instead of building
 // a second one.
-func (s *Server) resolveGitOpsTree(r *http.Request, req *gitopsRequest) (*gitopstree.ResourceTree, *unstructured.Unstructured, *insightsResolver, error) {
+func (s *Server) resolveGitOpsTree(r *http.Request, req *gitopsRequest, set connectionruntime.Set) (*gitopstree.ResourceTree, *unstructured.Unstructured, *insightsResolver, error) {
 	tree, root, err := s.buildGitOpsTree(r, req)
 	if err != nil {
 		return nil, nil, nil, err
@@ -193,11 +199,21 @@ func (s *Server) resolveGitOpsTree(r *http.Request, req *gitopsRequest) (*gitops
 	resolver.canReadClusterScoped = s.issueClusterScopedAccess(r)
 	resolver.canReadSubject = s.issueSubjectAccess(r)
 	resolver.canReadEvidence = s.issueEvidenceAccess(r)
-	memoKey := gitopsIssuesMemoKey(auth.UserFromContext(r.Context()), req.AllowedNamespaces)
+	memoKey := fmt.Sprintf("%d/%s", req.Cache.Generation(), gitopsIssuesMemoKey(auth.UserFromContext(r.Context()), req.AllowedNamespaces))
 	resolver.composed = func() ([]issues.Issue, []issues.Issue) {
 		return s.gitopsIssuesMemo.load(memoKey, resolver.composeIssues)
 	}
-	if !overlayArgoAPIHealth(r.Context(), tree, root, s.argoAPIHealth) {
+	var argoClosed bool
+	fetch := func(ctx context.Context, namespace, name string) (*argoapi.ApplicationHealth, error) {
+		health, err := argoAPIHealth(ctx, set, namespace, name)
+		argoClosed = portforward.IsMemberClosed(ctx, err)
+		return health, err
+	}
+	fromArgo := overlayArgoAPIHealth(r.Context(), tree, root, fetch)
+	if argoClosed {
+		return nil, nil, nil, portforward.ErrClosed
+	}
+	if !fromArgo {
 		overlayRadarHealth(tree, root, resolver.ResourceProblems)
 	}
 	tree = s.filterGitOpsTreeForUser(r, req, tree)
@@ -215,11 +231,12 @@ func (s *Server) resolveGitOpsTree(r *http.Request, req *gitopsRequest) (*gitops
 // integration configured, the failure comes back in the user's words — they
 // set the connection up for this, and the page should say it isn't
 // delivering rather than silently show Radar's read.
-func (s *Server) argoAPIHealth(ctx context.Context, appNamespace, appName string) (*argoapi.ApplicationHealth, error) {
-	health, err := argocd.ApplicationHealthCached(ctx, argoapi.ApplicationQuery{AppNamespace: appNamespace, AppName: appName})
-	if err == nil {
-		return health, nil
+func argoAPIHealth(ctx context.Context, set connectionruntime.Set, appNamespace, appName string) (*argoapi.ApplicationHealth, error) {
+	manager := set.ArgoCD
+	if manager == nil {
+		return nil, nil
 	}
+	err := set.ArgoSettingsError()
 	// A settings failure leaves the manager unconfigured, so without this the
 	// page would silently fall back to Radar's read instead of saying why.
 	var settingsErr *connections.SettingsError
@@ -229,25 +246,32 @@ func (s *Server) argoAPIHealth(ctx context.Context, appNamespace, appName string
 		}
 		return nil, errors.New("this cluster's saved integration settings need review in Settings")
 	}
+	health, err := manager.ApplicationHealthCached(ctx, argoapi.ApplicationQuery{AppNamespace: appNamespace, AppName: appName})
+	if manager.Closed() || portforward.IsMemberClosed(ctx, err) {
+		return nil, portforward.ErrClosed
+	}
+	if err == nil {
+		return health, nil
+	}
 	if errors.Is(err, argocd.ErrConnecting) {
 		pending := &argoHealthPending{}
-		if argocd.IsConfigured() {
-			pending.notice = argoAPIHealthFailure(err, argocd.TokenSet())
+		if manager.IsConfigured() {
+			pending.notice = argoAPIHealthFailure(err, manager.TokenSet())
 		}
 		return nil, pending
 	}
-	if !argocd.IsConfigured() {
+	if !manager.IsConfigured() {
 		return nil, nil
 	}
 	// A read that got no answer (possibly served from the failure cache) will
 	// be retried even if another read has since cleared the shared failure
 	// flag, so this page asks again too.
-	if argocd.ReadMayRecover(err) {
+	if manager.ReadMayRecover(err) {
 		// Say why it failed, and have the page ask again so it recovers
 		// when the retry connects.
-		return nil, &argoHealthPending{notice: argoAPIHealthFailure(err, argocd.TokenSet()), retrying: true}
+		return nil, &argoHealthPending{notice: argoAPIHealthFailure(err, manager.TokenSet()), retrying: true}
 	}
-	return nil, errors.New(argoAPIHealthFailure(err, argocd.TokenSet()))
+	return nil, errors.New(argoAPIHealthFailure(err, manager.TokenSet()))
 }
 
 // argoHealthPending: Radar is connecting to argocd-server in the background,
@@ -419,6 +443,8 @@ func (s *Server) handleGitOpsInsights(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
 	}
+	r = r.WithContext(k8s.CaptureConnection(r.Context()))
+	set := connectionruntime.Capture(r.Context())
 	req, ok := s.parseGitOpsRequest(w, r)
 	if !ok {
 		return
@@ -429,7 +455,7 @@ func (s *Server) handleGitOpsInsights(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	tree, root, resolver, err := s.resolveGitOpsTree(r, req)
+	tree, root, resolver, err := s.resolveGitOpsTree(r, req, set)
 	if err != nil {
 		s.writeGitOpsBuildError(w, req, err)
 		return
@@ -444,11 +470,16 @@ func (s *Server) handleGitOpsInsights(w http.ResponseWriter, r *http.Request) {
 	insight.Warnings = appendWarnings(insight.Warnings, tree.Warnings...)
 	insight = s.filterGitOpsInsightForUser(r, req, insight, tree)
 	if insight.Summary.Tool == "argocd" {
-		setArgoCapabilities(r.Context(), req.Namespace, req.Name, root, &insight.Capabilities)
+		manager := set.ArgoCD
+		setArgoCapabilities(r.Context(), manager, req.Namespace, req.Name, root, &insight.Capabilities)
 		if insight.Capabilities.ArgoConfigured {
 			// Best-effort: surface a broken Git repo connection (a top hidden cause
 			// of stuck syncs) as an Issue. Never fails insights if the Argo call errors.
-			s.enrichArgoRepoHealth(root, &insight)
+			s.enrichArgoRepoHealth(manager, root, &insight)
+		}
+		if manager.Closed() {
+			s.writeError(w, http.StatusServiceUnavailable, argoConnectionClosedMessage)
+			return
 		}
 	}
 	s.writeJSON(w, insight)
@@ -465,11 +496,14 @@ func (s *Server) handleGitOpsInsights(w http.ResponseWriter, r *http.Request) {
 // rendered as N dead-ends. ArgoConfigured is surfaced separately so the UI can
 // offer Connect vs. check Settings. Cost: one managed-resources round-trip per
 // viewed app per 15s cache window, whose result the per-row diffs then reuse.
-func setArgoCapabilities(ctx context.Context, namespace, name string, root *unstructured.Unstructured, caps *gitopsinsights.Capabilities) {
-	caps.ArgoConfigured = argocd.IsConfigured()
+func setArgoCapabilities(ctx context.Context, manager *argocd.Manager, namespace, name string, root *unstructured.Unstructured, caps *gitopsinsights.Capabilities) {
+	if manager == nil {
+		return
+	}
+	caps.ArgoConfigured = manager.IsConfigured()
 	diffReady := false
-	if _, connected := argocd.Get(); connected {
-		if _, err := argocd.ManagedResourcesCached(ctx, argoapi.ManagedResourcesQuery{
+	if _, connected := manager.Get(); connected {
+		if _, err := manager.ManagedResourcesCached(ctx, argoapi.ManagedResourcesQuery{
 			AppNamespace: namespace,
 			AppName:      name,
 		}); err == nil {
@@ -488,8 +522,8 @@ func setArgoCapabilities(ctx context.Context, namespace, name string, root *unst
 	// started a re-check the page should wait out. Retrying is process-wide
 	// (another app's failed read sets it too), so only a page whose own diff
 	// isn't ready is asked to poll for it.
-	caps.ArgoConnecting = argocd.Connecting()
-	caps.ArgoRetrying = caps.ArgoConfigured && !diffReady && argocd.Retrying()
+	caps.ArgoConnecting = manager.Connecting()
+	caps.ArgoRetrying = caps.ArgoConfigured && !diffReady && manager.Retrying()
 }
 
 // managedScanKinds is the set of K8s kinds /api/gitops/managed-resources
@@ -914,6 +948,7 @@ func (s *Server) canAccessGitOpsRef(r *http.Request, req *gitopsRequest, group, 
 		allowed := s.getUserNamespaces(r, []string{name})
 		return !readscope.NoNamespaceAccess(allowed)
 	}
+	discovery := k8s.BoundOrCurrent(r.Context()).Discovery()
 	if namespace != "" {
 		if !namespaceAllowedForGitOps(req.AllowedNamespaces, namespace) {
 			return false
@@ -921,13 +956,13 @@ func (s *Server) canAccessGitOpsRef(r *http.Request, req *gitopsRequest, group, 
 		if kind == "PodGroup" && group == "" {
 			return s.canRead(r, "", "pods", namespace, "get")
 		}
-		gvrGroup, resource := k8s.LookupResourceGVR(kind, group)
+		gvrGroup, resource := discovery.LookupResourceGVR(kind, group)
 		// Unknown discovery is not a permission denial. The dynamic getter
 		// returns unknown-kind rather than local metadata for an unserved kind,
 		// and remote inventory declarations must remain available for Hub merge.
 		return resource == "" || s.canRead(r, gvrGroup, resource, namespace, "get")
 	}
-	if clusterScoped, gvrGroup, gvrResource := k8s.ClassifyKindScope(kind, group); clusterScoped {
+	if clusterScoped, gvrGroup, gvrResource := discovery.ClassifyKindScope(kind, group); clusterScoped {
 		return s.canRead(r, gvrGroup, gvrResource, "", "list")
 	}
 	return false
@@ -1258,7 +1293,7 @@ func (r *insightsResolver) RecentEvents(group, kind, namespace, name string) []g
 // composeIssues runs the cluster-wide issues engine for this request's
 // namespaces, redacting related refs the caller can't read.
 func (r *insightsResolver) composeIssues() ([]issues.Issue, []issues.Issue) {
-	flat := issues.Compose(issues.NewCacheProvider(), issues.Filters{
+	flat := issues.Compose(issues.NewCacheProviderFor(k8s.BoundOrCurrent(r.ctx)), issues.Filters{
 		SkipPodTemplateContext: true,
 		Namespaces:             r.allowedNamespaces,
 		Limit:                  issues.NoLimit,

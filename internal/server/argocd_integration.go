@@ -12,8 +12,10 @@ import (
 	"github.com/skyhook-io/radar/internal/argocd"
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/config"
-	"github.com/skyhook-io/radar/internal/connections"
+	"github.com/skyhook-io/radar/internal/connectionruntime"
+	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/portforward"
+	"github.com/skyhook-io/radar/pkg/argoapi"
 	"github.com/skyhook-io/radar/pkg/prom"
 	"github.com/skyhook-io/radar/pkg/urlutil"
 )
@@ -26,6 +28,8 @@ import (
 // reconnect when disconnected, so opening Overview after a restart helps the
 // integration come back.
 func (s *Server) handleArgoCDStatus(w http.ResponseWriter, r *http.Request) {
+	set := connectionruntime.SetFor(k8s.BoundOrCurrent(r.Context()))
+	manager := set.ArgoCD
 	resp := struct {
 		Configured bool `json:"configured"`
 		Connected  bool `json:"connected"`
@@ -36,36 +40,39 @@ func (s *Server) handleArgoCDStatus(w http.ResponseWriter, r *http.Request) {
 		Anonymous bool   `json:"anonymous,omitempty"`
 		Address   string `json:"address,omitempty"`
 		Reason    string `json:"reason,omitempty"`
-	}{
-		Configured: argocd.IsConfigured(),
-	}
-	if err := connections.Refresh(config.IntegrationArgoCD); err != nil {
-		resp.Reason = prom.RedactURLs(err.Error())
+	}{}
+	if manager == nil || set.ArgoSettingsError() != nil {
+		if err := set.ArgoSettingsError(); err != nil {
+			resp.Reason = prom.RedactURLs(err.Error())
+		}
 		if s.localConnections != nil {
 			view := s.readLocalConnectionViews()[config.IntegrationArgoCD]
 			resp.Configured = view.URL != "" || view.SecretSet || view.State == "launch"
+		} else {
+			settings := s.integrationRuntime.Settings().ArgoCD
+			resp.Configured = settings.URL != "" || settings.Token != ""
 		}
 		s.writeJSON(w, resp)
 		return
 	}
-	_, resp.Connected = argocd.Get()
-	resp.Configured = argocd.IsConfigured()
+	_, resp.Connected = manager.Get()
+	resp.Configured = manager.IsConfigured()
 	if resp.Connected {
-		resp.Address = argocd.Address()
-		resp.Anonymous = argocd.AnonymousReadAllowed()
-		if err := argocd.LastReadError(); err != nil && resp.Configured {
-			resp.Reason = "Radar's last read from Argo CD failed: " + argoAPIHealthFailure(err, argocd.TokenSet()) + "."
+		resp.Address = manager.Address()
+		resp.Anonymous = manager.AnonymousReadAllowed()
+		if err := manager.LastReadError(); err != nil && resp.Configured {
+			resp.Reason = "Radar's last read from Argo CD failed: " + argoAPIHealthFailure(err, manager.TokenSet()) + "."
 		}
 	} else {
 		// While a reconnect runs, the last failure still says why it is needed.
-		resp.Connecting = argocd.Connecting()
-		if argocd.TokenBindingUpgradeRequired() {
+		resp.Connecting = manager.Connecting()
+		if manager.TokenBindingUpgradeRequired() {
 			resp.Reason = "Re-enter the Argo CD token in Settings to bind it to this kubeconfig source."
 			if s.configManagement() == "operator" {
 				resp.Reason = "The saved Argo CD token is not bound to this kubeconfig source. Ask the operator to provision the token through startup configuration."
 			}
-		} else if err := argocd.LastProbeError(); err != nil && (resp.Configured || errors.Is(err, portforward.ErrAutoDisabled)) {
-			resp.Reason = "Radar couldn't connect to Argo CD: " + argoAPIHealthFailure(err, argocd.TokenSet()) + "."
+		} else if err := manager.LastProbeError(); err != nil && (resp.Configured || errors.Is(err, portforward.ErrAutoDisabled)) {
+			resp.Reason = "Radar couldn't connect to Argo CD: " + argoAPIHealthFailure(err, manager.TokenSet()) + "."
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -73,10 +80,8 @@ func (s *Server) handleArgoCDStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleApplyArgoCDConfig re-points the running Argo CD client at new settings
-// immediately and persists them, mirroring handleApplyPrometheusURL. The probe
-// runs against the candidate settings BEFORE anything is persisted, so a bad
-// URL or token can't land on disk; on probe failure the previous settings are
-// restored on the live client.
+// after the candidate passes its connection check. Failed checks leave the
+// saved settings and live member in place.
 func (s *Server) handleApplyArgoCDConfig(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConfigEditable(w, r) {
 		return
@@ -93,7 +98,9 @@ func (s *Server) handleApplyArgoCDConfig(w http.ResponseWriter, r *http.Request)
 	// change the env config would override on the next probe. This is the only
 	// user-facing path that mutates the Argo connection, so gating it here makes
 	// env-managed effectively read-only.
-	if argocd.IsEnvManaged() {
+	conn := k8s.Current()
+	base := s.integrationRuntime.Snapshot()
+	if base.ArgoEnv {
 		s.writeError(w, http.StatusConflict,
 			"Argo CD is configured from the environment (RADAR_ARGOCD_TOKEN) — edit the deployment to change it.")
 		return
@@ -163,60 +170,55 @@ func (s *Server) handleApplyArgoCDConfig(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Capture the live token→source binding before the candidate SetConfig
-	// re-stamps it for a fresh token. If the probe fails we must restore THIS
-	// binding, not just the URL/token: a fresh-token SetConfig stamps
-	// the binding to the current cluster, and a plain re-point rollback would
-	// leave that stamp on the restored (older) token — marking it valid for the
-	// wrong cluster and defeating the auto-discovery cross-cluster guard.
-	prevTokenContext := argocd.TokenContext()
-	prevTokenBinding := argocd.TokenBinding()
-	argocd.SetConfig(rawURL, token, body.ArgoCDInsecureTLS, suppliesNewToken)
-	ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
-	defer cancel()
-	if err := argocd.Probe(ctx); err != nil {
-		argocd.RestoreConfig(prev.ArgoCDURL, prev.ArgoCDToken, prev.ArgoCDInsecureTLS, prevTokenContext, prevTokenBinding)
-		argocd.Prewarm()
-		// The upstream error can embed the raw response body (proxy headers, a
-		// render error with Secret data). Log it server-side; return only the
-		// mapped guidance so nothing from Argo's body reaches the browser.
-		log.Printf("[argocd] Probe of candidate settings failed: %s", sanitizeForLog(argocd.RedactToken(err.Error())))
-		if errors.Is(err, argocd.ErrTokenBindingUpgrade) {
-			s.writeError(w, http.StatusBadRequest, "Re-enter the Argo CD token in Settings to bind it to this kubeconfig source.")
-			return
-		}
-		if errors.Is(err, argocd.ErrTokenInvalid) {
-			s.writeError(w, http.StatusBadRequest, "Argo CD rejected the token — check that it is valid and not expired.")
-			return
-		}
-		s.writeError(w, http.StatusBadRequest, "Argo CD server unreachable — check the URL and network path.")
-		return
-	}
-
-	if _, err := config.Update(func(c *config.Config) {
-		c.ArgoCDURL = rawURL
-		c.ArgoCDToken = token
-		c.ArgoCDInsecureTLS = body.ArgoCDInsecureTLS
-		// Persist the token's source binding only when a new token was supplied
-		// (SetConfig just re-stamped it); a preserved token keeps the on-disk
-		// binding. An empty token has no binding. Without this the binding is
-		// lost on restart and an auto-discovery token can never reconnect.
-		if suppliesNewToken {
-			if token == "" {
-				c.ArgoCDTokenContext = ""
-				c.ArgoCDTokenBinding = ""
-			} else {
-				c.ArgoCDTokenContext = argocd.TokenContext()
-				c.ArgoCDTokenBinding = argocd.TokenBinding()
+	argo := argoapi.Connection{URL: rawURL, Token: token, InsecureTLS: body.ArgoCDInsecureTLS}
+	tokenContext, tokenBinding := prev.ArgoCDTokenContext, prev.ArgoCDTokenBinding
+	if suppliesNewToken {
+		tokenContext, tokenBinding = "", ""
+		if rawURL == "" && token != "" {
+			tokenContext, tokenBinding = conn.ContextName(), conn.ContextBinding()
+			if k8s.IsInCluster() {
+				tokenBinding = argocd.InClusterTokenBinding
 			}
 		}
+	}
+	edit := s.integrationRuntime.PrepareShared(conn, base, func(next *connectionruntime.Settings) {
+		next.ArgoCD = argo
+		next.ArgoTokenContext, next.ArgoTokenBinding = tokenContext, tokenBinding
+	}, config.IntegrationArgoCD)
+	manager := edit.Set().ArgoCD
+	if manager == nil {
+		manager = argocd.NewConnectionManager(conn, k8s.IsInCluster(), conn.ContextBinding())
+		manager.RestoreConfig(rawURL, token, body.ArgoCDInsecureTLS, tokenContext, tokenBinding)
+		defer manager.Close()
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
+	defer cancel()
+	if err := manager.Probe(ctx); err != nil {
+		edit.Discard()
+		if portforward.IsMemberClosed(ctx, err) {
+			s.writeError(w, http.StatusServiceUnavailable, argoConnectionClosedMessage)
+			return
+		}
+		log.Printf("[argocd] Probe of candidate settings failed: %s", sanitizeForLog(manager.RedactToken(err.Error())))
+		switch {
+		case errors.Is(err, argocd.ErrTokenBindingUpgrade):
+			s.writeError(w, http.StatusBadRequest, "Re-enter the Argo CD token in Settings to bind it to this kubeconfig source.")
+		case errors.Is(err, argocd.ErrTokenInvalid):
+			s.writeError(w, http.StatusBadRequest, "Argo CD rejected the token — check that it is valid and not expired.")
+		default:
+			s.writeError(w, http.StatusBadRequest, "Argo CD server unreachable — check the URL and network path.")
+		}
+		return
+	}
+	address := manager.Address()
+	if err := edit.Commit(func() error {
+		_, err := config.Update(func(c *config.Config) {
+			c.ArgoCDURL, c.ArgoCDToken, c.ArgoCDInsecureTLS = rawURL, token, body.ArgoCDInsecureTLS
+			c.ArgoCDTokenContext, c.ArgoCDTokenBinding = tokenContext, tokenBinding
+		})
+		return err
 	}); err != nil {
-		// The running client must agree with the on-disk config; roll it back —
-		// including the token's source binding captured above.
-		argocd.RestoreConfig(prev.ArgoCDURL, prev.ArgoCDToken, prev.ArgoCDInsecureTLS, prevTokenContext, prevTokenBinding)
-		argocd.Prewarm()
-		log.Printf("[argocd] Failed to persist Argo CD config: %v", err)
-		s.writeError(w, http.StatusInternalServerError, err.Error())
+		s.integrationCommitError(w, "Argo CD", err)
 		return
 	}
 
@@ -226,7 +228,7 @@ func (s *Server) handleApplyArgoCDConfig(w http.ResponseWriter, r *http.Request)
 		TokenSet  bool   `json:"tokenSet"`
 	}{
 		Connected: true,
-		Address:   argocd.Address(),
+		Address:   address,
 		TokenSet:  token != "",
 	})
 }

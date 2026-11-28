@@ -198,8 +198,8 @@ func diagnoseTestServer(t *testing.T) *Server {
 		t.Fatal(err)
 	}
 	prevConn := k8s.GetConnectionStatus()
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
-	t.Cleanup(func() { k8s.SetConnectionStatus(prevConn) })
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	t.Cleanup(func() { k8s.PublishTestConnectionStatus(prevConn) })
 
 	mcp := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
 	s := &Server{

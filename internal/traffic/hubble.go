@@ -50,6 +50,8 @@ var allowedHTTPHeaders = map[string]bool{
 // HubbleSource implements TrafficSource for Hubble/Cilium
 type HubbleSource struct {
 	forwards       *portforward.Manager
+	handles        *portforward.Handles
+	lifetime       context.Context
 	forward        *portforward.Handle
 	k8sClient      kubernetes.Interface
 	grpcConn       *grpc.ClientConn
@@ -399,7 +401,7 @@ func (h *HubbleSource) Connect(ctx context.Context, contextName string) (*portfo
 		}, nil
 	}
 	if h.forwards.Closed() {
-		return &portforward.ConnectionInfo{Error: portforward.ErrClosed.Error()}, nil
+		return nil, portforward.ErrClosed
 	}
 
 	namespace := h.relayNamespace
@@ -497,8 +499,14 @@ func (h *HubbleSource) Connect(ctx context.Context, contextName string) (*portfo
 	} else {
 		log.Printf("[hubble] Starting port-forward to %s/%s:%d", namespace, hubbleRelayService, h.relayPort)
 		forward, err = h.forwards.Start(ctx, portforward.OwnerTraffic, namespace, hubbleRelayService, h.relayPort)
+		if err == nil && h.handles != nil {
+			err = h.handles.Track(forward)
+		}
 	}
 	if err != nil {
+		if portforward.IsMemberClosed(ctx, err) {
+			return nil, err
+		}
 		if info := retryDirectAfterSkip(); info != nil {
 			return info, nil
 		}
@@ -545,7 +553,7 @@ func (h *HubbleSource) connectForwardLocked(ctx context.Context, forward *portfo
 // gRPC/TLS sequence. Records the reachability observation either way. Caller
 // must hold h.mu.
 func (h *HubbleSource) tryDirectLocked(ctx context.Context, directAddr string) error {
-	if !tcpReachable(directAddr, directDialTimeout) {
+	if !tcpReachable(ctx, directAddr, directDialTimeout) {
 		h.recordProbeLocked(directAddr, false)
 		return errDirectUnreachable
 	}
@@ -596,8 +604,9 @@ func (h *HubbleSource) directAddressLocked(namespace string) string {
 }
 
 // tcpReachable reports whether addr accepts a TCP connection within timeout.
-func tcpReachable(addr string, timeout time.Duration) bool {
-	conn, err := net.DialTimeout("tcp", addr, timeout)
+func tcpReachable(ctx context.Context, addr string, timeout time.Duration) bool {
+	dialer := net.Dialer{Timeout: timeout}
+	conn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return false
 	}
@@ -620,7 +629,12 @@ func (h *HubbleSource) probeDirectAsync(addr string) {
 	gen := h.probeSeq
 	h.mu.Unlock()
 
-	reachable := tcpReachable(addr, directDialTimeout)
+	ctx, release := portforward.WithLifetime(context.Background(), h.lifetime)
+	defer release()
+	reachable := tcpReachable(ctx, addr, directDialTimeout)
+	if ctx.Err() != nil {
+		return
+	}
 
 	if h.applyProbeResult(gen, addr, reachable) && !reachable {
 		if portforward.AutoDisabled() {
@@ -904,7 +918,9 @@ func (h *HubbleSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRe
 
 	fetched, err := h.fetchFlowsViaGRPC(ctx, opts)
 	if err != nil {
-		log.Printf("[hubble] gRPC error: %v", err)
+		if ctx.Err() == nil {
+			log.Printf("[hubble] gRPC error: %v", err)
+		}
 		return &FlowsResponse{
 			Source:    "hubble",
 			Timestamp: time.Now(),

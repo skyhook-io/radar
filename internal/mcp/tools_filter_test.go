@@ -60,7 +60,7 @@ func setupFakeCacheForFilterTests(t *testing.T) {
 	// Mark connected so handlers don't bail early on requireConnected-style
 	// checks. (The MCP handlers don't use requireConnected directly, but
 	// downstream code paths do.)
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "fake-test"})
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "fake-test"})
 }
 
 // withRestrictedUser primes the perm cache for a namespace-restricted user

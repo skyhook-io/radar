@@ -27,34 +27,33 @@ type clusterScope struct {
 	mixed bool
 }
 
-// resolveTrafficScope is the shared cluster proof the workload charts use:
-// the operator's --prometheus-cluster-label when set, otherwise the labels
-// kube-state-metrics proves for this cluster's Pods. A variable so tests can
-// stand in for the Prometheus client.
-var resolveTrafficScope = func(ctx context.Context, metric, selector string, window time.Duration) (string, promclient.SeriesIsolation, error) {
-	client, err := promclient.ClientForOperation()
-	if err != nil {
-		return "", promclient.SeriesIsolation{}, err
-	}
-	return client.ResolveTrafficScope(ctx, metric, selector, window, k8s.GetResourceCache())
+type metricsInputs struct {
+	client        *promclient.Client
+	settingsErr   error
+	cache         *k8s.ResourceCache
+	url           string
+	job           string
+	resolve       func(context.Context, string, string, time.Duration) (string, promclient.SeriesIsolation, error)
+	spansClusters func(context.Context, string, string, time.Duration) (bool, error)
+	relayActive   func() bool
+	operatorScope func() (prom.WorkloadMetricsScope, bool)
 }
 
-// metricsRelayActive reports whether metrics are served through a relay. A
-// variable so tests can stand in for the Prometheus client.
-var metricsRelayActive = promclient.RelayActive
-
-// operatorScopeDuringRelay is the scope an operator configured for the
-// Prometheus store, set aside while a relay is active. A variable for tests.
-var operatorScopeDuringRelay = promclient.OperatorScopeDuringRelay
-
-// trafficSpansClusters reports whether metric's series carry more than one
-// cluster identity. A variable so tests can stand in for the Prometheus client.
-var trafficSpansClusters = func(ctx context.Context, metric, selector string, window time.Duration) (bool, error) {
-	client, err := promclient.ClientForOperation()
-	if err != nil {
-		return false, err
+func (m *metricsInputs) settingsError() error {
+	if m == nil {
+		return nil
 	}
-	return client.TrafficSpansClusters(ctx, metric, selector, window)
+	return m.settingsErr
+}
+
+func (m *metricsInputs) clientForOperation() (*promclient.Client, error) {
+	if err := m.settingsError(); err != nil {
+		return nil, err
+	}
+	if m == nil || m.client == nil {
+		return nil, promclient.ErrPrometheusUnavailable
+	}
+	return m.client, nil
 }
 
 // scopeForMetric decides how to keep metric's traffic queries to this cluster.
@@ -67,11 +66,14 @@ var trafficSpansClusters = func(ctx context.Context, metric, selector string, wi
 //
 // An error means Radar could not check which cluster the series belong to;
 // the caller shows nothing rather than risk drawing another cluster's traffic.
-func scopeForMetric(ctx context.Context, metric, selector string, filter bool, window time.Duration) (clusterScope, error) {
+func (m *metricsInputs) scopeForMetric(ctx context.Context, metric, selector string, filter bool, window time.Duration) (clusterScope, error) {
 	if !filter {
 		return clusterScope{}, nil
 	}
-	matchers, iso, err := resolveTrafficScope(ctx, metric, selector, window)
+	if m == nil || m.resolve == nil {
+		return clusterScope{}, promclient.ErrPrometheusUnavailable
+	}
+	matchers, iso, err := m.resolve(ctx, metric, selector, window)
 	switch {
 	case err == nil && matchers != "":
 		// The operator's labels, the labels proven for this cluster, or, when
@@ -105,7 +107,7 @@ func scopeForMetric(ctx context.Context, metric, selector string, filter bool, w
 		if errors.Is(err, promclient.ErrScopeAmbiguous) {
 			return clusterScope{mixed: true}, nil
 		}
-		spans, sErr := trafficSpansClusters(ctx, metric, selector, window)
+		spans, sErr := m.spansClusters(ctx, metric, selector, window)
 		if sErr != nil {
 			log.Printf("[traffic] Could not count the clusters in %s series: %v", metric, sErr)
 			return clusterScope{mixed: true}, nil

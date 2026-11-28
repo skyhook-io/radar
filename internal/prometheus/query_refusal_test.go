@@ -1,6 +1,7 @@
 package prometheus
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/url"
@@ -11,6 +12,34 @@ import (
 	"github.com/skyhook-io/radar/pkg/prom"
 	oo "github.com/skyhook-io/radar/pkg/prom/openobserve"
 )
+
+func TestRawQueryReturnsUnavailableWhenMemberCloses(t *testing.T) {
+	for _, typ := range []string{"instant", "range"} {
+		t.Run(typ, func(t *testing.T) {
+			client := testClient(t, "raw-query", nil)
+			cfg := testRelayConfig(&fakeRelayTransport{}, nil)
+			cfg.NewTransport = func(time.Duration, int64) prom.Transport {
+				return closingRawQueryTransport{client}
+			}
+			if err := client.EnableRelay(cfg); err != nil {
+				t.Fatal(err)
+			}
+			rec := getMetrics(t, metricsRouter(client), "/prometheus/query?type="+typ+"&query=up")
+			if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), ConnectionClosedMessage) {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+type closingRawQueryTransport struct{ client *Client }
+
+func (closingRawQueryTransport) Address() string { return "closing metrics store" }
+
+func (t closingRawQueryTransport) Do(context.Context, string, string, url.Values) ([]byte, error) {
+	_ = t.client.Close()
+	return nil, &prom.HTTPError{StatusCode: http.StatusBadGateway}
+}
 
 // TestRawQueryRefusalIsTheCallersError: a query refused as bad input, by
 // Radar Hub's relay or by the local OpenObserve scoping, answers 400 with the
@@ -36,14 +65,14 @@ func TestRawQueryRefusalIsTheCallersError(t *testing.T) {
 		{"backend failure", (&fakeRelayTransport{err: &prom.HTTPError{StatusCode: http.StatusInternalServerError}}).build, "up", http.StatusBadGateway, "Prometheus query failed"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			withRelayTestClient(t)
+			client, _, _ := withRelayTestClient(t)
 			cfg := testRelayConfig(&fakeRelayTransport{}, nil)
 			cfg.NewTransport = tc.transport
-			if err := EnableRelay(cfg); err != nil {
+			if err := client.EnableRelay(cfg); err != nil {
 				t.Fatal(err)
 			}
 			for _, typ := range []string{"instant", "range"} {
-				rec := getMetrics(t, metricsRouter(), "/prometheus/query?type="+typ+"&query="+url.QueryEscape(tc.query))
+				rec := getMetrics(t, metricsRouter(client), "/prometheus/query?type="+typ+"&query="+url.QueryEscape(tc.query))
 				var body struct {
 					Error string `json:"error"`
 				}

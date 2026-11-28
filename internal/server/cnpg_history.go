@@ -41,7 +41,7 @@ func (s *Server) handleCNPGClusterHistory(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	s.writeJSON(w, reader.ClusterHistory(r.Context(), cache, cluster, rng))
+	s.writeCNPGMetricsResponse(w, reader, reader.ClusterHistory(r.Context(), cache, cluster, rng))
 }
 
 // ---------- fleet ----------
@@ -57,5 +57,5 @@ func (s *Server) handleCNPGFleetMetrics(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	namespaces := s.parseNamespacesForUser(r)
-	s.writeJSON(w, reader.FleetMetrics(r.Context(), cache, namespaces))
+	s.writeCNPGMetricsResponse(w, reader, reader.FleetMetrics(r.Context(), cache, namespaces))
 }

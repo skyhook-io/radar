@@ -7,8 +7,10 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/skyhook-io/radar/internal/connectionruntime"
+	"github.com/skyhook-io/radar/internal/k8s"
+
 	internalopencost "github.com/skyhook-io/radar/internal/opencost"
-	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	pkgopencost "github.com/skyhook-io/radar/pkg/opencost"
 )
 
@@ -24,25 +26,27 @@ func (s *Server) handleOpenCostApplication(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	_, inputs, unavailable, unsupported, ok := s.parseOpenCostApplicationRequest(w, r)
+	conn := k8s.BoundOrCurrent(r.Context())
+	set := connectionruntime.SetFor(conn)
+	_, inputs, unavailable, unsupported, ok := s.parseOpenCostApplicationRequest(w, r, conn.ResourceCache())
 	if !ok {
 		return
 	}
-	connection, err := internalopencost.Selected(r.Context())
+	connection, err := set.Cost.Selected(r.Context())
 	if err != nil {
 		resp := pkgopencost.UnavailableApplicationCostResponse(inputs, unavailable, unsupported, internalopencost.ConnectionFailureReason(err))
-		resp.Currency = s.resolvedOpenCostCurrency()
-		s.writeJSON(w, resp)
+		resp.Currency = set.Currency.Resolve()
+		internalopencost.WriteCostResponse(w, set.Cost, resp)
 		return
 	}
 	if connection.Source == internalopencost.SourceKubecost {
 		namespaces := applicationInputNamespaces(inputs)
-		currency := s.resolvedOpenCostCurrency()
+		currency := set.Currency.Resolve()
 		namespaceCosts := make(map[string]*pkgopencost.WorkloadCostResponse, len(namespaces))
 		if len(namespaces) > 0 {
 			owners := make(map[string]pkgopencost.PodOwnerLookup, len(namespaces))
 			for _, namespace := range namespaces {
-				owners[namespace] = internalopencost.BuildPodOwnerLookup(namespace)
+				owners[namespace] = set.Cost.BuildPodOwnerLookup(namespace)
 			}
 			var queryErr error
 			var namespaceErrors map[string]error
@@ -65,38 +69,38 @@ func (s *Server) handleOpenCostApplication(w http.ResponseWriter, r *http.Reques
 		resp := pkgopencost.BuildApplicationCostResponse(inputs, unavailable, unsupported, namespaceCosts)
 		resp.Currency = currency
 		resp.Source = "kubecost"
-		s.writeJSON(w, resp)
+		internalopencost.WriteCostResponse(w, set.Cost, resp)
 		return
 	}
 
-	client, connectionErr := prometheuspkg.ClientForOperation()
+	client, connectionErr := set.MetricsClient()
 	if connectionErr != nil {
 		resp := pkgopencost.UnavailableApplicationCostResponse(inputs, unavailable, unsupported, internalopencost.ConnectionFailureReason(connectionErr))
-		resp.Currency = s.resolvedOpenCostCurrency()
+		resp.Currency = set.Currency.Resolve()
 		resp.Source = "prometheus"
-		s.writeJSON(w, resp)
+		internalopencost.WriteCostResponse(w, set.Cost, resp)
 		return
 	}
 	if _, _, err := client.EnsureConnected(r.Context()); err != nil {
 		log.Print("[opencost] EnsureConnected failed for application cost")
 		resp := pkgopencost.UnavailableApplicationCostResponse(inputs, unavailable, unsupported, internalopencost.ConnectionFailureReason(err))
-		resp.Currency = s.resolvedOpenCostCurrency()
+		resp.Currency = set.Currency.Resolve()
 		resp.Source = "prometheus"
-		s.writeJSON(w, resp)
+		internalopencost.WriteCostResponse(w, set.Cost, resp)
 		return
 	}
 
 	namespaceCosts := make(map[string]*pkgopencost.WorkloadCostResponse)
 	promCost := internalopencost.NewPromCost(client)
 	for _, namespace := range applicationInputNamespaces(inputs) {
-		namespaceCosts[namespace] = promCost.Workloads(r.Context(), namespace, internalopencost.BuildPodOwnerLookup(namespace))
+		namespaceCosts[namespace] = promCost.Workloads(r.Context(), namespace, set.Cost.BuildPodOwnerLookup(namespace))
 	}
 
 	resp := pkgopencost.BuildApplicationCostResponse(inputs, unavailable, unsupported, namespaceCosts)
 	resp.ClusterScope = internalopencost.ApplicationClusterScope(namespaceCosts)
-	resp.Currency = s.resolvedOpenCostCurrency()
+	resp.Currency = set.Currency.Resolve()
 	resp.Source = "prometheus"
-	s.writeJSON(w, resp)
+	internalopencost.WriteCostResponse(w, set.Cost, resp)
 }
 
 func (s *Server) handleOpenCostApplicationTrend(w http.ResponseWriter, r *http.Request) {
@@ -104,7 +108,9 @@ func (s *Server) handleOpenCostApplicationTrend(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	req, inputs, unavailable, unsupported, ok := s.parseOpenCostApplicationRequest(w, r)
+	conn := k8s.BoundOrCurrent(r.Context())
+	set := connectionruntime.SetFor(conn)
+	req, inputs, unavailable, unsupported, ok := s.parseOpenCostApplicationRequest(w, r, conn.ResourceCache())
 	if !ok {
 		return
 	}
@@ -113,35 +119,36 @@ func (s *Server) handleOpenCostApplicationTrend(w http.ResponseWriter, r *http.R
 		refs = append(refs, input.ApplicationWorkloadRef)
 	}
 	refs = append(refs, unsupported...)
-	connection, err := internalopencost.Selected(r.Context())
+	connection, err := set.Cost.Selected(r.Context())
 	if err != nil {
 		resp := pkgopencost.ComputeApplicationCostTrendFromProm(r.Context(), nil, pkgopencost.ApplicationTrendOptions{
 			Range: req.Range, Workloads: refs, Unavailable: unavailable, UnavailableReason: internalopencost.ConnectionFailureReason(err),
 		})
-		resp.Currency = s.resolvedOpenCostCurrency()
-		s.writeJSON(w, resp)
+		resp.Currency = set.Currency.Resolve()
+		internalopencost.WriteCostResponse(w, set.Cost, resp)
 		return
 	}
 	if connection.Source == internalopencost.SourceKubecost {
 		resp := pkgopencost.ComputeApplicationCostTrendFromProm(r.Context(), nil, pkgopencost.ApplicationTrendOptions{
 			Range: req.Range, Workloads: refs, Unavailable: unavailable, UnavailableReason: pkgopencost.ReasonHistoryUnsupported,
 		})
-		resp.Currency = s.resolvedOpenCostCurrency()
+		resp.Currency = set.Currency.Resolve()
 		resp.Source = "kubecost"
-		s.writeJSON(w, resp)
+		internalopencost.WriteCostResponse(w, set.Cost, resp)
 		return
 	}
 
-	client, connectionErr := prometheuspkg.ClientForOperation()
+	client, connectionErr := set.MetricsClient()
 	if connectionErr != nil {
 		resp := pkgopencost.ComputeApplicationCostTrendFromProm(r.Context(), nil, pkgopencost.ApplicationTrendOptions{
-			Range:       req.Range,
-			Workloads:   refs,
-			Unavailable: unavailable,
+			Range:             req.Range,
+			Workloads:         refs,
+			Unavailable:       unavailable,
+			UnavailableReason: internalopencost.ConnectionFailureReason(connectionErr),
 		})
-		resp.Currency = s.resolvedOpenCostCurrency()
+		resp.Currency = set.Currency.Resolve()
 		resp.Source = "prometheus"
-		s.writeJSON(w, resp)
+		internalopencost.WriteCostResponse(w, set.Cost, resp)
 		return
 	}
 	if _, _, err := client.EnsureConnected(r.Context()); err != nil {
@@ -152,9 +159,9 @@ func (s *Server) handleOpenCostApplicationTrend(w http.ResponseWriter, r *http.R
 			Unavailable:       unavailable,
 			UnavailableReason: internalopencost.ConnectionFailureReason(err),
 		})
-		resp.Currency = s.resolvedOpenCostCurrency()
+		resp.Currency = set.Currency.Resolve()
 		resp.Source = "prometheus"
-		s.writeJSON(w, resp)
+		internalopencost.WriteCostResponse(w, set.Cost, resp)
 		return
 	}
 
@@ -163,12 +170,12 @@ func (s *Server) handleOpenCostApplicationTrend(w http.ResponseWriter, r *http.R
 		Workloads:   refs,
 		Unavailable: unavailable,
 	})
-	resp.Currency = s.resolvedOpenCostCurrency()
+	resp.Currency = set.Currency.Resolve()
 	resp.Source = "prometheus"
-	s.writeJSON(w, resp)
+	internalopencost.WriteCostResponse(w, set.Cost, resp)
 }
 
-func (s *Server) parseOpenCostApplicationRequest(w http.ResponseWriter, r *http.Request) (openCostApplicationRequest, []pkgopencost.ApplicationWorkloadCostInput, []pkgopencost.ApplicationWorkloadStatus, []pkgopencost.ApplicationWorkloadRef, bool) {
+func (s *Server) parseOpenCostApplicationRequest(w http.ResponseWriter, r *http.Request, cache *k8s.ResourceCache) (openCostApplicationRequest, []pkgopencost.ApplicationWorkloadCostInput, []pkgopencost.ApplicationWorkloadStatus, []pkgopencost.ApplicationWorkloadRef, bool) {
 	var req openCostApplicationRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 128*1024)).Decode(&req); err != nil {
 		s.writeError(w, http.StatusBadRequest, "invalid application cost request")
@@ -210,7 +217,7 @@ func (s *Server) parseOpenCostApplicationRequest(w http.ResponseWriter, r *http.
 			unsupported = append(unsupported, ref)
 			continue
 		}
-		if failure := s.preflightResourceGet(r, normalizeKind(ref.Kind), ref.Namespace, ref.Name, "apps"); failure != nil {
+		if failure := s.preflightResourceGetFrom(r, cache, normalizeKind(ref.Kind), ref.Namespace, ref.Name, "apps"); failure != nil {
 			status := readStatusFor(failure.code)
 			unavailable = append(unavailable, pkgopencost.ApplicationWorkloadStatus{
 				ApplicationWorkloadRef: ref,
@@ -219,7 +226,7 @@ func (s *Server) parseOpenCostApplicationRequest(w http.ResponseWriter, r *http.
 			log.Printf("[opencost] Skipping application workload during cost preflight (status=%d)", status)
 			continue
 		}
-		lookup := s.lookupOpenCostWorkloadResource(ref.Kind, ref.Namespace, ref.Name)
+		lookup := lookupOpenCostWorkloadResource(cache, ref.Kind, ref.Namespace, ref.Name)
 		if lookup.Status != 0 {
 			unavailable = append(unavailable, pkgopencost.ApplicationWorkloadStatus{
 				ApplicationWorkloadRef: ref,

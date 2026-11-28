@@ -12,6 +12,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/auth"
 	cnpgsvc "github.com/skyhook-io/radar/internal/cnpg"
+	"github.com/skyhook-io/radar/internal/connectionruntime"
 	"github.com/skyhook-io/radar/internal/integration"
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -25,6 +26,7 @@ type cnpgReadAdapter struct {
 	config        *rest.Config
 	actionContext string
 	captured      bool
+	promClient    *prometheuspkg.Client
 }
 
 func (s *Server) cnpgActionClients(r *http.Request, req integration.ActionRequest) (cnpgsvc.ActionClients, error) {
@@ -47,8 +49,15 @@ func (s *Server) requireCNPGReader(w http.ResponseWriter, r *http.Request) (*cnp
 	return reader, true
 }
 
+func (s *Server) writeCNPGMetricsResponse(w http.ResponseWriter, reader *cnpgReadAdapter, response any) {
+	if reader.promClient != nil && reader.promClient.Closed() {
+		s.writeError(w, http.StatusServiceUnavailable, prometheuspkg.ConnectionClosedMessage)
+		return
+	}
+	s.writeJSON(w, response)
+}
+
 func (s *Server) cnpgReader(r *http.Request) *cnpgReadAdapter {
-	var promClient *prometheuspkg.Client
 	var cache *k8s.ResourceCache
 	var discovery *k8s.ResourceDiscovery
 	var dynamicCache *k8s.DynamicResourceCache
@@ -67,7 +76,7 @@ func (s *Server) cnpgReader(r *http.Request) *cnpgReadAdapter {
 		connected = k8s.IsConnected()
 		identity, clusterContext = cnpgRuntimeIdentity(r), k8s.TimelineClusterContext(conn.ContextName())
 		forced, target = k8s.ForceNamespaceScope, k8s.GetNamespaceScopeTarget()
-		promClient = prometheuspkg.GetClient()
+		adapter.promClient = connectionruntime.SetFor(conn).Metrics
 		adapter.dynamic, adapter.actionContext = conn.Dynamic(), clusterContext
 		adapter.config = conn.ConfigCopy()
 		adapter.Clients.Typed = conn.ClientInterface()
@@ -108,10 +117,12 @@ func (s *Server) cnpgReader(r *http.Request) *cnpgReadAdapter {
 	budget := boundBudget(r.Context())
 	auditConfig := getAuditConfig()
 	clients := adapter.Clients
+	promClient := adapter.promClient
 	adapter.Reader = &cnpgsvc.Reader{
 		ClusterContext: clusterContext,
 		Identity:       identity,
 		Metrics: cnpgsvc.Metrics{
+			Closed: func() bool { return promClient != nil && promClient.Closed() },
 			Connection: func(ctx context.Context) (bool, error) {
 				if promClient == nil {
 					return false, nil

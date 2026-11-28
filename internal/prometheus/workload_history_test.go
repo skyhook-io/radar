@@ -145,8 +145,9 @@ func TestHistoricalPartitionDiscoveryHasSeparateBudget(t *testing.T) {
 	}))
 	defer server.Close()
 	c := &Client{manualURL: server.URL, httpClient: server.Client()}
+	c.discoveryOnce.Do(func() { c.discoveryGate = make(chan struct{}, 1) })
 	select {
-	case discoveryGate <- struct{}{}:
+	case c.discoveryGate <- struct{}{}:
 	default:
 		t.Fatal("discovery gate busy")
 	}
@@ -157,7 +158,7 @@ func TestHistoricalPartitionDiscoveryHasSeparateBudget(t *testing.T) {
 	held := true
 	defer func() {
 		if held {
-			<-discoveryGate
+			<-c.discoveryGate
 		}
 		cancel()
 		<-done
@@ -172,7 +173,7 @@ func TestHistoricalPartitionDiscoveryHasSeparateBudget(t *testing.T) {
 		return c.flightActive
 	})
 	time.Sleep(2 * historicalPartitionProbeBudget)
-	<-discoveryGate
+	<-c.discoveryGate
 	held = false
 	<-done
 	if err != nil || got.ClusterLabels["cluster"] != "west" {

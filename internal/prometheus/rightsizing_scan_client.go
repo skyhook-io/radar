@@ -63,13 +63,13 @@ func (c *Client) newScanQuerier(ctx context.Context, at time.Time) (*scanQuerier
 	if c.retired || c.baseURL == "" {
 		return nil, errors.New("metrics connection changed")
 	}
-	transport := c.newTransportLocked(c.baseURL, c.basePath, rightsizingScanHTTPClient, 0)
+	transport := c.rawTransportLocked(c.baseURL, c.basePath, rightsizingScanHTTPClient, 0)
 	if direct, ok := transport.(*prom.HTTPTransport); ok {
 		transport = scanQueryTransport{direct}
 	} else {
 		transport = relayScanQueryTransport{transport}
 	}
-	return &scanQuerier{client: prom.NewClient(transport), at: at, conn: c.snapshotLocked()}, nil
+	return &scanQuerier{client: prom.NewClient(c.bindTransport(transport)), at: at, conn: c.snapshotLocked()}, nil
 }
 
 func (q *scanQuerier) Query(ctx context.Context, query string) (*prom.QueryResult, error) {

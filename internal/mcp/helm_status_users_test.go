@@ -94,7 +94,7 @@ metadata:
 	helm.ResetTestClient()
 	previousConfig := k8s.SetTestConfig(&rest.Config{Host: storage.URL})
 	t.Cleanup(func() { k8s.SetTestConfig(previousConfig) })
-	helm.Initialize()
+	helm.Initialize(nil)
 	t.Cleanup(helm.ResetTestClient)
 
 	devA := &pkgauth.UserPermissions{AllowedNamespaces: []string{"team-a"}}

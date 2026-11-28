@@ -25,7 +25,6 @@ import (
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/skyhook-io/radar/internal/config"
-	"github.com/skyhook-io/radar/internal/connections"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/argoapi"
 )
@@ -123,12 +122,15 @@ type appHealthEntry struct {
 // In-cluster mode cannot switch clusters, so a process-local sentinel is a
 // complete boundary. Requiring a cluster UID here would add a startup API read
 // that can fail under restricted RBAC and permanently strand env-provided tokens.
-const inClusterTokenBinding = "kcb1_incluster"
+const InClusterTokenBinding = "kcb1_incluster"
 
-// Manager holds the Argo CD connection state. Use NewManager (or the
-// package-level functions backed by the default instance).
+// Manager holds the Argo CD connection state.
 type Manager struct {
-	mu sync.Mutex
+	mu       sync.Mutex
+	lifetime context.Context
+	cancel   context.CancelFunc
+	closed   bool
+	handles  *portforward.Handles
 
 	// probeSlot holds one token while a probe runs, so probes never overlap.
 	// A channel rather than a mutex: a caller waiting for it can give up
@@ -244,30 +246,18 @@ type Manager struct {
 // NewManager builds a Manager wired to the live internal/k8s connection.
 // The k8s accessors are resolved lazily per call, so the Manager follows
 // kubeconfig context switches without a reinit step.
-func NewManager() *Manager {
+func NewConnectionManager(conn *k8s.Connection, inCluster bool, binding string) *Manager {
+	lifetime, cancel := context.WithCancel(context.Background())
 	return &Manager{
-		clusterClients: func() probeCluster {
-			conn := k8s.Current()
-			return probeCluster{conn.ClientInterface(), conn.PortForwards()}
-		},
-		inCluster:      k8s.IsInCluster,
-		contextName:    k8s.GetContextName,
-		contextBinding: k8s.ClusterSafetyBinding,
-		loadConfig:     config.Load,
+		lifetime:       lifetime,
+		cancel:         cancel,
+		handles:        &portforward.Handles{},
+		clusterClients: func() probeCluster { return probeCluster{conn.ClientInterface(), conn.PortForwards()} },
+		inCluster:      func() bool { return inCluster },
+		contextName:    conn.ContextName,
+		contextBinding: func(context.Context) string { return binding },
+		seeded:         true,
 	}
-}
-
-var defaultManager = NewManager()
-
-// SetConfig applies new connection settings on the default manager.
-func SetConfig(url, token string, insecureTLS bool, tokenIsFresh bool) {
-	defaultManager.SetConfig(url, token, insecureTLS, tokenIsFresh)
-}
-
-// RestoreConfig rolls the default manager back to a captured state, including
-// the token's source binding.
-func RestoreConfig(url, token string, insecureTLS bool, tokenContext, tokenBinding string) {
-	defaultManager.RestoreConfig(url, token, insecureTLS, tokenContext, tokenBinding)
 }
 
 // Env var names for declarative (headless / in-cluster / Cloud) provisioning.
@@ -277,38 +267,6 @@ const (
 	envArgoURL       = "RADAR_ARGOCD_URL"
 	envArgoInsecure  = "RADAR_ARGOCD_INSECURE_TLS"
 )
-
-// SeedFromEnvVars provisions the Argo CD integration from environment variables,
-// for deployments with no interactive Settings session (helm/in-cluster, Cloud
-// tunnel). RADAR_ARGOCD_TOKEN_FILE (a mounted-secret path) takes precedence over
-// the inline RADAR_ARGOCD_TOKEN — file mounts don't expose the value via
-// /proc/<pid>/environ. When a token is present the integration becomes
-// environment-managed (read-only in the UI, never persisted). Returns
-// (false, nil) when no token env is set, leaving the interactive path unchanged.
-// Must run before the server serves so the lazy config seed can't clobber it.
-func SeedFromEnvVars() (bool, error) {
-	url, token, insecure, ok, err := resolveEnvArgo(os.Getenv, os.ReadFile)
-	if err != nil {
-		// The operator set the Argo env vars but they're invalid. Mark the manager
-		// env-managed-but-errored so it fails closed (no stale disk token) and the
-		// UI can show the reason. The error is already sanitized (no token/raw URL).
-		if envArgoAttempted(os.Getenv) {
-			defaultManager.SeedFromEnvFailed(sanitizeEnvErr(err))
-		}
-		return false, err
-	}
-	if !ok {
-		// No token resolved. If env provisioning was clearly attempted (a URL/token
-		// var is set but incomplete), still fail closed rather than fall back to a
-		// stale on-disk token; a truly empty environment leaves the disk path alone.
-		if envArgoAttempted(os.Getenv) {
-			defaultManager.SeedFromEnvFailed("no token provided — set " + envArgoToken + " or " + envArgoTokenFile)
-		}
-		return false, nil
-	}
-	defaultManager.SeedFromEnv(url, token, insecure)
-	return true, nil
-}
 
 func EnvironmentConfiguration() (argoapi.Connection, bool, error) {
 	url, token, insecure, ok, err := resolveEnvArgo(os.Getenv, os.ReadFile)
@@ -396,105 +354,12 @@ func resolveEnvArgo(getenv func(string) string, readFile func(string) ([]byte, e
 
 func validateEnvArgoURL(raw string) error { return argoapi.ValidateServerURL(raw) }
 
-// SeedFromEnv provisions the default manager from an already-resolved
-// environment token (see SeedFromEnvVars).
-func SeedFromEnv(url, token string, insecureTLS bool) {
-	defaultManager.SeedFromEnv(url, token, insecureTLS)
-}
-
-// SeedFromEnvFailed marks the default manager env-managed-but-errored (see the
-// Manager method) — used when env provisioning was attempted but didn't resolve.
-func SeedFromEnvFailed(reason string) { defaultManager.SeedFromEnvFailed(reason) }
-
-// IsEnvManaged reports whether the token was provisioned from the environment.
-func IsEnvManaged() bool { return defaultManager.IsEnvManaged() }
-
-// EnvManagedConfig returns the effective env-managed URL + TLS mode (ok=false when
-// not env-managed). The token is never returned.
-func EnvManagedConfig() (url string, insecureTLS bool, ok bool) {
-	return defaultManager.EnvManagedConfig()
-}
-
-// EnvManagedError returns the sanitized reason environment provisioning failed
-// ("" when it succeeded or isn't env-managed).
-func EnvManagedError() string { return defaultManager.EnvManagedError() }
-
 // ValidateServerURL strictly validates an argocd-server URL: http(s) scheme, a
 // host, and no embedded userinfo / query / fragment. Used for BOTH the env input
 // and the Settings PUT so a credential-bearing URL (e.g. https://user:pass@host
 // or ?token=…) can't be persisted and then surfaced in /api/config, the status
 // address, or logs. Returns a UI-safe error (never echoes the raw input).
 func ValidateServerURL(raw string) error { return validateEnvArgoURL(raw) }
-
-// IsConfigured reports whether the default manager has connection settings.
-func IsConfigured() bool { return defaultManager.IsConfigured() }
-
-// AnonymousReadAllowed reports whether the default manager reads argocd-server
-// without a token and the install answers.
-func AnonymousReadAllowed() bool { return defaultManager.AnonymousReadAllowed() }
-
-// TokenSet reports whether the default manager has a token configured.
-func TokenSet() bool { return defaultManager.TokenSet() }
-
-// LastProbeError is the default manager's most recent probe failure, if any.
-func LastProbeError() error { return defaultManager.LastProbeError() }
-
-// TokenContext returns the readable context recorded with the current token.
-func TokenContext() string { return defaultManager.TokenContext() }
-
-// TokenBinding returns the source identity the current token is bound to.
-func TokenBinding() string { return defaultManager.TokenBinding() }
-
-// TokenBindingUpgradeRequired reports whether an auto-discovery token has only
-// a name-based stamp and must be explicitly re-confirmed before use.
-func TokenBindingUpgradeRequired() bool { return defaultManager.TokenBindingUpgradeRequired() }
-
-// Reset clears the default manager's connection state (used on context switch).
-func Reset() { defaultManager.Reset() }
-
-// Get returns the default manager's connected client, or (nil, false).
-func Get() (*argoapi.Client, bool) { return defaultManager.Get() }
-
-// Probe resolves and verifies the default manager's connection.
-func Probe(ctx context.Context) error { return defaultManager.Probe(ctx) }
-
-// Prewarm starts the default manager's connect in the background; see
-// Manager.Prewarm.
-func Prewarm() { defaultManager.Prewarm() }
-
-// Connecting reports that the default manager is connecting in the
-// background with no failure to report yet.
-func Connecting() bool { return defaultManager.Connecting() }
-
-// Retrying reports that the default manager is retrying a connect that may
-// pass on its own.
-func Retrying() bool { return defaultManager.Retrying() }
-
-// LastReadError is why the default manager's last read through its live
-// client failed, if it did.
-func LastReadError() error { return defaultManager.LastReadError() }
-
-// Address returns the default manager's resolved base URL ("" when not connected).
-func Address() string { return defaultManager.Address() }
-
-// ManagedResourcesCached fetches managed resources via the default manager.
-func ManagedResourcesCached(ctx context.Context, q argoapi.ManagedResourcesQuery) ([]argoapi.ResourceDiff, error) {
-	return defaultManager.ManagedResourcesCached(ctx, q)
-}
-
-func RevisionMetadataCached(ctx context.Context, q argoapi.RevisionMetadataQuery) (*argoapi.RevisionMetadata, error) {
-	return defaultManager.RevisionMetadataCached(ctx, q)
-}
-
-// ApplicationHealthCached fetches an Application's per-resource health via the
-// default manager (see Manager.ApplicationHealthCached).
-func ApplicationHealthCached(ctx context.Context, q argoapi.ApplicationQuery) (*argoapi.ApplicationHealth, error) {
-	return defaultManager.ApplicationHealthCached(ctx, q)
-}
-
-func RepositoriesCached() []argoapi.Repository {
-	return defaultManager.RepositoriesCached()
-}
 
 // TokenFromCLI reads the auth token from the user's Argo CD CLI config
 // (~/.config/argocd/config) for the given server URL. Empty serverURL uses
@@ -547,27 +412,14 @@ func (m *Manager) SetConfig(url, token string, insecureTLS bool, tokenIsFresh bo
 	m.bumpAndReset()
 }
 
-// SeedFromEnv provisions the manager from an environment-provided token. Like a
-// fresh SetConfig it binds the token to the current source (so the
-// auto-discovery cross-cluster guard accepts it for the cluster it's deployed
-// in), and additionally marks the integration environment-managed: the apply
-// handler refuses UI changes and the token is never written to disk. Runs at
-// startup before the first Get, so the lazy config seed won't override it.
-func (m *Manager) SeedFromEnv(url, token string, insecureTLS bool) {
-	normalizedURL := strings.TrimRight(strings.TrimSpace(url), "/")
-	tokenContext := ""
-	tokenBinding := ""
-	if normalizedURL == "" && token != "" {
-		tokenBinding = m.contextBindingForConfig()
-		if tokenBinding != "" {
-			tokenContext = m.currentContextName()
-		}
-	}
+// SeedFromEnv uses the binding captured at launch, since a replacement manager
+// can belong to a different cluster. Explicit URLs use the origin guard.
+func (m *Manager) SeedFromEnv(url, token string, insecureTLS bool, tokenContext, tokenBinding string) {
 	m.mu.Lock()
 	m.seeded = true
 	m.envManaged = true
 	m.envError = ""
-	m.manualURL = normalizedURL
+	m.manualURL = strings.TrimRight(strings.TrimSpace(url), "/")
 	m.token = token
 	m.insecureTLS = insecureTLS
 	m.tokenContext = tokenContext
@@ -594,38 +446,6 @@ func (m *Manager) SeedFromEnvFailed(reason string) {
 	m.tokenContext = ""
 	m.tokenBinding = ""
 	m.bumpAndReset()
-}
-
-// IsEnvManaged reports whether the token was provisioned from the environment.
-func (m *Manager) IsEnvManaged() bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.ensureSeededLocked()
-	return m.envManaged
-}
-
-// EnvManagedConfig returns the effective URL + TLS mode when the integration is
-// environment-managed, so callers (e.g. GET /api/config) can present the real
-// endpoint instead of the stale on-disk values, which env-managed mode ignores.
-// ok is false when not env-managed. The token is never returned.
-func (m *Manager) EnvManagedConfig() (url string, insecureTLS bool, ok bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.ensureSeededLocked()
-	if !m.envManaged {
-		return "", false, false
-	}
-	return m.manualURL, m.insecureTLS, true
-}
-
-// EnvManagedError returns the sanitized reason environment provisioning failed,
-// or "" when it succeeded (or isn't env-managed). The UI surfaces this so a
-// misconfigured declarative credential isn't invisible behind one startup log.
-func (m *Manager) EnvManagedError() string {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.ensureSeededLocked()
-	return m.envError
 }
 
 // RestoreConfig rolls the manager back to a previously-captured state, INCLUDING
@@ -672,7 +492,7 @@ func (m *Manager) currentContextName() string {
 
 func (m *Manager) currentContextBinding(ctx context.Context) string {
 	if m.inCluster != nil && m.inCluster() {
-		return inClusterTokenBinding
+		return InClusterTokenBinding
 	}
 	if m.contextBinding == nil {
 		return ""
@@ -713,6 +533,26 @@ func (m *Manager) bumpAndReset() {
 func (m *Manager) Reset() {
 	m.mu.Lock()
 	m.bumpAndReset()
+}
+
+func (m *Manager) Closed() bool { return m != nil && m.lifetime != nil && m.lifetime.Err() != nil }
+
+func (m *Manager) Close() error {
+	if m == nil {
+		return nil
+	}
+	if m.cancel != nil {
+		m.cancel()
+		m.handles.Close()
+	}
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return nil
+	}
+	m.closed = true
+	m.bumpAndReset()
+	return nil
 }
 
 func (m *Manager) dropConnectionLocked() activeForward {
@@ -840,6 +680,9 @@ func (m *Manager) probingLocked() bool {
 // ApplicationHealthCached), and so does a re-check, which only runs once a
 // client exists. Caller must hold m.mu.
 func (m *Manager) startBackgroundProbeLocked(allowUnconfigured bool) {
+	if m.closed {
+		return
+	}
 	m.ensureSeededLocked()
 	if !allowUnconfigured && m.manualURL == "" && m.token == "" {
 		return
@@ -855,20 +698,8 @@ func (m *Manager) startBackgroundProbeLocked(allowUnconfigured bool) {
 func (m *Manager) runBackgroundProbe(run *backgroundProbe) {
 	// Like Probe, reload this context's settings first, outside mu: a reload
 	// can call SetConfig or Reset.
-	if err := m.refreshSettings(); err != nil {
-		// Not throttled: a reload fails while Kubernetes is disconnected or a
-		// context switch is under way, and the next read should try again
-		// as soon as that is over. Reads hit the same failure in their own
-		// reload and report it.
-		m.mu.Lock()
-		if m.background == run {
-			m.background = nil
-		}
-		m.mu.Unlock()
-		return
-	}
 	m.mu.Lock()
-	if m.background != run {
+	if m.closed || m.background != run {
 		// Another probe of newer settings replaced this one during the reload.
 		m.mu.Unlock()
 		return
@@ -982,18 +813,6 @@ func (m *Manager) scheduleRetryLocked(allowUnconfigured bool) {
 	})
 }
 
-// refreshSettings reloads the current context's Argo CD settings before a
-// probe, and refuses while Kubernetes is not connected or a context switch is
-// in progress. Only the process-wide manager is wired to them. Must be called
-// without mu.
-func (m *Manager) refreshSettings() error {
-	if m != defaultManager {
-		return nil
-	}
-	return connections.Refresh(config.IntegrationArgoCD)
-}
-
-// Address returns the resolved base URL, or "" when not connected.
 func (m *Manager) Address() string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1005,9 +824,8 @@ func (m *Manager) Address() string {
 // session/userinfo. Errors wrap ErrUnreachable or ErrTokenInvalid so callers
 // can map them to distinct messages.
 func (m *Manager) Probe(ctx context.Context) error {
-	if err := m.refreshSettings(); err != nil {
-		return err
-	}
+	ctx, cancel := portforward.WithLifetime(ctx, m.lifetime)
+	defer cancel()
 	m.mu.Lock()
 	gen := m.generation
 	m.mu.Unlock()
@@ -1229,7 +1047,7 @@ func (m *Manager) probeHoldingSlot(ctx context.Context) error {
 		unused = newForward
 	}
 	if newConnection {
-		m.client = newClient(url, snap.token, snap.insecureTLS)
+		m.client = m.newClient(url, snap.token, snap.insecureTLS)
 		m.clientAnonymous = snap.token == ""
 		m.lastReadErr = nil
 	}
@@ -1325,6 +1143,9 @@ func (m *Manager) connectedClient(allowUnconfigured bool) (*argoapi.Client, uint
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	gen := m.generation
+	if m.closed {
+		return nil, gen, portforward.ErrClosed
+	}
 	m.lastDemand = time.Now()
 	m.lastRead = m.lastDemand
 	if m.client != nil {
@@ -1395,11 +1216,11 @@ func (m *Manager) noteReadLocked(gen uint64, client *argoapi.Client, err error) 
 // again later: the read got no usable HTTP answer, or a retry of the shared
 // connection is under way. A certificate Radar can't verify needs the user to
 // fix the configuration, so it never counts, even while a retry runs.
-func ReadMayRecover(err error) bool {
+func (m *Manager) ReadMayRecover(err error) bool {
 	if isTLSError(err) {
 		return false
 	}
-	return isTransportFailure(err) || Retrying()
+	return isTransportFailure(err) || m.Retrying()
 }
 
 // isTransportFailure reports a read that got no usable HTTP answer: a
@@ -1422,11 +1243,6 @@ func isTransportFailure(err error) bool {
 // per-resource filters bypass the cache — mixing filtered results into the
 // app-level key would poison it for unfiltered callers.
 func (m *Manager) ManagedResourcesCached(ctx context.Context, q argoapi.ManagedResourcesQuery) ([]argoapi.ResourceDiff, error) {
-	if m == defaultManager {
-		if err := connections.Refresh(config.IntegrationArgoCD); err != nil {
-			return nil, err
-		}
-	}
 	filtered := q.Group != "" || q.Kind != "" || q.Namespace != "" || q.Name != ""
 	key := q.AppNamespace + "\x00" + q.AppName
 
@@ -1494,11 +1310,6 @@ func (m *Manager) ManagedResourcesCached(ctx context.Context, q argoapi.ManagedR
 // so an install that says no is asked again at most every
 // probeRetryInterval.
 func (m *Manager) ApplicationHealthCached(ctx context.Context, q argoapi.ApplicationQuery) (*argoapi.ApplicationHealth, error) {
-	if m == defaultManager {
-		if err := connections.Refresh(config.IntegrationArgoCD); err != nil {
-			return nil, err
-		}
-	}
 	key := q.AppNamespace + "\x00" + q.AppName
 	m.mu.Lock()
 	if e, ok := m.appHealthCache[key]; ok && time.Now().Before(e.expires) {
@@ -1518,6 +1329,9 @@ func (m *Manager) ApplicationHealthCached(ctx context.Context, q argoapi.Applica
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.closed {
+		return nil, portforward.ErrClosed
+	}
 	// A SetConfig/Reset during the fetch bumps the generation: the answer
 	// (or the failure) is for a superseded connection and must neither be
 	// served nor cached under the new one — a changed token against the same
@@ -1593,11 +1407,6 @@ func fetchApplicationHealth(ctx context.Context, client *argoapi.Client, q argoa
 // answers ErrConnecting. The cache is cleared on reconnect / context switch
 // (dropConnectionLocked), so it never serves another cluster's data.
 func (m *Manager) RevisionMetadataCached(ctx context.Context, q argoapi.RevisionMetadataQuery) (*argoapi.RevisionMetadata, error) {
-	if m == defaultManager {
-		if err := connections.Refresh(config.IntegrationArgoCD); err != nil {
-			return nil, err
-		}
-	}
 	key := q.AppNamespace + "\x00" + q.AppName + "\x00" + q.SourceIndex + "\x00" + q.Revision
 
 	m.mu.Lock()
@@ -1659,11 +1468,6 @@ func (m *Manager) RevisionMetadataCached(ctx context.Context, q argoapi.Revision
 // the data appears at most one poll late. Stale is always same-cluster (the
 // cache is cleared on reconnect/context switch).
 func (m *Manager) RepositoriesCached() []argoapi.Repository {
-	if m == defaultManager {
-		if err := connections.Refresh(config.IntegrationArgoCD); err != nil {
-			return nil
-		}
-	}
 	m.mu.Lock()
 	repos := m.repoCache
 	fresh := repos != nil && time.Now().Before(m.repoCacheExpires)
@@ -1909,6 +1713,52 @@ func newClient(url, token string, insecureTLS bool) *argoapi.Client {
 	})
 }
 
+func (m *Manager) newClient(url, token string, insecureTLS bool) *argoapi.Client {
+	if m.lifetime == nil {
+		return newClient(url, token, insecureTLS)
+	}
+	transport := http.DefaultTransport
+	if insecureTLS || token == "" {
+		pool := http.DefaultTransport.(*http.Transport).Clone()
+		if pool.TLSClientConfig == nil {
+			pool.TLSClientConfig = &tls.Config{}
+		}
+		pool.TLSClientConfig.InsecureSkipVerify = true
+		transport = pool
+	}
+	return argoapi.New(argoapi.Options{
+		BaseURL:    url,
+		Token:      token,
+		HTTPClient: &http.Client{Timeout: 15 * time.Second, Transport: memberTransport{transport, m.lifetime}},
+	})
+}
+
+type memberTransport struct {
+	http.RoundTripper
+	lifetime context.Context
+}
+
+func (t memberTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	ctx, release := portforward.WithLifetime(r.Context(), t.lifetime)
+	response, err := t.RoundTripper.RoundTrip(r.WithContext(ctx))
+	if err != nil {
+		release()
+		return nil, err
+	}
+	response.Body = memberResponse{response.Body, release}
+	return response, nil
+}
+
+type memberResponse struct {
+	io.ReadCloser
+	release context.CancelFunc
+}
+
+func (r memberResponse) Close() error {
+	defer r.release()
+	return r.ReadCloser.Close()
+}
+
 // ensureSeededLocked adopts the persisted config on first use, so settings
 // saved by a previous run apply without explicit startup wiring.
 func (m *Manager) ensureSeededLocked() {
@@ -1964,7 +1814,8 @@ func redactToken(s, token string) string {
 // s. Exposed so the HTTP layer can give its Argo-error logs the same guarantee
 // the manager's own logs have, instead of relying on the token never landing in
 // an upstream error body.
-func RedactToken(s string) string { return defaultManager.redactSelfToken(s) }
+
+func (m *Manager) RedactToken(s string) string { return m.redactSelfToken(s) }
 
 func (m *Manager) redactSelfToken(s string) string {
 	m.mu.Lock()

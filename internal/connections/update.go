@@ -45,6 +45,7 @@ type Pending struct {
 	Target         k8s.ProfileTarget
 	Kind           config.Integration
 	Candidate      Bundle
+	Selected       map[config.Integration]Selection
 	Probe          bool
 	file           config.ClusterProfiles
 	revision       string
@@ -267,6 +268,9 @@ func (p *Resolver) Prepare(target k8s.ProfileTarget, req Update) (Pending, error
 		return pending, err
 	}
 	pending.file = next
+	if !metadata {
+		pending.Selected = p.resolveAll(next, revision, nil, target, false)
+	}
 	return pending, nil
 }
 

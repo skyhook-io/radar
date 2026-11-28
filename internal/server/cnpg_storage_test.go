@@ -20,7 +20,6 @@ import (
 	"github.com/skyhook-io/radar/internal/auth"
 	cnpgsvc "github.com/skyhook-io/radar/internal/cnpg"
 	"github.com/skyhook-io/radar/internal/k8s"
-	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 )
 
 func cnpgTestPVC(ns, name, cluster, instance, role string, owner *metav1.OwnerReference, requested, capacity string) *corev1.PersistentVolumeClaim {
@@ -197,13 +196,8 @@ func usePrometheusVolumeStatsFrom(t *testing.T, used, capacity map[string]float6
 			_, _ = io.WriteString(w, `{"status":"success","data":{"resultType":"vector","result":[]}}`)
 		}
 	}))
-	prometheuspkg.Initialize(nil, nil, "test", nil)
-	prometheuspkg.SetManualURL(srv.URL)
-	t.Cleanup(func() {
-		srv.Close()
-		prometheuspkg.Reset()
-		prometheuspkg.Initialize(nil, nil, "", nil)
-	})
+	installTestMetrics(t, srv.URL)
+	t.Cleanup(srv.Close)
 }
 
 func cnpgStorageInstances(t *testing.T, got cnpgsvc.CNPGClusterStorageResponse) map[string]cnpgsvc.CNPGStorageInstance {
@@ -296,7 +290,7 @@ func TestCNPGClusterStorage_VolumesWALAndUsage(t *testing.T) {
 func TestCNPGClusterStorage_NoPrometheusIsNeverZero(t *testing.T) {
 	seedCNPGStorageCluster(t, "pgst2")
 	useCNPGProxyAPIServer(t, cnpgHealthyInstances)
-	prometheuspkg.Reset()
+	t.Cleanup(k8s.SetTestIntegrations(nil))
 
 	status, got, body := getCNPGStorage(t, "/api/cnpg/clusters/pgst2/pg-orders/storage")
 	if status != http.StatusOK {

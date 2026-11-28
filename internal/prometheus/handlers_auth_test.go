@@ -1,6 +1,7 @@
 package prometheus
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -32,6 +33,7 @@ const (
 )
 
 type authFakeProm struct {
+	client      *Client
 	mu          sync.Mutex
 	rangeParams []url.Values
 	queryCalls  int
@@ -103,14 +105,11 @@ func setupAuthFakeProm(t *testing.T) *authFakeProm {
 	t.Helper()
 	f := &authFakeProm{}
 	srv := httptest.NewServer(f)
-	Initialize(nil, nil, "auth-test", nil)
-	SetManualURL(srv.URL)
 	seedScopeCache(t)
-	t.Cleanup(func() {
-		srv.Close()
-		Reset()
-		Initialize(nil, nil, "", nil)
-	})
+	f.client = NewClient(nil, nil, "auth-test", nil, false, k8s.GetResourceCache())
+	f.client.Configure(srv.URL, nil)
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { _ = f.client.Close() })
 	return f
 }
 
@@ -137,10 +136,19 @@ func seedScopeCache(t *testing.T) {
 	t.Cleanup(k8s.ResetTestState)
 }
 
-func metricsRouter() http.Handler {
+func metricsRouter(client *Client) http.Handler {
 	r := chi.NewRouter()
-	RegisterRoutes(r)
+	testRoutes(client).RegisterRoutes(r)
 	return r
+}
+
+func testRoutes(client *Client) Routes {
+	return Routes{Capture: func(context.Context) (*Client, error) {
+		if client == nil {
+			return nil, ErrPrometheusUnavailable
+		}
+		return client, nil
+	}}
 }
 
 func getMetrics(t *testing.T, h http.Handler, path string) *httptest.ResponseRecorder {
@@ -195,7 +203,7 @@ var metricsMatrix = []struct {
 func TestMetricsRoutes_NoGatePassesThrough(t *testing.T) {
 	SetAuthGate(nil)
 	f := setupAuthFakeProm(t)
-	h := metricsRouter()
+	h := metricsRouter(f.client)
 
 	for _, row := range metricsMatrix {
 		t.Run(row.name, func(t *testing.T) {
@@ -211,8 +219,8 @@ func TestMetricsRoutes_NoGatePassesThrough(t *testing.T) {
 }
 
 func TestMetricsRoutes_AuthorizedUserIsAskedTheRightTuple(t *testing.T) {
-	setupAuthFakeProm(t)
-	h := metricsRouter()
+	f := setupAuthFakeProm(t)
+	h := metricsRouter(f.client)
 
 	for _, row := range metricsMatrix {
 		t.Run(row.name, func(t *testing.T) {
@@ -236,7 +244,7 @@ func TestMetricsRoutes_AuthorizedUserIsAskedTheRightTuple(t *testing.T) {
 // surface is refused before Prometheus is touched.
 func TestMetricsRoutes_NamespaceScopedUser(t *testing.T) {
 	f := setupAuthFakeProm(t)
-	h := metricsRouter()
+	h := metricsRouter(f.client)
 	recordingGate(t, func(c gateCall) bool { return c.namespace == "alpha" })
 
 	allowed := []string{
@@ -289,7 +297,7 @@ func TestMetricsRoutes_NamespaceScopedUser(t *testing.T) {
 func TestHandleHPAMetrics_QueriesBothReplicaSeries(t *testing.T) {
 	SetAuthGate(nil)
 	f := setupAuthFakeProm(t)
-	h := metricsRouter()
+	h := metricsRouter(f.client)
 
 	rec := getMetrics(t, h, `/prometheus/hpa/alpha/web"x?range=6h`)
 	if rec.Code != http.StatusOK {
@@ -326,7 +334,7 @@ func TestHandleHPAMetrics_QueriesBothReplicaSeries(t *testing.T) {
 func TestHandleRawQuery_OversizedResultIsSummarized(t *testing.T) {
 	SetAuthGate(nil)
 	f := setupAuthFakeProm(t)
-	h := metricsRouter()
+	h := metricsRouter(f.client)
 	t.Setenv("RADAR_MCP_PROM_MAX_RESPONSE_BYTES", "200")
 
 	var b strings.Builder
@@ -371,8 +379,8 @@ func TestHandleRawQuery_OversizedResultIsSummarized(t *testing.T) {
 
 func TestHandleRawQuery_SmallResultIsReturnedWhole(t *testing.T) {
 	SetAuthGate(nil)
-	setupAuthFakeProm(t)
-	h := metricsRouter()
+	f := setupAuthFakeProm(t)
+	h := metricsRouter(f.client)
 
 	rec := getMetrics(t, h, "/prometheus/query?query=up&type=instant")
 	if rec.Code != http.StatusOK {
@@ -416,7 +424,7 @@ func TestMetricsKindResourceCoversSupportedKinds(t *testing.T) {
 func TestResourceMetricsNamesTheWorkloadsOwnPods(t *testing.T) {
 	SetAuthGate(nil)
 	f := setupAuthFakeProm(t)
-	h := metricsRouter()
+	h := metricsRouter(f.client)
 
 	rec := getMetrics(t, h, "/prometheus/resources/Deployment/alpha/web?category=cpu")
 	if rec.Code != http.StatusOK {
@@ -451,7 +459,7 @@ func TestResourceMetricsMembershipDoesNotDependOnPrometheus(t *testing.T) {
 	SetAuthGate(nil)
 	f := setupAuthFakeProm(t)
 	f.queryBody = `{"status":"success","data":{"resultType":"vector","result":[]}}`
-	h := metricsRouter()
+	h := metricsRouter(f.client)
 
 	rec := getMetrics(t, h, "/prometheus/resources/Deployment/alpha/web?category=cpu")
 	if rec.Code != http.StatusOK {
@@ -477,7 +485,7 @@ func TestResourceMetricsMembershipDoesNotDependOnPrometheus(t *testing.T) {
 // tell them apart.
 func TestResourceMetricsSeparatesDenialFromUnreadiness(t *testing.T) {
 	SetAuthGate(nil)
-	setupAuthFakeProm(t)
+	f := setupAuthFakeProm(t)
 	// Pods are watched in another namespace only, so alpha cannot be answered
 	// for — the shape probe-based RBAC gating produces on a denied
 	// cluster-wide list.
@@ -492,8 +500,11 @@ func TestResourceMetricsSeparatesDenialFromUnreadiness(t *testing.T) {
 		t.Fatalf("InitScopedTestResourceCache: %v", err)
 	}
 	t.Cleanup(k8s.ResetTestState)
+	url, headers := f.client.CurrentConfig()
+	client := testClient(t, "auth-test", k8s.GetResourceCache())
+	client.Configure(url, headers)
 
-	rec := getMetrics(t, metricsRouter(), "/prometheus/resources/Deployment/alpha/web?category=cpu")
+	rec := getMetrics(t, metricsRouter(client), "/prometheus/resources/Deployment/alpha/web?category=cpu")
 	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "pods") {
 		t.Fatalf("status = %d, want 403 naming the pod scope for a namespace the cache cannot list; body=%s", rec.Code, rec.Body.String())
 	}
@@ -503,7 +514,7 @@ func TestResourceMetricsSeparatesDenialFromUnreadiness(t *testing.T) {
 // a membership failure of its own, not an empty workload.
 func TestResourceMetricsRefusesAnUnwatchedRootKind(t *testing.T) {
 	SetAuthGate(nil)
-	setupAuthFakeProm(t)
+	f := setupAuthFakeProm(t)
 	if err := k8s.InitScopedTestResourceCache(
 		fake.NewClientset(),
 		map[string]k8score.ResourceScope{
@@ -514,8 +525,11 @@ func TestResourceMetricsRefusesAnUnwatchedRootKind(t *testing.T) {
 		t.Fatalf("InitScopedTestResourceCache: %v", err)
 	}
 	t.Cleanup(k8s.ResetTestState)
+	url, headers := f.client.CurrentConfig()
+	client := testClient(t, "auth-test", k8s.GetResourceCache())
+	client.Configure(url, headers)
 
-	rec := getMetrics(t, metricsRouter(), "/prometheus/resources/Deployment/alpha/web?category=cpu")
+	rec := getMetrics(t, metricsRouter(client), "/prometheus/resources/Deployment/alpha/web?category=cpu")
 	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "deployments") {
 		t.Fatalf("status = %d, want 403 naming the unwatched root kind; body=%s", rec.Code, rec.Body.String())
 	}
@@ -526,7 +540,7 @@ func TestResourceMetricsRefusesAnUnwatchedRootKind(t *testing.T) {
 func TestResourceMetricsChartsNothingForAWorkloadWithNoPods(t *testing.T) {
 	SetAuthGate(nil)
 	f := setupAuthFakeProm(t)
-	h := metricsRouter()
+	h := metricsRouter(f.client)
 
 	f.queryBody = `{"status":"success","data":{"resultType":"vector","result":[]}}`
 	rec := getMetrics(t, h, "/prometheus/resources/Deployment/alpha/ghost?category=cpu")

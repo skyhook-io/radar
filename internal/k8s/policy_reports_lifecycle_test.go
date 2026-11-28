@@ -201,13 +201,13 @@ func TestReadmissionKeepsPolicyReportIndex(t *testing.T) {
 	clearTestConnectionIdentity()
 	conn, _ := installPolicyReportCache(t)
 	conn.warmupPolicyReports()
-	SetConnectionStatus(ConnectionStatus{State: StateConnected})
+	PublishTestConnectionStatus(ConnectionStatus{State: StateConnected})
 	first, idx, status := ServingConnectionID(), GetPolicyReportIndex(), GetPolicyReportStatus()
 	if idx == nil || status.Status != KyvernoStatusReady {
 		t.Fatalf("warmup did not publish the initial index: %+v", status)
 	}
 	RetireServingConnection()
-	SetConnectionStatus(ConnectionStatus{State: StateConnected})
+	PublishTestConnectionStatus(ConnectionStatus{State: StateConnected})
 	if second := ServingConnectionID(); second == "" || second == first || GetPolicyReportIndex() != idx || !reflect.DeepEqual(GetPolicyReportStatus(), status) {
 		t.Fatal("re-admission did not keep the index and status under a new ID")
 	}

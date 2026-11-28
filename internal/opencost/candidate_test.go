@@ -52,7 +52,7 @@ func TestKubecostCandidateRequiresClusterData(t *testing.T) {
 				w.Write([]byte(tc.body))
 			}))
 			defer server.Close()
-			probe, err := PrepareCandidate(ManagerConfig{Source: SourceKubecost, URL: server.URL, APIKey: "candidate-key", ClusterID: "test"})
+			probe, err := PrepareCandidateFor(k8s.Current(), k8s.IsInCluster(), ManagerConfig{Source: SourceKubecost, URL: server.URL, APIKey: "candidate-key", ClusterID: "test"})
 			if err == nil {
 				err = probe(context.Background())
 			}
@@ -133,7 +133,7 @@ func TestFailedKubecostProbeAfterSwitchKeepsReplacementForward(t *testing.T) {
 	}
 	bConn := probeB()
 	k8s.RetireServingConnection()
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "b"})
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "b"})
 	if !bConn.lease.alive() || k8s.Current().PortForwards() != b.forwards {
 		t.Fatal("readmission discarded B's live tunnel")
 	}
@@ -177,8 +177,8 @@ func TestKubecostReselectionReplacesRejectedTunnel(t *testing.T) {
 		replacement(w, r)
 	})
 	installLocalKubecostTestConnection(t, cfg)
-	prometheuspkg.Initialize(fake.NewSimpleClientset(), cfg, "ctx", nil)
-	t.Cleanup(prometheuspkg.Retire)
+	client := prometheuspkg.NewClient(fake.NewSimpleClientset(), cfg, "ctx", nil, false, nil)
+	t.Cleanup(func() { _ = client.Close() })
 
 	m := &Manager{config: ManagerConfig{Source: SourceAuto, ClusterID: "test", ClusterIDContext: "ctx"}}
 	t.Cleanup(m.Reset)

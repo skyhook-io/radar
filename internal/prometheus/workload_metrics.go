@@ -53,7 +53,7 @@ type workloadMetricScope struct {
 	Reason string `json:"reason,omitempty"`
 }
 
-func handleWorkloadMetrics(w http.ResponseWriter, r *http.Request) {
+func (h Routes) handleWorkloadMetrics(w http.ResponseWriter, r *http.Request) {
 	if !k8s.IsConnected() {
 		writeError(w, http.StatusServiceUnavailable, "Not connected to cluster")
 		return
@@ -73,15 +73,15 @@ func handleWorkloadMetrics(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "Unsupported request source; use beyla or istio, or omit source for automatic selection.")
 		return
 	}
-	client, connectionErr := ClientForOperation()
+	client, connectionErr := h.Capture(r.Context())
 	if connectionErr != nil {
 		writeError(w, http.StatusServiceUnavailable, connectionErr.Error())
 		return
 	}
 	generation := client.DiscoveryGeneration()
-	epoch := client.backendEpoch()
+	epoch := client.BackendEpoch()
 	config, job, configured := client.workloadMetricsConfig()
-	cache := k8s.GetResourceCache()
+	cache := client.cache
 	if cache == nil {
 		writeError(w, http.StatusServiceUnavailable, "cluster cache not ready")
 		return
@@ -117,14 +117,17 @@ func handleWorkloadMetrics(w http.ResponseWriter, r *http.Request) {
 				// The optional reader exhausted our budget. Return the conventional answer.
 				g = nil
 			} else if err != nil {
-				writeChartError(w, err)
+				client.writeChartFailure(w, r.Context(), err)
 				return
 			}
 		}
 		if g != nil && g.fallback {
 			mergeGKEResources(ctx, g, &resp, scope, start, end, step)
 		}
-		if (g != nil && g != client.gkeChartStore()) || client != GetClient() || generation != client.DiscoveryGeneration() || epoch != client.backendEpoch() {
+		if client.writeChartFailure(w, r.Context(), nil) {
+			return
+		}
+		if (g != nil && g != client.gkeChartStore()) || generation != client.DiscoveryGeneration() || epoch != client.BackendEpoch() {
 			writeError(w, http.StatusConflict, "metrics connection changed; retry the request")
 			return
 		}

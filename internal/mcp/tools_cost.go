@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,12 +12,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/connectionruntime"
+
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/skyhook-io/radar/internal/capacity"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/opencost"
-	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	pkgopencost "github.com/skyhook-io/radar/pkg/opencost"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -282,9 +284,14 @@ func handleGetCost(ctx context.Context, _ *mcp.CallToolRequest, input getCostInp
 		return nil, nil, errors.New("kind and name go together — pass both to target one workload, or neither to rank the namespace's top spenders")
 	}
 
-	resp, err := costView(ctx, input, view, limit)
+	ctx = k8s.CaptureConnection(ctx)
+	set := connectionruntime.Capture(ctx)
+	resp, err := costView(ctx, set, input, view, limit)
 	if err != nil {
 		return nil, nil, err
+	}
+	if set.Cost.Closed() && resp.Reason != pkgopencost.ReasonAccessDenied {
+		return nil, nil, errors.New(opencost.ConnectionClosedMessage)
 	}
 	return toJSONResult(costResponseForDeadline(ctx, resp, view, input))
 }
@@ -305,46 +312,46 @@ func costResponseForDeadline(ctx context.Context, resp costResponse, view string
 		View: view, Namespace: input.Namespace, Range: input.Range,
 		Available: false, Reason: reasonCostDeadlineExceeded,
 		Remediation: costRemediation(reasonCostDeadlineExceeded),
-		Currency:    opencost.ResolveCurrency(),
+		Currency:    cmp.Or(resp.Currency, pkgopencost.DefaultCurrency),
 	}
 }
 
-func costView(ctx context.Context, input getCostInput, view string, limit int) (costResponse, error) {
+func costView(ctx context.Context, set connectionruntime.Set, input getCostInput, view string, limit int) (costResponse, error) {
 	switch view {
 	case "summary":
-		return costSummaryView(ctx, input, limit)
+		return costSummaryView(ctx, set, input, limit)
 	case "workloads":
-		return costWorkloadsView(ctx, input, limit)
+		return costWorkloadsView(ctx, set, input, limit)
 	case "nodes":
 		if strings.TrimSpace(input.Namespace) != "" {
 			return costResponse{}, fmt.Errorf("view=nodes is cluster-wide and takes no namespace — use view=summary with a namespace, or view=workloads, for namespace-scoped spend")
 		}
-		return costNodesView(ctx, input.Name, limit)
+		return costNodesView(ctx, set, input.Name, limit)
 	case "trend":
 		if !pkgopencost.SupportedTrendRange(input.Range) {
 			return costResponse{}, fmt.Errorf("unsupported range %q — use 6h, 24h (default), or 7d; anything else would silently return 24h", input.Range)
 		}
-		return costTrendView(ctx, input)
+		return costTrendView(ctx, set, input)
 	default:
 		return costResponse{}, fmt.Errorf("unknown view %q — use summary (cluster totals + per-namespace), workloads (one namespace, requires namespace), nodes, or trend", input.View)
 	}
 }
 
-func costSummaryView(ctx context.Context, input getCostInput, limit int) (costResponse, error) {
+func costSummaryView(ctx context.Context, set connectionruntime.Set, input getCostInput, limit int) (costResponse, error) {
 	base := costResponse{View: "summary", Namespace: input.Namespace}
 
 	requested := requestedNamespaces(input.Namespace)
 	allowed := scopedNamespacesForUser(ctx, requested)
 	if allowed != nil && len(allowed) == 0 {
-		return base.unavailable(deniedScopeReason(ctx, requested), opencost.ResolveCurrency(), ""), nil
+		return base.unavailable(deniedScopeReason(ctx, requested), set.Currency.Resolve(), ""), nil
 	}
 
 	// Selected() first on the success path: currency detection consults the
 	// selected source. The denial paths above resolve it directly — an
 	// explicit --opencost-currency override short-circuits detection, and the
 	// undetectable cases return the default without caching it.
-	connection, err := opencost.Selected(ctx)
-	currency := opencost.ResolveCurrency()
+	connection, err := set.Cost.Selected(ctx)
+	currency := set.Currency.Resolve()
 	if err != nil {
 		return base.unavailable(opencost.ConnectionFailureReason(err), currency, ""), nil
 	}
@@ -359,7 +366,7 @@ func costSummaryView(ctx context.Context, input getCostInput, limit int) (costRe
 			return base.unavailable(opencost.ConnectionFailureReason(err), currency, "kubecost"), nil
 		}
 	} else {
-		promCost, reason := promCostClient(ctx)
+		promCost, reason := promCostClient(ctx, set)
 		if reason != "" {
 			return base.unavailable(reason, currency, "prometheus"), nil
 		}
@@ -507,7 +514,7 @@ func allUsageUnavailable(rows []pkgopencost.NamespaceCost) bool {
 	return true
 }
 
-func costWorkloadsView(ctx context.Context, input getCostInput, limit int) (costResponse, error) {
+func costWorkloadsView(ctx context.Context, set connectionruntime.Set, input getCostInput, limit int) (costResponse, error) {
 	namespace := strings.TrimSpace(input.Namespace)
 	if namespace == "" {
 		return costResponse{}, fmt.Errorf("view=workloads needs a namespace — use view=summary first to find the expensive namespaces, then pass one here")
@@ -516,11 +523,11 @@ func costWorkloadsView(ctx context.Context, input getCostInput, limit int) (cost
 	base := costResponse{View: "workloads", Namespace: namespace}
 
 	if allowed := scopedNamespacesForUser(ctx, []string{namespace}); allowed != nil && len(allowed) == 0 {
-		return base.unavailable(deniedScopeReason(ctx, []string{namespace}), opencost.ResolveCurrency(), ""), nil
+		return base.unavailable(deniedScopeReason(ctx, []string{namespace}), set.Currency.Resolve(), ""), nil
 	}
 
-	connection, err := opencost.Selected(ctx)
-	currency := opencost.ResolveCurrency()
+	connection, err := set.Cost.Selected(ctx)
+	currency := set.Currency.Resolve()
 	if err != nil {
 		return base.unavailable(opencost.ConnectionFailureReason(err), currency, ""), nil
 	}
@@ -528,18 +535,18 @@ func costWorkloadsView(ctx context.Context, input getCostInput, limit int) (cost
 	var workloads *pkgopencost.WorkloadCostResponse
 	if connection.Source == opencost.SourceKubecost {
 		workloads, err = pkgopencost.ComputeKubecostWorkloads(ctx, connection.Client, namespace, pkgopencost.KubecostCurrentOptions{
-			Currency: currency, ClusterID: connection.ClusterID, Owners: opencost.BuildPodOwnerLookup(namespace),
+			Currency: currency, ClusterID: connection.ClusterID, Owners: set.Cost.BuildPodOwnerLookup(namespace),
 		})
 		if err != nil {
 			log.Printf("[mcp] Kubecost workloads failed for namespace %q: %s", k8s.SanitizeForLog(namespace), k8s.SanitizeForLog(err.Error()))
 			return base.unavailable(opencost.ConnectionFailureReason(err), currency, "kubecost"), nil
 		}
 	} else {
-		promCost, reason := promCostClient(ctx)
+		promCost, reason := promCostClient(ctx, set)
 		if reason != "" {
 			return base.unavailable(reason, currency, "prometheus"), nil
 		}
-		workloads = promCost.Workloads(ctx, namespace, opencost.BuildPodOwnerLookup(namespace))
+		workloads = promCost.Workloads(ctx, namespace, set.Cost.BuildPodOwnerLookup(namespace))
 		workloads.Currency = currency
 		workloads.Source = "prometheus"
 	}
@@ -655,15 +662,16 @@ func scopedEmptyResult(reason string, scope []string) bool {
 	return reason == pkgopencost.ReasonNoMetrics && len(scope) > 0
 }
 
-func costNodesView(ctx context.Context, name string, limit int) (costResponse, error) {
+func costNodesView(ctx context.Context, set connectionruntime.Set, name string, limit int) (costResponse, error) {
+	conn := k8s.BoundOrCurrent(ctx)
 	base := costResponse{View: "nodes"}
 
 	if !canReadClusterScopedKind(ctx, "Node", "", "list") {
-		return base.unavailable(pkgopencost.ReasonAccessDenied, opencost.ResolveCurrency(), ""), nil
+		return base.unavailable(pkgopencost.ReasonAccessDenied, set.Currency.Resolve(), ""), nil
 	}
 
-	connection, err := opencost.Selected(ctx)
-	currency := opencost.ResolveCurrency()
+	connection, err := set.Cost.Selected(ctx)
+	currency := set.Currency.Resolve()
 	if err != nil {
 		return base.unavailable(opencost.ConnectionFailureReason(err), currency, ""), nil
 	}
@@ -678,7 +686,7 @@ func costNodesView(ctx context.Context, name string, limit int) (costResponse, e
 			return base.unavailable(opencost.ConnectionFailureReason(err), currency, "kubecost"), nil
 		}
 	} else {
-		promCost, reason := promCostClient(ctx)
+		promCost, reason := promCostClient(ctx, set)
 		if reason != "" {
 			return base.unavailable(reason, currency, "prometheus"), nil
 		}
@@ -731,7 +739,9 @@ func costNodesView(ctx context.Context, name string, limit int) (costResponse, e
 			HourlyCost:   roundHourly(row.HourlyCost),
 		})
 	}
-	resp.NodesNotInCluster = labelNodeRows(resp.Nodes, selected, cachedNode)
+	resp.NodesNotInCluster = labelNodeRows(resp.Nodes, selected, func(name string) (*corev1.Node, bool) {
+		return cachedNode(conn.ResourceCache(), name)
+	})
 	resp.Guidance = nodeCostGuidance(resp.NodesNotInCluster)
 	if name != "" {
 		resp.Guidance = append(resp.Guidance, "Totals cover only the selected node; omit name to get the whole fleet.")
@@ -755,8 +765,7 @@ type nodeLookup func(name string) (node *corev1.Node, known bool)
 
 // cachedNode reads a node from the informer cache. known is false when the
 // cache cannot answer, which must not be counted as a node that is gone.
-func cachedNode(name string) (*corev1.Node, bool) {
-	cache := k8s.GetResourceCache()
+func cachedNode(cache *k8s.ResourceCache, name string) (*corev1.Node, bool) {
 	if cache == nil {
 		return nil, false
 	}
@@ -793,17 +802,17 @@ func labelNodeRows(returned []nodeCostRow, all []pkgopencost.NodeCost, lookup no
 	return missing
 }
 
-func costTrendView(ctx context.Context, input getCostInput) (costResponse, error) {
+func costTrendView(ctx context.Context, set connectionruntime.Set, input getCostInput) (costResponse, error) {
 	base := costResponse{View: "trend", Namespace: input.Namespace, Range: input.Range}
 
 	requested := requestedNamespaces(input.Namespace)
 	allowed := scopedNamespacesForUser(ctx, requested)
 	if allowed != nil && len(allowed) == 0 {
-		return base.unavailable(deniedScopeReason(ctx, requested), opencost.ResolveCurrency(), ""), nil
+		return base.unavailable(deniedScopeReason(ctx, requested), set.Currency.Resolve(), ""), nil
 	}
 
-	connection, err := opencost.Selected(ctx)
-	currency := opencost.ResolveCurrency()
+	connection, err := set.Cost.Selected(ctx)
+	currency := set.Currency.Resolve()
 	if err != nil {
 		return base.unavailable(opencost.ConnectionFailureReason(err), currency, ""), nil
 	}
@@ -818,7 +827,7 @@ func costTrendView(ctx context.Context, input getCostInput) (costResponse, error
 			return base.unavailable(opencost.ConnectionFailureReason(err), currency, "kubecost"), nil
 		}
 	} else {
-		promCost, reason := promCostClient(ctx)
+		promCost, reason := promCostClient(ctx, set)
 		if reason != "" {
 			return base.unavailable(reason, currency, "prometheus"), nil
 		}
@@ -996,8 +1005,8 @@ func changePercent(points int, start, end float64) *float64 {
 //
 // PromForMCP, not Prom: the shared Prom() client carries a 10s socket backstop
 // sized for REST callers, which a 7d trend query on a large cluster outruns.
-func promCostClient(ctx context.Context) (opencost.PromCost, string) {
-	client, connectionErr := prometheuspkg.ClientForOperation()
+func promCostClient(ctx context.Context, set connectionruntime.Set) (opencost.PromCost, string) {
+	client, connectionErr := set.MetricsClient()
 	if connectionErr != nil {
 		return opencost.PromCost{}, opencost.ConnectionFailureReason(connectionErr)
 	}

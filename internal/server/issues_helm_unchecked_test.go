@@ -61,7 +61,7 @@ func useHelmStorageAnswering(t *testing.T, status int, body string) {
 	helm.ResetTestClient()
 	previousConfig := k8s.SetTestConfig(config)
 	t.Cleanup(func() { k8s.SetTestConfig(previousConfig) })
-	helm.Initialize()
+	helm.Initialize(nil)
 	t.Cleanup(func() {
 		helm.ResetTestClient()
 		k8s.SetTestClient(previousClient)
@@ -254,7 +254,7 @@ func useHelmStorageFailingIn(t *testing.T, failing ...string) {
 	helm.ResetTestClient()
 	previousConfig := k8s.SetTestConfig(config)
 	t.Cleanup(func() { k8s.SetTestConfig(previousConfig) })
-	helm.Initialize()
+	helm.Initialize(nil)
 	t.Cleanup(func() {
 		helm.ResetTestClient()
 		k8s.SetTestClient(previousClient)

@@ -62,12 +62,11 @@ func (c *Client) ListIssueReleasesAcrossNamespaces(ctx context.Context, namespac
 	if namespaces != nil && len(namespaces) == 0 {
 		return []HelmRelease{}, nil
 	}
-	contextName := c.conn.ContextName()
 	client, labelsClient, err := c.issueStorageClients(user)
 	if err != nil {
 		return nil, err
 	}
-	return listIssueReleasesWithClients(ctx, client, labelsClient, contextName, namespaces)
+	return c.memo().listIssueReleasesWithClients(ctx, client, labelsClient, namespaces)
 }
 
 // IssueReadDenied reports whether a failed ListIssueReleasesAcrossNamespaces
@@ -243,13 +242,13 @@ func issueReadFailureClass(err error) string {
 // Only a caller denial skips a namespace here. Any other failure is recorded
 // against its namespace, and the rest are still read, so one failing namespace
 // can't hide the issues of the others.
-func listIssueReleasesWithClients(ctx context.Context, client kubernetes.Interface, labelsClient metadata.Interface, contextName string, namespaces []string) ([]HelmRelease, error) {
-	return listReleaseRows(ctx, contextName, namespaces, false, nil, true, ReleaseReadDeniedForCaller, func(ctx context.Context, namespace string) (*helmReleaseStorageSnapshot, error) {
+func (m *UninstallMemo) listIssueReleasesWithClients(ctx context.Context, client kubernetes.Interface, labelsClient metadata.Interface, namespaces []string) ([]HelmRelease, error) {
+	return m.listReleaseRows(ctx, namespaces, false, nil, true, ReleaseReadDeniedForCaller, func(ctx context.Context, namespace string) (*helmReleaseStorageSnapshot, error) {
 		snapshot, skipped, err := helmIssueStorageSnapshot(ctx, client, labelsClient, namespace)
 		if err != nil {
 			return nil, err
 		}
-		forgetUninstallStarts(contextName, skipped)
+		m.forgetUninstallStarts(skipped)
 		return snapshot, nil
 	})
 }
@@ -360,8 +359,8 @@ func helmIssueStorageSnapshot(ctx context.Context, client kubernetes.Interface, 
 // forgetUninstallStarts does for skipped releases what analyzeReleaseHistory
 // does for a release whose newest revision is not uninstalling: it clears the
 // release's uninstall start.
-func forgetUninstallStarts(contextName string, skipped []storedRelease) {
-	if len(skipped) == 0 || contextName != k8s.GetContextName() {
+func (m *UninstallMemo) forgetUninstallStarts(skipped []storedRelease) {
+	if len(skipped) == 0 {
 		return
 	}
 	now := time.Now()
@@ -370,7 +369,7 @@ func forgetUninstallStarts(contextName string, skipped []storedRelease) {
 		if action.ListAll&action.ListAll.FromName(rel.status) == 0 {
 			continue
 		}
-		key := uninstallStartKey{context: contextName, storageNamespace: rel.namespace, name: rel.name}
-		uninstallStarts.observe(key, helmhistory.Revision{Revision: rel.revision, Status: rel.status}, now)
+		key := uninstallStartKey{storageNamespace: rel.namespace, name: rel.name}
+		m.observe(key, helmhistory.Revision{Revision: rel.revision, Status: rel.status}, now)
 	}
 }

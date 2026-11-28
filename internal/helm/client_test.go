@@ -1906,7 +1906,6 @@ func TestHelmReleaseUninstallTimestampFromStorage(t *testing.T) {
 		{name: "missing"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			freshUninstallStarts(t)
 			rel := helmTestRelease("deleting", "demo", 2, release.StatusUninstalling, "Deletion in progress")
 			rel.Info.LastDeployed = helmtime.Time{Time: now.Add(-90 * 24 * time.Hour)}
 			rel.Info.Deleted = helmtime.Time{Time: tt.deleted}
@@ -1955,7 +1954,7 @@ func TestHelmReleaseDeploymentTimestampPreserved(t *testing.T) {
 
 func helmReleaseRowsForTest(t *testing.T, snapshot *helmReleaseStorageSnapshot) []HelmRelease {
 	t.Helper()
-	rows, err := helmReleaseRowsFromStorageSnapshot(context.Background(), snapshot, nil, nil, "", scannedObjects{})
+	rows, err := NewUninstallMemo().helmReleaseRowsFromStorageSnapshot(context.Background(), snapshot, nil, nil, scannedObjects{})
 	if err != nil {
 		t.Fatal(err)
 	}

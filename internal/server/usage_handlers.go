@@ -11,7 +11,6 @@ import (
 	"regexp"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -20,10 +19,8 @@ import (
 	"github.com/skyhook-io/radar/internal/ai"
 	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/config"
+	"github.com/skyhook-io/radar/internal/connectionruntime"
 	"github.com/skyhook-io/radar/internal/k8s"
-	"github.com/skyhook-io/radar/internal/opencost"
-	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
-	"github.com/skyhook-io/radar/internal/traffic"
 	"github.com/skyhook-io/radar/internal/usagedata"
 	"github.com/skyhook-io/radar/internal/version"
 	"github.com/skyhook-io/radar/pkg/packages"
@@ -226,14 +223,15 @@ func (s *Server) usageSetup() usagedata.Setup {
 	if s.effectiveConfig != nil && s.effectiveConfig.TimelineStorage != "" {
 		timeline = s.effectiveConfig.TimelineStorage
 	}
+	set := connectionruntime.Capture(context.Background())
 	return usagedata.Setup{
 		AuthMode:        authMode,
 		TimelineStorage: timeline,
 		MCPEnabled:      s.mcpEnabled(),
-		Prometheus:      prometheuspkg.ConnectionSource(),
-		CostSource:      string(opencost.ConfigSnapshot().Source),
+		Prometheus:      set.Metrics.ConnectionSource(),
+		CostSource:      string(set.Cost.ConfigSnapshot().Source),
 		AIConfigured:    s.aiConfigured(),
-		TrafficSource:   usageTrafficSource(),
+		TrafficSource:   usagedata.TrafficSource(set.Traffic.SourceSnapshot()),
 	}
 }
 
@@ -263,24 +261,6 @@ func anyAgentSetUp(agents []ai.AgentInfo, consentGiven func(surface string) bool
 		}
 	}
 	return false
-}
-
-// lastUsageTrafficSource is the traffic source last read, reported while
-// detection holds the traffic manager.
-var lastUsageTrafficSource atomic.Value
-
-func usageTrafficSource() string {
-	m := traffic.GetManager()
-	if m == nil {
-		return "none"
-	}
-	name, ok := m.ActiveSourceNameIfIdle()
-	if ok {
-		lastUsageTrafficSource.Store(name)
-	} else {
-		name, _ = lastUsageTrafficSource.Load().(string)
-	}
-	return usagedata.TrafficSource(name)
 }
 
 // Replaced in tests, which can't turn the process-wide collector on.

@@ -10,6 +10,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/connectionruntime"
+	"github.com/skyhook-io/radar/internal/portforward"
+
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
@@ -293,9 +296,15 @@ func rightsizingWorkloadScope(ctx context.Context, input getRightsizingInput) (*
 		return nil, nil, fmt.Errorf("forbidden: no access to %s %s/%s", kind, namespace, name)
 	}
 
-	resp, err := prometheuspkg.RightsizingForWorkload(ctx, kind, namespace, name)
+	client, err := connectionruntime.CaptureMetrics(ctx)
+	var resp prometheuspkg.RightsizingResponse
+	if err == nil {
+		resp, err = client.RightsizingForWorkload(ctx, kind, namespace, name)
+	}
 	if err != nil {
 		switch {
+		case portforward.IsMemberClosed(ctx, err):
+			return nil, nil, errMetricsConnectionClosed
 		case errors.Is(err, prometheuspkg.ErrPrometheusUnavailable):
 			return toJSONResult(rightsizingUnavailable("workload", "prometheus_unavailable"))
 		case errors.Is(err, prometheuspkg.ErrRightsizingKindUnsupported):
@@ -408,8 +417,12 @@ func rightsizingScanScope(ctx context.Context, input getRightsizingInput, scope 
 	scanCtx, cancel := context.WithTimeout(ctx, rightsizingScanBudget)
 	defer cancel()
 
-	manager := prometheuspkg.RightsizingScans()
-	generation := manager.Generation()
+	set := connectionruntime.Capture(scanCtx)
+	manager := set.RightsizingScans()
+	var generation uint64
+	if manager != nil {
+		generation = manager.Generation()
+	}
 	allowed := scopedNamespacesForUser(scanCtx, requested)
 	if scanCtx.Err() != nil {
 		return nil, nil, fmt.Errorf("could not authorize scan scope within the request budget: %w", scanCtx.Err())
@@ -430,11 +443,23 @@ func rightsizingScanScope(ctx context.Context, input getRightsizingInput, scope 
 	if scanCtx.Err() != nil {
 		return nil, nil, fmt.Errorf("could not authorize scan scope within the request budget: %w", scanCtx.Err())
 	}
+	if manager == nil {
+		if input.ScanID != "" {
+			return nil, nil, prometheuspkg.ErrRightsizingScanNotFound
+		}
+		out := rightsizingScanUnavailable(scope, namespace, "prometheus_unavailable")
+		out.ExcludedNamespaces = excluded
+		setRightsizingScanGuidance(&out, input)
+		return toJSONResult(out)
+	}
 	snapshot, err := manager.Resolve(scanCtx, prometheuspkg.RightsizingScanRequest{
 		Generation: generation, Namespaces: allowed, Scope: scanScope, ID: input.ScanID,
 		Start: input.ScanID == "", Refresh: input.Refresh, Wait: rightsizingScanBudget,
 	})
 	if err != nil {
+		if portforward.IsMemberClosed(scanCtx, err) {
+			return nil, nil, errMetricsConnectionClosed
+		}
 		return nil, nil, err
 	}
 	scan := *snapshot

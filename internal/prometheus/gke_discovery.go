@@ -21,6 +21,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
+	"github.com/skyhook-io/radar/internal/portforward"
 	"github.com/skyhook-io/radar/pkg/prom"
 )
 
@@ -146,7 +147,9 @@ func (c *Client) gkeReader(ctx context.Context, gen uint64, regularErr error) *g
 	c.mu.RUnlock()
 	if !fresh {
 		ch := c.gkeSF.DoChan(fmt.Sprintf("%d/%d", gen, revision), func() (any, error) {
-			c.findGKEChartStore(context.WithoutCancel(ctx), gen, regularErr)
+			probeCtx, release := portforward.WithLifetime(context.WithoutCancel(ctx), c.lifetime)
+			defer release()
+			c.findGKEChartStore(probeCtx, gen, regularErr)
 			return nil, nil
 		})
 		select {
@@ -299,7 +302,7 @@ func (c *Client) findGKEChartStore(ctx context.Context, gen uint64, regularErr e
 			path := fmt.Sprintf("/api/v1/namespaces/%s/services/%s/proxy", s.Namespace, service)
 			tr = prom.NewHTTPTransport(base, path, &hc)
 		}
-		store := prom.NewClient(tr)
+		store := prom.NewClient(c.bindTransport(tr))
 		if !source.hasNodeMetrics(ctx, store) {
 			continue
 		}
@@ -378,6 +381,10 @@ func (c *Client) relayActive() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.relay != nil
+}
+
+func (c *Client) RelayActive() bool {
+	return c != nil && c.relayActive()
 }
 
 func (c *Client) gkeChartStore() *gkeMetrics {

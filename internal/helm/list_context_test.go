@@ -88,11 +88,11 @@ func TestHelmReleaseStorageDecodingStopsWithItsContext(t *testing.T) {
 func TestHelmReleaseRowsStopWithTheirContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err := helmReleaseRowsFromStorageSnapshot(ctx, &helmReleaseStorageSnapshot{
+	_, err := NewUninstallMemo().helmReleaseRowsFromStorageSnapshot(ctx, &helmReleaseStorageSnapshot{
 		storageNamespaces: map[string]string{},
 		histories:         map[string][]HelmRevision{},
 		latest:            []*release.Release{helmTestRelease("api", "demo", 1, release.StatusDeployed, "Install complete")},
-	}, nil, nil, "", scannedObjects{})
+	}, nil, nil, scannedObjects{})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v, want context canceled", err)
 	}
@@ -108,11 +108,11 @@ func TestIssueReleaseRowsSkipResourceHealthButKeepHistory(t *testing.T) {
 		helmReleaseSecret(t, "shop", failed, false),
 	)
 
-	full, err := listReleasesAcrossNamespacesWithClient(k8s.CaptureConnection(t.Context()), client, "", []string{"shop"}, true, scannedObjects{})
+	full, err := NewUninstallMemo().listReleasesAcrossNamespacesWithClient(k8s.CaptureConnection(t.Context()), client, []string{"shop"}, true, scannedObjects{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	issueRows, err := listReleasesAcrossNamespacesWithClient(k8s.CaptureConnection(t.Context()), client, "", []string{"shop"}, false, nil)
+	issueRows, err := NewUninstallMemo().listReleasesAcrossNamespacesWithClient(k8s.CaptureConnection(t.Context()), client, []string{"shop"}, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +145,7 @@ func TestListReleasesAcrossNamespacesSkipsForbiddenNamespaces(t *testing.T) {
 		return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, "", errors.New("denied"))
 	})
 
-	rows, err := listReleasesAcrossNamespacesWithClient(k8s.CaptureConnection(t.Context()), client, "", []string{"apps", "monitoring"}, false, nil)
+	rows, err := NewUninstallMemo().listReleasesAcrossNamespacesWithClient(k8s.CaptureConnection(t.Context()), client, []string{"apps", "monitoring"}, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +153,7 @@ func TestListReleasesAcrossNamespacesSkipsForbiddenNamespaces(t *testing.T) {
 		t.Fatalf("rows = %+v, want only the readable namespace's release", rows)
 	}
 
-	_, err = listReleasesAcrossNamespacesWithClient(k8s.CaptureConnection(t.Context()), client, "", []string{"monitoring"}, false, nil)
+	_, err = NewUninstallMemo().listReleasesAcrossNamespacesWithClient(k8s.CaptureConnection(t.Context()), client, []string{"monitoring"}, false, nil)
 	if !IsForbiddenError(err) {
 		t.Fatalf("error = %v, want forbidden when no namespace is readable", err)
 	}
@@ -263,30 +263,16 @@ func TestBatchUpgradeCheckStopsWithItsContext(t *testing.T) {
 	}
 }
 
-// The multi-namespace read times stuck uninstalls under the context it
-// started on, like the single-namespace list: a read that started before a
-// context switch must not anchor a release of the cluster now connected.
-func TestListReleasesAcrossNamespacesTimesUninstallsUnderItsOwnContext(t *testing.T) {
-	for _, tt := range []struct {
-		name        string
-		readContext string
-		wantAnchor  bool
-	}{
-		{name: "current context", readContext: "", wantAnchor: true},
-		{name: "started before a switch", readContext: "previous-context", wantAnchor: false},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			freshUninstallStarts(t)
-			rel := helmTestRelease("deleting", "demo", 2, release.StatusUninstalling, "Deletion in progress")
-			rel.Info.Deleted = helmtime.Time{Time: time.Now().Add(-25 * time.Minute)}
-			client := fake.NewSimpleClientset(helmReleaseSecret(t, "demo", rel, false))
-			rows, err := listReleasesAcrossNamespacesWithClient(k8s.CaptureConnection(t.Context()), client, tt.readContext, []string{"demo"}, false, nil)
-			if err != nil || len(rows) != 1 {
-				t.Fatalf("rows = %+v, err = %v", rows, err)
-			}
-			if anchored := len(uninstallStarts.entries) > 0; anchored != tt.wantAnchor {
-				t.Fatalf("uninstall start recorded = %v, want %v", anchored, tt.wantAnchor)
-			}
-		})
+func TestListReleasesAcrossNamespacesKeepsUninstallAnchorsOnItsMemo(t *testing.T) {
+	old, current := NewUninstallMemo(), NewUninstallMemo()
+	rel := helmTestRelease("deleting", "demo", 2, release.StatusUninstalling, "Deletion in progress")
+	rel.Info.Deleted = helmtime.Time{Time: time.Now().Add(-25 * time.Minute)}
+	client := fake.NewSimpleClientset(helmReleaseSecret(t, "demo", rel, false))
+	rows, err := old.listReleasesAcrossNamespacesWithClient(k8s.CaptureConnection(t.Context()), client, []string{"demo"}, false, nil)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("rows = %+v, err = %v", rows, err)
+	}
+	if len(old.entries) != 1 || len(current.entries) != 0 {
+		t.Fatalf("old anchors = %v, current anchors = %v", old.entries, current.entries)
 	}
 }

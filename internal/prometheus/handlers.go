@@ -22,20 +22,24 @@ import (
 )
 
 // RegisterRoutes registers Prometheus metric routes on the given router.
-func RegisterRoutes(r chi.Router) {
-	r.Get("/prometheus/status", handleStatus)
-	r.Post("/prometheus/connect", handleConnect)
-	r.Get("/prometheus/resources/{kind}/{namespace}/{name}", handleResourceMetrics)
-	r.Get("/prometheus/resources/{kind}/{name}", handleClusterScopedResourceMetrics)
-	r.Get("/prometheus/namespace/{namespace}", handleNamespaceMetrics)
-	r.Get("/prometheus/cluster", handleClusterMetrics)
-	r.Get("/prometheus/query", handleRawQuery)
-	r.Get("/prometheus/hpa/{namespace}/{name}", handleHPAMetrics)
-	r.Get("/prometheus/pvc/{namespace}/{name}", handlePVCUsage)
-	r.Get("/prometheus/rightsizing/{kind}/{namespace}/{name}", handleRightsizing)
-	r.Get("/prometheus/workload/{kind}/{namespace}/{name}", handleWorkloadMetrics)
-	r.Get("/prometheus/substrate/workerpools/{namespace}/{name}", handleSubstrateWorkerPool)
-	r.Get("/prometheus/substrate/nodes/{name}", handleSubstrateNode)
+type Routes struct {
+	Capture func(context.Context) (*Client, error)
+}
+
+func (h Routes) RegisterRoutes(r chi.Router) {
+	r.Get("/prometheus/status", h.handleStatus)
+	r.Post("/prometheus/connect", h.handleConnect)
+	r.Get("/prometheus/resources/{kind}/{namespace}/{name}", h.handleResourceMetrics)
+	r.Get("/prometheus/resources/{kind}/{name}", h.handleClusterScopedResourceMetrics)
+	r.Get("/prometheus/namespace/{namespace}", h.handleNamespaceMetrics)
+	r.Get("/prometheus/cluster", h.handleClusterMetrics)
+	r.Get("/prometheus/query", h.handleRawQuery)
+	r.Get("/prometheus/hpa/{namespace}/{name}", h.handleHPAMetrics)
+	r.Get("/prometheus/pvc/{namespace}/{name}", h.handlePVCUsage)
+	r.Get("/prometheus/rightsizing/{kind}/{namespace}/{name}", h.handleRightsizing)
+	r.Get("/prometheus/workload/{kind}/{namespace}/{name}", h.handleWorkloadMetrics)
+	r.Get("/prometheus/substrate/workerpools/{namespace}/{name}", h.handleSubstrateWorkerPool)
+	r.Get("/prometheus/substrate/nodes/{name}", h.handleSubstrateNode)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
@@ -66,9 +70,9 @@ type statusResponse struct {
 }
 
 // handleStatus returns the current Prometheus connection status.
-func handleStatus(w http.ResponseWriter, r *http.Request) {
+func (h Routes) handleStatus(w http.ResponseWriter, r *http.Request) {
 	var out statusResponse
-	if client, connectionErr := ClientForOperation(); connectionErr != nil {
+	if client, connectionErr := h.Capture(r.Context()); connectionErr != nil {
 		out.Status = prom.Status{Available: false, Error: connectionErr.Error()}
 	} else {
 		out.Status = client.GetStatus()
@@ -91,26 +95,24 @@ const hubMetricsSourceCheckWait = 12 * time.Second
 // process startup via --prometheus-url, never per-request. Accepting a URL
 // here would let any caller redirect Prometheus queries to an arbitrary
 // host (SSRF) since radar binds to 0.0.0.0 by default.
-func handleConnect(w http.ResponseWriter, r *http.Request) {
-	client, connectionErr := ClientForOperation()
+func (h Routes) handleConnect(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	optional := r.URL.Query().Get("optional") == "true"
+	var checked bool
+	if !optional {
+		// A user asking for discovery first gets Radar Hub's current choice.
+		checkCtx, cancel := context.WithTimeout(ctx, hubMetricsSourceCheckWait)
+		checked = checkHubMetricsSource(checkCtx)
+		cancel()
+	}
+	client, connectionErr := h.Capture(ctx)
 	if connectionErr != nil {
 		writeError(w, http.StatusServiceUnavailable, connectionErr.Error())
 		return
 	}
-
-	ctx := r.Context()
-	optional := r.URL.Query().Get("optional") == "true"
-	if !optional {
-		// A user asking for discovery first gets Radar Hub's current choice:
-		// an OpenObserve source selected since the agent last asked serves
-		// right away. Automatic connects never ask Hub.
-		checkCtx, cancel := context.WithTimeout(ctx, hubMetricsSourceCheckWait)
-		checked := checkHubMetricsSource(checkCtx)
-		cancel()
-		if checked && RelayActive() {
-			writeJSON(w, http.StatusOK, client.GetStatus())
-			return
-		}
+	if checked && client.relayActive() {
+		writeJSON(w, http.StatusOK, client.GetStatus())
+		return
 	}
 	if optional {
 		ctx = withSuppressedDiscoveryDiagnostics(ctx)
@@ -123,6 +125,10 @@ func handleConnect(w http.ResponseWriter, r *http.Request) {
 		client.mu.Unlock()
 	}
 	_, _, err := client.connectWithGKE(ctx)
+	if client.Closed() || portforward.IsMemberClosed(ctx, err) {
+		client.writeChartFailure(w, ctx, err)
+		return
+	}
 	if err != nil && client.gkeChartStore() == nil {
 		log.Printf("[prometheus] Connection failed: %v", err)
 		if optional {
@@ -240,7 +246,7 @@ func (d chartDeps) unconnected(ctx context.Context) error {
 // productionChartDeps runs a chart's queries on one store handle, and its
 // check only on the connection that handle was taken from.
 func productionChartDeps(ctx context.Context, client *Client) chartDeps {
-	cache := k8s.GetResourceCache()
+	cache := client.cache
 	stores := client.chartStores(ctx)
 	return chartDeps{gke: stores.native, supplement: stores.supplement, q: stores.standard, resolve: BoundResolver(client, stores.standard.conn, chartResolverFor(client, cache)), cache: cache, connectErr: stores.standard.err}
 }
@@ -249,19 +255,35 @@ func productionChartDeps(ctx context.Context, client *Client) chartDeps {
 // connection; tests replace it to move the connection around the check.
 var chartResolverFor = ResolverFor
 
-// errChartQuery wraps a failed store query, which the handlers report as 502;
-// any other error from a chart means the caller left.
+// errChartQuery marks a store failure that requires an HTTP response.
 type errChartQuery struct{ err error }
 
 func (e errChartQuery) Error() string { return e.err.Error() }
+func (e errChartQuery) Unwrap() error { return e.err }
 
 func chartRangeDuration(rangeStr string) time.Duration {
 	return timeRanges[normalizeTimeRange(rangeStr)].duration
 }
 
-// writeChartError answers a chart failure: 502 for a failed store query,
-// nothing when the caller left.
-func writeChartError(w http.ResponseWriter, err error) {
+const ConnectionClosedMessage = "Metrics connection closed. Retry the request"
+
+func (c *Client) writeChartFailure(w http.ResponseWriter, ctx context.Context, err error) bool {
+	if c.Closed() {
+		err = portforward.ErrClosed
+	}
+	if err == nil {
+		return false
+	}
+	writeChartError(w, ctx, err)
+	return true
+}
+
+// writeChartError reports a closed or changed connection and store query failures.
+func writeChartError(w http.ResponseWriter, ctx context.Context, err error) {
+	if portforward.IsMemberClosed(ctx, err) {
+		writeError(w, http.StatusServiceUnavailable, ConnectionClosedMessage)
+		return
+	}
 	if errors.Is(err, errDiscoverySuperseded) {
 		writeError(w, http.StatusConflict, "metrics connection changed; retry the request")
 		return
@@ -274,8 +296,8 @@ func writeChartError(w http.ResponseWriter, err error) {
 
 // handleResourceMetrics returns Prometheus metrics for a specific resource.
 // Query params: category (cpu|memory|network_rx|network_tx|filesystem, default: cpu), range (10m|30m|1h|...|14d, default: 1h)
-func handleResourceMetrics(w http.ResponseWriter, r *http.Request) {
-	client, connectionErr := ClientForOperation()
+func (h Routes) handleResourceMetrics(w http.ResponseWriter, r *http.Request) {
+	client, connectionErr := h.Capture(r.Context())
 	if connectionErr != nil {
 		writeError(w, http.StatusServiceUnavailable, connectionErr.Error())
 		return
@@ -328,7 +350,7 @@ func handleResourceMetrics(w http.ResponseWriter, r *http.Request) {
 	// resolved by ownership, never guessed from the workload's name.
 	var scope *PodScope
 	if !strings.EqualFold(kind, "Pod") && !strings.EqualFold(kind, "Node") {
-		cache := k8s.GetResourceCache()
+		cache := client.cache
 		if cache == nil {
 			writeError(w, http.StatusServiceUnavailable, "cluster cache not ready")
 			return
@@ -366,8 +388,7 @@ func handleResourceMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp, err := resourceChart(r.Context(), productionChartDeps(r.Context(), client), kind, namespace, name, category, rangeStr, scope)
-	if err != nil {
-		writeChartError(w, err)
+	if client.writeChartFailure(w, r.Context(), err) {
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -511,14 +532,16 @@ func (d chartDeps) readConventionalChart(ctx context.Context, kind, namespace, n
 	subject := fmt.Sprintf("%q/%q/%q (%q)", kind, namespace, name, category)
 	a, err := QueryScopedChart(ctx, d.q, view, category, build, start, end, step, "Primary query empty for "+subject)
 	if err != nil {
-		log.Printf("[prometheus] Query failed for %s: %v", subject, err)
-		errorlog.Record("prometheus", "error", "query failed for %s: %v", subject, err)
+		if !portforward.IsMemberClosed(ctx, err) {
+			log.Printf("[prometheus] Query failed for %s: %v", subject, err)
+			errorlog.Record("prometheus", "error", "query failed for %s: %v", subject, err)
+		}
 		return resp, errChartQuery{err}
 	}
 	resp.Result, resp.Partial = a.Result, a.Partial
 	if kind != "Cluster" && kind != "Namespace" && len(a.Result.Series) == 0 {
 		resp.Query = a.Query
-		resp.Hint = detectCRIDockerHint(kind, namespace, name)
+		resp.Hint = detectCRIDockerHint(d.cache, kind, namespace, name)
 		log.Printf("[prometheus] Empty result for %s, query: %q", subject, a.Query)
 		errorlog.Record("prometheus", "warning", "empty result for %s: %q", subject, a.Query)
 	}
@@ -526,8 +549,8 @@ func (d chartDeps) readConventionalChart(ctx context.Context, kind, namespace, n
 }
 
 // handleClusterScopedResourceMetrics handles metrics for cluster-scoped resources (e.g. Node).
-func handleClusterScopedResourceMetrics(w http.ResponseWriter, r *http.Request) {
-	client, connectionErr := ClientForOperation()
+func (h Routes) handleClusterScopedResourceMetrics(w http.ResponseWriter, r *http.Request) {
+	client, connectionErr := h.Capture(r.Context())
 	if connectionErr != nil {
 		writeError(w, http.StatusServiceUnavailable, connectionErr.Error())
 		return
@@ -571,8 +594,7 @@ func handleClusterScopedResourceMetrics(w http.ResponseWriter, r *http.Request) 
 	}
 
 	resp, err := resourceChart(r.Context(), productionChartDeps(r.Context(), client), kind, "", name, category, r.URL.Query().Get("range"), nil)
-	if err != nil {
-		writeChartError(w, err)
+	if client.writeChartFailure(w, r.Context(), err) {
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -588,8 +610,8 @@ type NamespaceMetricsResponse struct {
 }
 
 // handleNamespaceMetrics returns aggregate metrics for a namespace.
-func handleNamespaceMetrics(w http.ResponseWriter, r *http.Request) {
-	client, connectionErr := ClientForOperation()
+func (h Routes) handleNamespaceMetrics(w http.ResponseWriter, r *http.Request) {
+	client, connectionErr := h.Capture(r.Context())
 	if connectionErr != nil {
 		writeError(w, http.StatusServiceUnavailable, connectionErr.Error())
 		return
@@ -611,8 +633,7 @@ func handleNamespaceMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp, err := namespaceChart(r.Context(), productionChartDeps(r.Context(), client), namespace, category, r.URL.Query().Get("range"))
-	if err != nil {
-		writeChartError(w, err)
+	if client.writeChartFailure(w, r.Context(), err) {
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -632,8 +653,8 @@ type ClusterMetricsResponse struct {
 }
 
 // handleClusterMetrics returns aggregate metrics for the entire cluster.
-func handleClusterMetrics(w http.ResponseWriter, r *http.Request) {
-	client, connectionErr := ClientForOperation()
+func (h Routes) handleClusterMetrics(w http.ResponseWriter, r *http.Request) {
+	client, connectionErr := h.Capture(r.Context())
 	if connectionErr != nil {
 		writeError(w, http.StatusServiceUnavailable, connectionErr.Error())
 		return
@@ -655,8 +676,7 @@ func handleClusterMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp, err := clusterChart(r.Context(), productionChartDeps(r.Context(), client), category, r.URL.Query().Get("range"))
-	if err != nil {
-		writeChartError(w, err)
+	if client.writeChartFailure(w, r.Context(), err) {
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -680,8 +700,8 @@ type RawQueryResponse struct {
 
 // handleRawQuery proxies a raw PromQL query to Prometheus.
 // Query params: query (PromQL), range (time range), type (instant|range)
-func handleRawQuery(w http.ResponseWriter, r *http.Request) {
-	client, connectionErr := ClientForOperation()
+func (h Routes) handleRawQuery(w http.ResponseWriter, r *http.Request) {
+	client, connectionErr := h.Capture(r.Context())
 	if connectionErr != nil {
 		writeError(w, http.StatusServiceUnavailable, connectionErr.Error())
 		return
@@ -700,6 +720,10 @@ func handleRawQuery(w http.ResponseWriter, r *http.Request) {
 	queryType := r.URL.Query().Get("type")
 	if queryType == "instant" {
 		result, err := client.Query(r.Context(), query)
+		if client.Closed() || portforward.IsMemberClosed(r.Context(), err) {
+			client.writeChartFailure(w, r.Context(), err)
+			return
+		}
 		if err != nil {
 			if msg, ok := QueryRefusal(err); ok {
 				writeError(w, http.StatusBadRequest, msg)
@@ -719,6 +743,10 @@ func handleRawQuery(w http.ResponseWriter, r *http.Request) {
 	start, end, step := parseTimeRange(rangeStr)
 
 	result, err := client.QueryRange(r.Context(), query, start, end, step)
+	if client.Closed() || portforward.IsMemberClosed(r.Context(), err) {
+		client.writeChartFailure(w, r.Context(), err)
+		return
+	}
 	if err != nil {
 		if msg, ok := QueryRefusal(err); ok {
 			writeError(w, http.StatusBadRequest, msg)
@@ -776,8 +804,8 @@ type HPAMetricsResponse struct {
 // HPA. Curated so a caller who can read the HPA gets its chart without the
 // cluster-wide grant raw PromQL requires.
 // Query params: range (10m|30m|1h|...|14d, default: 1h)
-func handleHPAMetrics(w http.ResponseWriter, r *http.Request) {
-	client, connectionErr := ClientForOperation()
+func (h Routes) handleHPAMetrics(w http.ResponseWriter, r *http.Request) {
+	client, connectionErr := h.Capture(r.Context())
 	if connectionErr != nil {
 		writeError(w, http.StatusServiceUnavailable, connectionErr.Error())
 		return
@@ -791,8 +819,7 @@ func handleHPAMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp, err := hpaChart(r.Context(), productionChartDeps(r.Context(), client), namespace, name, r.URL.Query().Get("range"))
-	if err != nil {
-		writeChartError(w, err)
+	if client.writeChartFailure(w, r.Context(), err) {
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -839,13 +866,12 @@ const criDockerHint = "This pod's node uses the Docker container runtime (cri-do
 // node using cri-docker, which is known to cause missing cAdvisor labels.
 // For Pods it checks the specific node; for workloads it checks all nodes
 // running pods that match the workload name prefix.
-func detectCRIDockerHint(kind, namespace, name string) string {
+func detectCRIDockerHint(cache *k8s.ResourceCache, kind, namespace, name string) string {
 	// Node metrics use node-exporter, not cAdvisor — cri-docker is irrelevant.
 	if strings.EqualFold(kind, "Node") {
 		return ""
 	}
 
-	cache := k8s.GetResourceCache()
 	if cache == nil || cache.Nodes() == nil {
 		return ""
 	}

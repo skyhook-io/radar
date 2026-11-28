@@ -3,7 +3,6 @@ package prometheus
 import (
 	"context"
 	"errors"
-	"log"
 	"maps"
 	"net/http"
 	"net/url"
@@ -11,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/portforward"
 	"github.com/skyhook-io/radar/pkg/prom"
 )
 
@@ -60,123 +60,61 @@ type prometheusSettings struct {
 	beylaJobSelector string
 }
 
-// activeRelay is guarded by clientMu. It outlives any one Client so Initialize
-// and Reinitialize keep the relay.
-var activeRelay *relayState
-
-// EnableRelay routes the metrics client through cfg's relay.
-func EnableRelay(cfg RelayConfig) error {
-	if cfg.NewTransport == nil || cfg.Endpoint == "" || cfg.Key == "" {
+func (cfg *RelayConfig) Validate() error {
+	if cfg != nil && (cfg.NewTransport == nil || cfg.Endpoint == "" || cfg.Key == "") {
 		return errors.New("metrics relay requires a key, an endpoint and a transport")
-	}
-	cfg.Source.MissingFamilies = slices.Clone(cfg.Source.MissingFamilies)
-	if enableRelay(cfg) {
-		notifyRelayChange()
 	}
 	return nil
 }
 
-// enableRelay applies cfg and reports whether the backend changed; a
-// same-key call only refreshes the source metadata.
-func enableRelay(cfg RelayConfig) bool {
-	clientMu.Lock()
-	defer clientMu.Unlock()
-	if activeRelay != nil && activeRelay.cfg.Key == cfg.Key {
-		activeRelay.mu.Lock()
-		activeRelay.source = cfg.Source
-		activeRelay.mu.Unlock()
-		return false
+func (c *Client) EnableRelay(cfg RelayConfig) error {
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+	cfg.Source.MissingFamilies = slices.Clone(cfg.Source.MissingFamilies)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.retired {
+		return errDiscoverySuperseded
+	}
+	if c.relay != nil && c.relay.cfg.Key == cfg.Key {
+		c.relay.mu.Lock()
+		c.relay.source = cfg.Source
+		c.relay.mu.Unlock()
+		return nil
 	}
 	st := &relayState{cfg: cfg, source: cfg.Source}
-	if activeRelay != nil {
-		activeRelay.mu.Lock()
-		st.saved = activeRelay.saved
-		activeRelay.mu.Unlock()
-	} else if c := globalClient; c != nil {
-		c.mu.RLock()
+	if c.relay != nil {
+		st.saved = c.relay.saved
+	} else {
 		st.saved = c.prometheusSettingsLocked()
-		c.mu.RUnlock()
 	}
-	activeRelay = st
-	if c := globalClient; c != nil {
-		c.mu.Lock()
-		c.applyRelayLocked(st)
-		c.mu.Unlock()
-	}
-	log.Printf("[prometheus] Metrics now served through %s", cfg.Address)
-	return true
+	c.applyRelayLocked(st)
+	return nil
 }
 
-// DisableRelay ends relay mode and restores the Prometheus configuration and
-// workload scope that were in effect before it. Callers start discovery again
-// (Prewarm) afterwards.
-func DisableRelay() bool {
-	if !disableRelay() {
+func (c *Client) DisableRelay() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.relay == nil || c.retired {
 		return false
 	}
-	notifyRelayChange()
+	saved := c.relay.saved
+	c.applyRelayLocked(nil)
+	c.restorePrometheusSettingsLocked(saved)
 	return true
 }
 
-func disableRelay() bool {
-	clientMu.Lock()
-	defer clientMu.Unlock()
-	st := activeRelay
-	if st == nil {
-		return false
+func (c *Client) OperatorScopeDuringRelay() (prom.WorkloadMetricsScope, bool) {
+	if c == nil {
+		return prom.WorkloadMetricsScope{}, false
 	}
-	activeRelay = nil
-	st.mu.Lock()
-	saved := st.saved
-	st.mu.Unlock()
-	if c := globalClient; c != nil {
-		c.mu.Lock()
-		c.applyRelayLocked(nil)
-		c.restorePrometheusSettingsLocked(saved)
-		c.mu.Unlock()
-	}
-	log.Print("[prometheus] Metrics relay ended; using Prometheus again")
-	return true
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.relay.operatorScope()
 }
 
-var (
-	relayHooksMu sync.Mutex
-	relayHooks   []func()
-)
-
-// OnRelayChange registers f to run, outside the client's locks, each time
-// the relay switches backend: it starts, its key changes, or it ends. A
-// same-key refresh doesn't count. Work chosen against the previous backend,
-// such as the automatic cost source, uses it to choose again.
-func OnRelayChange(f func()) {
-	relayHooksMu.Lock()
-	relayHooks = append(relayHooks, f)
-	relayHooksMu.Unlock()
-}
-
-func notifyRelayChange() {
-	relayHooksMu.Lock()
-	hooks := slices.Clone(relayHooks)
-	relayHooksMu.Unlock()
-	for _, f := range hooks {
-		f()
-	}
-}
-
-// RelayActive reports whether metrics are served through a relay.
-func RelayActive() bool {
-	clientMu.RLock()
-	defer clientMu.RUnlock()
-	return activeRelay != nil
-}
-
-// OperatorScopeDuringRelay returns the cluster scope an operator configured
-// for the Prometheus store, which the active relay set aside. ok is false when
-// no relay is active or no scope was configured.
-func OperatorScopeDuringRelay() (scope prom.WorkloadMetricsScope, ok bool) {
-	clientMu.RLock()
-	st := activeRelay
-	clientMu.RUnlock()
+func (st *relayState) operatorScope() (scope prom.WorkloadMetricsScope, ok bool) {
 	if st == nil {
 		return prom.WorkloadMetricsScope{}, false
 	}
@@ -203,7 +141,7 @@ func (c *Client) prometheusSettingsLocked() prometheusSettings {
 // applyRelayLocked switches the client into (st != nil) or out of relay mode.
 // Either way the connection, its generation and every trust result derived from
 // it are replaced: answers read through one backend say nothing about the
-// other. Caller holds clientMu (write) and c.mu.
+// other. Caller holds c.mu.
 func (c *Client) applyRelayLocked(st *relayState) {
 	c.relay = st
 	c.dropConnectionLocked()
@@ -240,19 +178,6 @@ func (st *relayState) setAside(update func(*prometheusSettings)) {
 	defer st.mu.Unlock()
 	st.saved.captured = true
 	update(&st.saved)
-}
-
-// adoptRelayLocked brings a freshly constructed client into the active relay.
-// Caller holds clientMu.
-func (c *Client) adoptRelayLocked() {
-	st := activeRelay
-	if st == nil {
-		return
-	}
-	c.relay = st
-	c.workloadScope = relayWorkloadScope()
-	c.baseURL = st.cfg.Endpoint
-	c.connectedIdentity = relayIdentity(st)
 }
 
 // relayWorkloadScope asserts a single cluster rather than a label to read
@@ -316,6 +241,10 @@ func relayIdentity(st *relayState) string {
 // mode reaches every query path: charts, MCP, the cluster-scope probes and
 // rightsizing scans. Caller holds c.mu (read or write).
 func (c *Client) newTransportLocked(addr, basePath string, httpClient *http.Client, maxResponseBytes int64) prom.Transport {
+	return c.bindTransport(c.rawTransportLocked(addr, basePath, httpClient, maxResponseBytes))
+}
+
+func (c *Client) rawTransportLocked(addr, basePath string, httpClient *http.Client, maxResponseBytes int64) prom.Transport {
 	if c.relay != nil {
 		var timeout time.Duration
 		if httpClient != nil {
@@ -329,8 +258,33 @@ func (c *Client) newTransportLocked(addr, basePath string, httpClient *http.Clie
 	return tr
 }
 
+type memberTransport struct {
+	prom.Transport
+	lifetime context.Context
+}
+
+func (t memberTransport) Do(ctx context.Context, method, path string, params url.Values) ([]byte, error) {
+	ctx, release := portforward.WithLifetime(ctx, t.lifetime)
+	defer release()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return t.Transport.Do(ctx, method, path, params)
+}
+
+func (c *Client) bindTransport(t prom.Transport) prom.Transport {
+	return BindTransport(c.lifetime, t)
+}
+
+func BindTransport(lifetime context.Context, t prom.Transport) prom.Transport {
+	if lifetime == nil {
+		return t
+	}
+	return memberTransport{Transport: t, lifetime: lifetime}
+}
+
 // status returns the relay's source with its latest health.
-func (st *relayState) status() prom.MetricsSource {
+func (st *relayState) status(lifetime context.Context) prom.MetricsSource {
 	st.mu.Lock()
 	src := st.source
 	st.mu.Unlock()
@@ -343,7 +297,7 @@ func (st *relayState) status() prom.MetricsSource {
 		src.Unavailable, src.Error = st.cfg.Health()
 	}
 	if src.Unavailable {
-		st.probeHealth()
+		st.probeHealth(lifetime)
 	}
 	return src
 }
@@ -352,7 +306,7 @@ func (st *relayState) status() prom.MetricsSource {
 // at most once per relayHealthProbeInterval. Health clears only when a query
 // succeeds, and the UI stops querying while status says unavailable, so
 // without this probe the state would never clear.
-func (st *relayState) probeHealth() {
+func (st *relayState) probeHealth(lifetime context.Context) {
 	now := time.Now()
 	st.mu.Lock()
 	if !st.lastProbe.IsZero() && now.Sub(st.lastProbe) < relayHealthProbeInterval {
@@ -362,24 +316,13 @@ func (st *relayState) probeHealth() {
 	st.lastProbe = now
 	st.mu.Unlock()
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), relayHealthProbeTimeout)
+		ctx, release := portforward.WithLifetime(context.Background(), lifetime)
+		defer release()
+		ctx, cancel := context.WithTimeout(ctx, relayHealthProbeTimeout)
 		defer cancel()
 		t := st.cfg.NewTransport(relayHealthProbeTimeout, 0)
 		// The OpenObserve transports scope vector(1) to the cluster; the
 		// answer only matters for the health it records.
 		_, _ = t.Do(ctx, http.MethodGet, "/api/v1/query", url.Values{"query": {"vector(1)"}})
 	}()
-}
-
-// resetSavedScope forgets the operator's workload scope and Beyla selector
-// set aside for when the relay ends, as Retire and a Reinitialize to another
-// connection clear them on the client: they belong to the old cluster.
-func (st *relayState) resetSavedScope() {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	if !st.saved.captured {
-		return
-	}
-	st.saved.scope = nil
-	st.saved.beylaJobSelector = ""
 }

@@ -13,7 +13,6 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	"github.com/skyhook-io/radar/internal/argocd"
 	gitopsinsights "github.com/skyhook-io/radar/pkg/gitops/insights"
 )
 
@@ -38,8 +37,8 @@ func TestSetArgoCapabilities_AnotherAppsFailedReadDoesNotMakeThisPagePoll(t *tes
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	argocd.SetConfig(srv.URL, "good-token", false, true)
-	if err := argocd.Probe(context.Background()); err != nil {
+	currentTestIntegrations().ArgoCD.SetConfig(srv.URL, "good-token", false, true)
+	if err := currentTestIntegrations().ArgoCD.Probe(context.Background()); err != nil {
 		t.Fatalf("probe: %v", err)
 	}
 	root := &unstructured.Unstructured{Object: map[string]any{
@@ -48,7 +47,7 @@ func TestSetArgoCapabilities_AnotherAppsFailedReadDoesNotMakeThisPagePoll(t *tes
 
 	// The fast app's page loads first; its diff is cached from here on.
 	var first gitopsinsights.Capabilities
-	setArgoCapabilities(context.Background(), "argocd", "fast", root, &first)
+	setArgoCapabilities(context.Background(), currentTestIntegrations().ArgoCD, "argocd", "fast", root, &first)
 	if !first.ArgoDiffAvailable || first.ArgoRetrying {
 		t.Fatalf("fast app first load: diff %v, retrying %v; want the diff and no polling", first.ArgoDiffAvailable, first.ArgoRetrying)
 	}
@@ -56,18 +55,18 @@ func TestSetArgoCapabilities_AnotherAppsFailedReadDoesNotMakeThisPagePoll(t *tes
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	var slow gitopsinsights.Capabilities
-	setArgoCapabilities(ctx, "argocd", "slow", root, &slow)
+	setArgoCapabilities(ctx, currentTestIntegrations().ArgoCD, "argocd", "slow", root, &slow)
 	if !slow.ArgoRetrying || slow.ArgoDiffAvailable {
 		t.Fatalf("slow app: retrying %v, diff %v; want retrying without a diff", slow.ArgoRetrying, slow.ArgoDiffAvailable)
 	}
-	if !argocd.Retrying() {
+	if !currentTestIntegrations().ArgoCD.Retrying() {
 		t.Fatal("the slow app's read must leave the connection retrying")
 	}
 
 	// The fast app's next poll is served from its cache, so nothing it does
 	// clears the slow app's failure.
 	var fast gitopsinsights.Capabilities
-	setArgoCapabilities(context.Background(), "argocd", "fast", root, &fast)
+	setArgoCapabilities(context.Background(), currentTestIntegrations().ArgoCD, "argocd", "fast", root, &fast)
 	if !fast.ArgoDiffAvailable {
 		t.Fatal("fast app: the diff must be available")
 	}

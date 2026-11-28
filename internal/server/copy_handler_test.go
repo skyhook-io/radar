@@ -74,8 +74,8 @@ func downloadServer(t *testing.T, srv *Server, respond func(t *testing.T, req ex
 	// The handlers refuse to start unless the cluster looks connected and both a
 	// client and a config resolve, so all three seams have to be published.
 	prevConn := k8s.GetConnectionStatus()
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
-	t.Cleanup(func() { k8s.SetConnectionStatus(prevConn) })
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	t.Cleanup(func() { k8s.PublishTestConnectionStatus(prevConn) })
 
 	apiserver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)

@@ -197,11 +197,11 @@ func TestCapabilitiesAdvertiseLocalTerminalAvailability(t *testing.T) {
 	previousConnection := k8s.GetConnectionStatus()
 	t.Cleanup(func() {
 		k8s.ForceDisableLocalTerminal = previousForceDisableLocalTerminal
-		k8s.SetConnectionStatus(previousConnection)
+		k8s.PublishTestConnectionStatus(previousConnection)
 	})
 	t.Cleanup(k8s.SetTestLocalMode())
 	k8s.ForceDisableLocalTerminal = false
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
 
 	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/apis/authorization.k8s.io/v1/selfsubjectaccessreviews" {
@@ -273,7 +273,7 @@ func TestCapabilitiesAdvertiseLocalTerminalAvailability(t *testing.T) {
 		})
 	}
 
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateDisconnected})
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateDisconnected})
 	k8s.Current().ResetPermissions()
 	disconnected := []struct {
 		name   string

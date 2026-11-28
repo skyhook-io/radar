@@ -37,11 +37,9 @@ func TestAttributionChurnRetainsOnlyUnchangedPairs(t *testing.T) {
 }
 
 func TestConnectionChangeClearsAttributionTimers(t *testing.T) {
-	Initialize(nil, nil, "test", nil)
-	defer Reset()
-	for _, change := range []func(){func() { SetManualURL("http://changed:9090") }, func() { SetHeaders(map[string]string{"X-Scope-OrgID": "changed"}) }, Reset} {
+	c := testClient(t, "test", nil)
+	for _, change := range []func(){func() { c.Configure("http://changed:9090", nil) }, func() { c.Configure("http://changed:9090", map[string]string{"X-Scope-OrgID": "changed"}) }, func() { _ = c.Close() }} {
 		ctx, cancel := context.WithCancel(context.Background())
-		c := GetClient()
 		c.mu.Lock()
 		c.workloadAttributionEntries = map[string]*workloadAttributionEntry{"recent": {started: time.Now(), cancel: cancel}}
 		c.mu.Unlock()
@@ -85,18 +83,20 @@ func TestAttributionWaitsForDiscoveryBeforeProbeDeadline(t *testing.T) {
 		_, _ = w.Write(attributionEvidence(rows, ""))
 	}))
 	defer server.Close()
+	c := &Client{manualURL: server.URL, httpClient: server.Client()}
+	c.discoveryOnce.Do(func() { c.discoveryGate = make(chan struct{}, 1) })
 	select {
-	case discoveryGate <- struct{}{}:
+	case c.discoveryGate <- struct{}{}:
 	default:
 		t.Fatal("discovery gate busy")
 	}
 	held := true
 	defer func() {
 		if held {
-			<-discoveryGate
+			<-c.discoveryGate
 		}
 	}()
-	c := &Client{manualURL: server.URL, httpClient: server.Client()}
+
 	defer func() { c.mu.Lock(); c.retired = true; c.cancelWorkloadAttributionsLocked(); c.mu.Unlock() }()
 	scope := PodScope{Namespace: "shop", Kind: "Deployment", Name: "api", Identities: []prom.WorkloadPodIdentity{{Name: "api-0", UID: "030a7597-c1fc-48b0-9bb4-683489285358"}}}
 	c.automaticWorkloadAttributions(scope)
@@ -109,7 +109,7 @@ func TestAttributionWaitsForDiscoveryBeforeProbeDeadline(t *testing.T) {
 	if _, state := c.automaticWorkloadAttributions(scope); state != "detecting" {
 		t.Fatalf("discovery became probe error: %s", state)
 	}
-	<-discoveryGate
+	<-c.discoveryGate
 	held = false
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {

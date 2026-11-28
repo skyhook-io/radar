@@ -1,5 +1,5 @@
 import { useCallback, useMemo } from 'react'
-import { useQuery, useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query'
+import { CancelledError, useQuery, useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import type { TrafficSourcesResponse, TrafficFlowsResponse, TrafficRecordsResponse } from '../types'
 import { fetchJSON as fetchApiJSON, useRadarFeature } from './client'
 import { shouldRetryRadarQuery } from './radarFeatures'
@@ -48,11 +48,18 @@ export async function fetchTrafficSources(queryClient: QueryClient, fresh: boole
 export async function detectTrafficSourcesAgain(queryClient: QueryClient): Promise<TrafficSourcesResponse> {
   // A pending fetch of the same key would otherwise be returned in its place.
   await queryClient.cancelQueries({ queryKey: ['traffic-sources'], exact: true })
-  return queryClient.fetchQuery({
+  let detectionSignal: AbortSignal | undefined
+  const sources = await queryClient.fetchQuery({
     queryKey: ['traffic-sources'],
-    queryFn: ({ signal }) => fetchTrafficSources(queryClient, true, signal),
+    queryFn: ({ signal }) => {
+      detectionSignal = signal
+      return fetchTrafficSources(queryClient, true, signal)
+    },
     staleTime: 0,
   })
+  // A cancelled fetch with cached data can resolve with the previous answer.
+  if (detectionSignal?.aborted) throw new CancelledError()
+  return sources
 }
 
 export function useTrafficSources() {
@@ -268,11 +275,12 @@ export function useRefetchTrafficSources() {
 }
 
 // Get traffic connection status
-export function useTrafficConnectionStatus() {
+export function useTrafficConnectionStatus(enabled = true) {
   return useQuery<TrafficConnectionInfo>({
     queryKey: ['traffic-connection'],
-    queryFn: () => fetchJSON('/traffic/connection'),
+    queryFn: ({ signal }) => fetchJSON('/traffic/connection', signal),
     staleTime: 5000, // 5 seconds
+    enabled,
   })
 }
 

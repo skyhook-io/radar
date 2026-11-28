@@ -8,9 +8,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/skyhook-io/radar/internal/argocd"
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/config"
+	"github.com/skyhook-io/radar/internal/connectionruntime"
+	"github.com/skyhook-io/radar/internal/connections"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/internal/settings"
@@ -103,6 +104,39 @@ func TestLaunchOverridesWithoutContextDoNotStopStartup(t *testing.T) {
 	}
 }
 
+func TestLocalLaunchScopeSurvivesSameContextRetry(t *testing.T) {
+	useTempHome(t)
+	t.Cleanup(k8s.SetTestLocalMode())
+	t.Cleanup(k8s.SetTestProfileSource("/test/local", "dev", "developer"))
+	old := k8s.SetTestConfig(&rest.Config{Host: "https://cluster"})
+	t.Cleanup(func() { k8s.SetTestConfig(old) })
+	target, err := k8s.CurrentProfileTarget()
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolver := connections.NewResolver(config.NewProfileStore(), target, nil)
+	runtime := connectionruntime.New(resolver, connectionruntime.Settings{
+		Scope: prom.WorkloadMetricsScope{ClusterLabels: map[string]string{"cluster": "dev"}},
+	})
+	beforeSwitch := clearLaunchScopeOnContextSwitch(runtime)
+	beforeSwitch("dev")
+	member, _ := runtime.Build(t.Context(), k8s.Current())
+	defer member.Close()
+	metrics, err := member.(*connectionruntime.Set).MetricsClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	matchers, isolation, err := metrics.ResolveTrafficScope(t.Context(), "caretta_links_observed", "", 0, nil)
+	if err != nil || matchers != `cluster="dev"` || isolation.Mode != prometheus.SeriesIsolationConfigured {
+		t.Fatalf("scope after same-context Retry = %q, %v, %v", matchers, isolation, err)
+	}
+
+	beforeSwitch("prod")
+	if scope := runtime.Settings().Scope; scope.SingleCluster || len(scope.ClusterLabels) != 0 {
+		t.Fatalf("scope after choosing a different context = %+v", scope)
+	}
+}
+
 func TestUnusableProfileDoesNotPreventStartupWithScope(t *testing.T) {
 	if scenario := os.Getenv("RADAR_PROFILE_STARTUP_CASE"); scenario != "" {
 		useTempHome(t)
@@ -143,7 +177,7 @@ func TestUnusableProfileDoesNotPreventStartupWithScope(t *testing.T) {
 			}
 		}
 		RegisterCallbacks(AppConfig{WorkloadMetricsScope: prom.WorkloadMetricsScope{SingleCluster: true}}, timeline.StoreConfig{})
-		if prometheus.GetClient() != nil {
+		if connectionruntime.SetFor(k8s.Current()).Metrics != nil {
 			t.Fatal("unusable profile activated metrics")
 		}
 		return
@@ -193,12 +227,15 @@ func TestFirstConnectionActivatesSavedIntegrations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	RegisterCallbacks(AppConfig{WorkloadMetricsScope: prom.WorkloadMetricsScope{SingleCluster: true}}, timeline.StoreConfig{})
-	if argocd.IsConfigured() {
+	cfg := RegisterCallbacks(AppConfig{WorkloadMetricsScope: prom.WorkloadMetricsScope{SingleCluster: true}}, timeline.StoreConfig{})
+	if connectionruntime.SetFor(k8s.Current()).ArgoCD != nil {
 		t.Fatal("saved Argo CD settings activated before connecting")
 	}
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "dev"})
-	if !argocd.IsConfigured() {
+	if !k8s.AdmitTestIntegrations(cfg.IntegrationRuntime.Build) {
+		t.Fatal("admission refused")
+	}
+	t.Cleanup(k8s.RetireServingConnection)
+	if !connectionruntime.SetFor(k8s.Current()).ArgoCD.IsConfigured() {
 		t.Fatal("saved Argo CD settings were not activated on the first connection")
 	}
 }

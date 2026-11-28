@@ -26,8 +26,8 @@ import (
 func withWorkloadHistoryStore(t *testing.T) timeline.EventStore {
 	t.Helper()
 	prev := k8s.GetConnectionStatus()
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
-	t.Cleanup(func() { k8s.SetConnectionStatus(prev) })
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	t.Cleanup(func() { k8s.PublishTestConnectionStatus(prev) })
 	historyScopes.reset()
 	t.Cleanup(historyScopes.reset)
 	timeline.ResetStore()

@@ -101,17 +101,16 @@ func TestCurrentPodRightsizingDetailAndScanAgreeOnDaemonSetCohort(t *testing.T) 
 		t.Fatal(err)
 	}
 	t.Cleanup(k8s.ResetTestState)
-	Initialize(nil, nil, "rightsizing-detail", nil)
-	t.Cleanup(func() { Reset(); Initialize(nil, nil, "", nil) })
+	client := testClient(t, "rightsizing-detail", k8s.GetResourceCache())
 	store, queries := bindingTestStore(t)
-	connectBindingTestClient(t, store.URL)
+	connectBindingTestClient(t, client, store.URL)
 	resolver := resolveRightsizingScope
 	resolveRightsizingScope = func(context.Context, *Client, ViewScopeRequest, *k8s.ResourceCache) (ViewScope, error) {
 		return ViewScope{State: ViewScopeUnlabeled}, nil
 	}
 	t.Cleanup(func() { resolveRightsizingScope = resolver })
 	ctx := context.Background()
-	resp, err := RightsizingForWorkload(sizingTunnelTestContext(ctx), "daemonset", ds.Namespace, ds.Name)
+	resp, err := client.RightsizingForWorkload(sizingTunnelTestContext(ctx), "daemonset", ds.Namespace, ds.Name)
 	if err != nil || resp.ClusterScope == nil || resp.ClusterScope.State != ViewScopeCurrentPodUIDs || resp.OwnerCoverage != rightsizing.OwnerCoverageCurrentPods || resp.SampleAvailable || !strings.Contains(resp.Reason, "UID") {
 		t.Fatalf("detail=%+v err=%v", resp, err)
 	}
@@ -123,7 +122,7 @@ func TestCurrentPodRightsizingDetailAndScanAgreeOnDaemonSetCohort(t *testing.T) 
 			t.Fatalf("incorrect cohort in query: %s", q)
 		}
 	}
-	standalone, err := RightsizingForWorkload(ctx, "daemonset", ds.Namespace, ds.Name)
+	standalone, err := client.RightsizingForWorkload(ctx, "daemonset", ds.Namespace, ds.Name)
 	if err != nil || standalone.ClusterScope == nil || standalone.ClusterScope.State != ViewScopeUnlabeled {
 		t.Fatalf("standalone lost its existing history: %+v, %v", standalone, err)
 	}
@@ -137,7 +136,7 @@ func TestCurrentPodRightsizingDetailAndScanAgreeOnDaemonSetCohort(t *testing.T) 
 		t.Fatalf("scan snapshot: %+v", workloads)
 	}
 	for _, w := range workloads {
-		detail, err := loadRightsizingWorkload(sizingTunnelTestContext(ctx), w.kind, w.namespace, w.name)
+		detail, err := loadRightsizingWorkload(sizingTunnelTestContext(ctx), client.cache, w.kind, w.namespace, w.name)
 		if err != nil {
 			t.Fatal(err)
 		}

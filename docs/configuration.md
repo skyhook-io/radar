@@ -636,6 +636,8 @@ choose **Save changes**. **Discard** resets the form without changing saved sett
 Switching A → B → A restores A's settings. A context with no saved settings uses
 discovery. Local CLI and Desktop share `~/.radar/clusters.json`.
 
+Saving replaces the affected integration on the current connection and cancels its in-flight requests and automatic port-forwards. Open views cancel affected fetches and refetch. Metrics saves also refresh cost, traffic and charts that use the metrics backend, including when Settings reports that the saved backend is unreachable.
+
 Local Prometheus discovery can fall back to port-forwarding. If access is denied,
 the error names the missing permission when available, such as `list pods` or
 `create pods/portforward`. Grant it in the Prometheus Service’s namespace, or
@@ -735,8 +737,7 @@ file-edited, not editable in Settings. Radar rejects unknown fields and
 validates accepted cluster targets, URLs, HTTP headers and integration-specific
 rules when it reads the file; an invalid connection pauses only that integration.
 
-CLI and Desktop reread bounded file contents on the next integration operation,
-including background consumers, not only when Settings opens. A content hash
+CLI and Desktop reread bounded file contents at HTTP and MCP operation entry. Background work uses the settings captured by its integration member. A content hash
 avoids reparsing unchanged data. Concurrent saves use a file lock and revision
 checks. Draft revisions cover the selected context and integration, including
 redacted credentials: saving Argo CD or another cluster does not invalidate an
@@ -777,6 +778,10 @@ tab identifies its kubeconfig entry. In-cluster installations show operator
 configuration guidance instead of local-file information. Discovery-only credentials may require
 reentry. An unavailable kubeconfig is distinguished from a context confirmed
 removed from a readable file.
+
+If you save a Kubecost URL while disconnected and Radar cannot resolve the
+cluster ID, Settings reports that it saved the URL without checking it. Cost
+checks the saved connection once Kubernetes is available.
 
 CAPI profiles use management-source/namespace/name identity, not temporary
 kubeconfig paths. Changes to the Kubernetes server, CA trust, TLS settings, proxy

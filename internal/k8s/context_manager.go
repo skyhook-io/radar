@@ -43,20 +43,7 @@ type TimelineResetFunc func()
 // Returns error if reinitialization fails
 type TimelineReinitFunc func() error
 
-// TrafficResetFunc is called to reset the traffic manager
-type TrafficResetFunc func()
-
-// TrafficReinitFunc is called to reinitialize the traffic manager
 // Returns error if reinitialization fails
-type TrafficReinitFunc func() error
-
-// PrometheusResetFunc is called to reset the Prometheus metrics client
-type PrometheusResetFunc func()
-
-// PrometheusReinitFunc is called to reinitialize the Prometheus metrics client
-type PrometheusReinitFunc func() error
-
-type CostResetFunc func()
 
 var (
 	beforeContextSwitchCallbacks   []ContextSwitchCallback
@@ -66,11 +53,6 @@ var (
 	contextSwitchMu                sync.RWMutex
 	timelineResetFunc              TimelineResetFunc
 	timelineReinitFunc             TimelineReinitFunc
-	trafficResetFunc               TrafficResetFunc
-	trafficReinitFunc              TrafficReinitFunc
-	prometheusResetFunc            PrometheusResetFunc
-	prometheusReinitFunc           PrometheusReinitFunc
-	costResetFunc                  CostResetFunc
 	// sessionStopFunc terminates active port-forward / exec sessions. Invoked at
 	// the point of no return — immediately before the cache is torn down — so a
 	// pre-teardown failure (connectivity test, scope-target validation) doesn't
@@ -249,55 +231,6 @@ func RegisterTimelineFuncs(reset TimelineResetFunc, reinit TimelineReinitFunc) {
 	defer contextSwitchMu.Unlock()
 	timelineResetFunc = reset
 	timelineReinitFunc = reinit
-}
-
-// RegisterTrafficFuncs registers the traffic manager reset/reinit functions
-// This breaks the import cycle by allowing main to register traffic functions
-func RegisterTrafficFuncs(reset TrafficResetFunc, reinit TrafficReinitFunc) {
-	contextSwitchMu.Lock()
-	defer contextSwitchMu.Unlock()
-	trafficResetFunc = reset
-	trafficReinitFunc = reinit
-}
-
-// RestartTrafficSubsystem tears down and rebuilds the traffic manager for the
-// current cluster, the way a context switch does, serialized with any switch
-// or rescope in flight so the two can't interleave on the manager singleton.
-// A live configuration change that the traffic sources copied at construction
-// (the metrics URL and headers) reaches them only this way. No-op while
-// disconnected: the next connect builds the manager from current config.
-func RestartTrafficSubsystem() error {
-	contextSwitchMu.RLock()
-	resetFn, reinitFn := trafficResetFunc, trafficReinitFunc
-	contextSwitchMu.RUnlock()
-	if resetFn == nil || reinitFn == nil {
-		return nil
-	}
-	activeContextOperations.Add(1)
-	contextOpMu.Lock()
-	defer func() {
-		activeContextOperations.Add(-1)
-		contextOpMu.Unlock()
-	}()
-	if GetClient() == nil {
-		return nil
-	}
-	resetFn()
-	return reinitFn()
-}
-
-// RegisterPrometheusFuncs registers the Prometheus client reset/reinit functions.
-func RegisterPrometheusFuncs(reset PrometheusResetFunc, reinit PrometheusReinitFunc) {
-	contextSwitchMu.Lock()
-	defer contextSwitchMu.Unlock()
-	prometheusResetFunc = reset
-	prometheusReinitFunc = reinit
-}
-
-func RegisterCostResetFunc(reset CostResetFunc) {
-	contextSwitchMu.Lock()
-	defer contextSwitchMu.Unlock()
-	costResetFunc = reset
 }
 
 // TestClusterConnection tests connectivity to the current cluster.
@@ -645,8 +578,10 @@ func reinitializeCurrentContextIfOperationCurrent(
 	InvalidateServerVersionCache()
 	InvalidatePlatformCache()
 
-	initCtx, initCancel := NewOperationContext(ContextSwitchTimeout)
+	operation := OperationContext()
+	initCtx, initCancel := context.WithTimeout(operation, ContextSwitchTimeout)
 	defer initCancel()
+	build := Current()
 	if err := initSubsystems(initCtx, reportProgress); err != nil {
 		if currentOperationGen() != observedOperationGen {
 			return ErrReconnectSuperseded
@@ -659,11 +594,11 @@ func reinitializeCurrentContextIfOperationCurrent(
 
 	reportProgress("Building topology...")
 	notifyContextSwitchCallbacks(contextName, "")
-	SetConnectionStatus(ConnectionStatus{
-		State:       StateConnected,
-		Context:     contextName,
-		ClusterName: GetClusterName(),
-	})
+	if !Admit(operation, build, ConnectionStatus{
+		State: StateConnected, Context: contextName, ClusterName: build.ClusterName(),
+	}) {
+		return ErrReconnectSuperseded
+	}
 	log.Printf("[ops] In-cluster reconnect to %q COMPLETE (%v total)", contextName, time.Since(reconnectStart))
 	return nil
 }
@@ -794,7 +729,7 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 	// Cancel any in-flight API calls from the previous context (RBAC checks,
 	// capability probes, etc.) so they don't serialize through the old exec
 	// plugin and block the new context's connectivity test.
-	CancelOngoingOperations()
+	operation, _ := CancelOngoingOperations()
 
 	// Step 1: Tear down all subsystems. Stop sessions first — past this point the
 	// previous cluster's caches are gone, so lingering port-forwards / exec
@@ -881,17 +816,18 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 	if tracker != nil || localRetry {
 		// Once the target answers, informer readiness uses the same first-paint
 		// backstop as startup. A cluster replacement still cancels this work.
-		initCtx, initCancel = context.WithCancel(OperationContext())
+		initCtx, initCancel = context.WithCancel(operation)
 		// A stuck exec plugin can outlive the discovery client HTTP timeout.
 		// Start this wait budget only once the typed cache is ready.
 		discoveryWait = FirstPaintBackstop
 		stop := context.AfterFunc(checked.ctx, initCancel)
 		defer stop()
 	} else {
-		initCtx, initCancel = NewOperationContext(ContextSwitchTimeout)
+		initCtx, initCancel = context.WithTimeout(operation, ContextSwitchTimeout)
 	}
 	defer initCancel()
-	if err := initAllSubsystems(initCtx, progress, discoveryWait, tracker); err != nil {
+	build := Current()
+	if err := build.initAllSubsystems(initCtx, progress, discoveryWait, tracker); err != nil {
 		if (tracker != nil && !tracker.setCanStop(checked.ctx, false)) || (localRetry && checked.ctx.Err() != nil) {
 			return context.Canceled
 		}
@@ -914,15 +850,13 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 	}
 	notifyContextSwitchCallbacks(newContext, switchID)
 
-	// Publish success while still holding contextOpMu: a caller publishing
-	// after this returns races the next queued operation's teardown, and the
-	// window would advertise Connected over dead caches. HTTP handlers'
-	// duplicate publishes dedupe inside SetConnectionStatus.
-	SetConnectionStatus(ConnectionStatus{
-		State:       StateConnected,
-		Context:     newContext,
-		ClusterName: GetClusterName(),
-	})
+	// Cache initialization has its own deadline. Admission still belongs to
+	// the outer operation after a successful build.
+	if !Admit(operation, build, ConnectionStatus{
+		State: StateConnected, Context: newContext, ClusterName: build.ClusterName(),
+	}) {
+		return context.Canceled
+	}
 	log.Printf("[ops] Context switch to %q COMPLETE (%v total)", newContext, time.Since(switchStart))
 
 	return nil
@@ -973,8 +907,7 @@ func PerformNamespaceRescope(namespace string) error {
 	safePreviousNamespace := SanitizeForLog(previousNamespace)
 	log.Printf("[ops] Namespace rescope START → %q", safeNamespace)
 
-	CancelOngoingOperations()
-	myGen := currentOperationGen()
+	operation, myGen := CancelOngoingOperations()
 	reportProgress("Testing cluster connectivity...")
 	t := time.Now()
 	connCtx, connCancel := NewOperationContext(connectionTestOperationTimeout())
@@ -992,7 +925,8 @@ func PerformNamespaceRescope(namespace string) error {
 	// namespace. Stop sessions now (not before the connectivity test) so a failed
 	// pre-rescope check doesn't tear down port-forwards / exec for nothing.
 	stopActiveSessions()
-	if err := reinitializeNamespaceScope(namespace, "Stopping caches..."); err != nil {
+	build, err := reinitializeNamespaceScope(namespace, "Stopping caches...")
+	if err != nil {
 		elapsed := time.Since(rescopeStart).Truncate(time.Millisecond)
 		log.Printf("[ops] Namespace rescope FAILED at subsystem init: %v (%v since rescope start)", err, elapsed)
 		errorlog.Record("namespace-rescope", "error",
@@ -1006,7 +940,8 @@ func PerformNamespaceRescope(namespace string) error {
 			log.Printf("[ops] Namespace rescope to %q superseded by a newer operation; skipping rollback", safeNamespace)
 			return fmt.Errorf("namespace rescope to %q superseded by a newer operation", namespace)
 		}
-		if rollbackErr := reinitializeNamespaceScope(previousNamespace, "Restoring previous namespace..."); rollbackErr != nil {
+		rollback, rollbackErr := reinitializeNamespaceScope(previousNamespace, "Restoring previous namespace...")
+		if rollbackErr != nil {
 			log.Printf("[ops] Namespace rescope rollback to %q FAILED: %v", safePreviousNamespace, rollbackErr)
 			errorlog.Record("namespace-rescope", "error",
 				"stage=Rollback namespace=%q elapsed=%v: %v", safePreviousNamespace, time.Since(rescopeStart).Truncate(time.Millisecond), rollbackErr)
@@ -1014,7 +949,9 @@ func PerformNamespaceRescope(namespace string) error {
 			return fmt.Errorf("subsystem init failed: %w; rollback to previous namespace %q failed: %v", err, previousNamespace, rollbackErr)
 		}
 		// The rollback rebuilt the caches: a new admission with a fresh ID.
-		SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: GetContextName(), ClusterName: GetClusterName()})
+		if !Admit(operation, rollback, ConnectionStatus{State: StateConnected, Context: rollback.ContextName(), ClusterName: rollback.ClusterName()}) {
+			return context.Canceled
+		}
 		notifyNamespaceRescopeCallbacks(previousNamespace)
 		return fmt.Errorf("subsystem init failed: %w; restored previous namespace %q", err, previousNamespace)
 	}
@@ -1029,13 +966,15 @@ func PerformNamespaceRescope(namespace string) error {
 	reportProgress("Building topology...")
 	log.Printf("[ops] Namespace rescope to %q COMPLETE (%v total)", safeNamespace, time.Since(rescopeStart))
 	// The rebuild retired the previous connection; admit the rescoped one.
-	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: GetContextName(), ClusterName: GetClusterName()})
+	if !Admit(operation, build, ConnectionStatus{State: StateConnected, Context: build.ContextName(), ClusterName: build.ClusterName()}) {
+		return context.Canceled
+	}
 	notifyNamespaceRescopeCallbacks(namespace)
 
 	return nil
 }
 
-func reinitializeNamespaceScope(namespace, resetMessage string) error {
+func reinitializeNamespaceScope(namespace, resetMessage string) (*Connection, error) {
 	reportProgress(resetMessage)
 	t := time.Now()
 	ResetAllSubsystems()
@@ -1048,11 +987,12 @@ func reinitializeNamespaceScope(namespace, resetMessage string) error {
 	t = time.Now()
 	initCtx, initCancel := NewOperationContext(ContextSwitchTimeout)
 	defer initCancel()
-	if err := InitAllSubsystems(initCtx, reportProgress); err != nil {
-		return err
+	build := Current()
+	if err := build.InitSubsystems(initCtx, reportProgress); err != nil {
+		return nil, err
 	}
 	logTiming("   [ops] InitAllSubsystems: %v", time.Since(t))
-	return nil
+	return build, nil
 }
 
 func notifyNamespaceRescopeCallbacks(namespace string) {

@@ -31,7 +31,6 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/skyhook-io/radar/internal/config"
-	"github.com/skyhook-io/radar/internal/connections"
 	"github.com/skyhook-io/radar/pkg/argoapi"
 )
 
@@ -982,25 +981,23 @@ func TestIsTransportFailure(t *testing.T) {
 // A certificate Radar can't verify is a failed read, but asking again won't
 // fix it, so pages don't keep asking.
 func TestReadMayRecover_CertificateFailureNeedsTheUser(t *testing.T) {
+	m := newTestManager(config.Config{})
+	t.Cleanup(m.Reset)
 	wrap := func(err error) error {
 		return fmt.Errorf("argoapi: GET /x: %w", &url.Error{Op: "Get", URL: "http://a", Err: err})
 	}
-	if ReadMayRecover(wrap(&tls.CertificateVerificationError{Err: x509.UnknownAuthorityError{}})) {
+	if m.ReadMayRecover(wrap(&tls.CertificateVerificationError{Err: x509.UnknownAuthorityError{}})) {
 		t.Error("certificate failure: want no retry")
 	}
-	if !ReadMayRecover(wrap(context.DeadlineExceeded)) {
+	if !m.ReadMayRecover(wrap(context.DeadlineExceeded)) {
 		t.Error("timeout: want retry")
 	}
-	if !ReadMayRecover(fmt.Errorf("%w: /x returned 503", argoapi.ErrGatewayUnavailable)) {
+	if !m.ReadMayRecover(fmt.Errorf("%w: /x returned 503", argoapi.ErrGatewayUnavailable)) {
 		t.Error("gateway 503: want retry")
 	}
 	// While the shared connection is being retried, a page asks again even
 	// for an answer that isn't a transport failure, but never for a
 	// certificate failure.
-	previous := defaultManager
-	defaultManager = newTestManager(config.Config{})
-	t.Cleanup(func() { defaultManager.Reset(); defaultManager = previous })
-	m := defaultManager
 	m.SetConfig("http://127.0.0.1:1", "argo-secret", false, true)
 	m.mu.Lock()
 	m.startBackgroundProbeLocked(true)
@@ -1010,10 +1007,10 @@ func TestReadMayRecover_CertificateFailureNeedsTheUser(t *testing.T) {
 	if !m.Retrying() {
 		t.Fatal("setup: want the shared connection retrying")
 	}
-	if !ReadMayRecover(errors.New("argoapi: /x returned 500")) {
+	if !m.ReadMayRecover(errors.New("argoapi: /x returned 500")) {
 		t.Error("retrying: want the page to ask again")
 	}
-	if ReadMayRecover(wrap(&tls.CertificateVerificationError{Err: x509.UnknownAuthorityError{}})) {
+	if m.ReadMayRecover(wrap(&tls.CertificateVerificationError{Err: x509.UnknownAuthorityError{}})) {
 		t.Error("certificate failure while retrying: want no retry")
 	}
 }
@@ -1151,27 +1148,6 @@ func TestRead_NotCachedAfterItsConnectionWasDropped(t *testing.T) {
 	}
 }
 
-// A settings reload that fails (Kubernetes disconnected, a context switch
-// under way) must not hold back the next connect for the retry interval.
-func TestBackgroundProbe_FailedReloadDoesNotThrottle(t *testing.T) {
-	previous := defaultManager
-	defaultManager = newTestManager(config.Config{})
-	t.Cleanup(func() { defaultManager.Reset(); defaultManager = previous })
-	m := defaultManager
-	m.SetConfig("http://127.0.0.1:1", "argo-secret", false, true)
-	connections.RegisterRefresh(func(config.Integration) error { return errors.New("context switch in progress") })
-	t.Cleanup(func() { connections.RegisterRefresh(nil) })
-
-	m.Get()
-	waitForBackgroundProbe(t, m)
-	m.mu.Lock()
-	next := m.nextProbe
-	m.mu.Unlock()
-	if !next.IsZero() {
-		t.Fatalf("a failed reload armed the retry throttle until %s", next)
-	}
-}
-
 // Saving new settings must not wait behind a background probe of the old
 // ones that is stuck on a server that never answers.
 func TestSettingsSave_IsNotHeldBehindAProbeOfOldSettings(t *testing.T) {
@@ -1250,17 +1226,10 @@ func TestBackgroundProbe_RedactsTheTokenItProbedWith(t *testing.T) {
 	}))
 	t.Cleanup(func() { log.SetOutput(os.Stderr) })
 
-	previous := defaultManager
-	defaultManager = newTestManager(config.Config{})
-	t.Cleanup(func() { defaultManager.Reset(); defaultManager = previous })
-	m := defaultManager
-	m.SetConfig(srv.URL, "token-before-reload", false, true)
-	connections.RegisterRefresh(func(config.Integration) error {
-		m.SetConfig(srv.URL, "token-after-reload", false, true)
-		return nil
-	})
-	t.Cleanup(func() { connections.RegisterRefresh(nil) })
+	m := newTestManager(config.Config{})
+	t.Cleanup(m.Reset)
 
+	m.SetConfig(srv.URL, "token-after-reload", false, true)
 	m.Get() // starts the background probe
 	deadline := time.Now().Add(2 * time.Second)
 	for {

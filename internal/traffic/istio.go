@@ -33,6 +33,7 @@ var istioNamespaces = []string{"istio-system", "istio", "default"}
 // It uses the shared prometheus.Client for Prometheus discovery and queries,
 // rather than maintaining its own connection state.
 type IstioSource struct {
+	metrics            *metricsInputs
 	k8sClient          kubernetes.Interface
 	queryFn            promQueryFunc
 	waypointsFn        func() map[istioWorkload]bool
@@ -134,11 +135,7 @@ func (s *IstioSource) Detect(ctx context.Context) (*DetectionResult, error) {
 
 // getPrometheusClient returns the shared prometheus client, or an error if unavailable
 func (s *IstioSource) getPrometheusClient() (*promclient.Client, error) {
-	client, connectionErr := promclient.ClientForOperation()
-	if connectionErr != nil {
-		return nil, connectionErr
-	}
-	return client, nil
+	return s.metrics.clientForOperation()
 }
 
 // errIstioPrometheusUnavailable marks a query that never reached Prometheus
@@ -146,6 +143,9 @@ func (s *IstioSource) getPrometheusClient() (*promclient.Client, error) {
 var errIstioPrometheusUnavailable = errors.New("prometheus not available for Istio metrics")
 
 func (s *IstioSource) defaultQuery(ctx context.Context, query string) (*prom.QueryResult, error) {
+	if err := s.metrics.settingsError(); err != nil {
+		return nil, err
+	}
 	client, err := s.getPrometheusClient()
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", errIstioPrometheusUnavailable, err)
@@ -184,16 +184,19 @@ type istioScopes struct {
 // a configured metrics store: one Radar discovered in the cluster holds this
 // cluster's metrics.
 func (s *IstioSource) resolveScopes(ctx context.Context, ambientNamespaces []string, w rateWindow) (istioScopes, error) {
-	url, _ := metricsConfig()
+	url := ""
+	if s.metrics != nil {
+		url = s.metrics.url
+	}
 	httpSelector := istioReporterSelector
 	if len(ambientNamespaces) > 0 {
 		httpSelector = istioAllReportsSelector
 	}
-	http, err := scopeForMetric(ctx, "istio_requests_total", httpSelector, url != "", w.span())
+	http, err := s.metrics.scopeForMetric(ctx, "istio_requests_total", httpSelector, url != "", w.span())
 	if err != nil {
 		return istioScopes{}, err
 	}
-	tcp, err := scopeForMetric(ctx, istioTCPMetric, istioReporterSelector, url != "", w.span())
+	tcp, err := s.metrics.scopeForMetric(ctx, istioTCPMetric, istioReporterSelector, url != "", w.span())
 	return istioScopes{http: http, tcp: tcp, httpSelector: httpSelector, tcpUnchecked: err != nil}, nil
 }
 
@@ -290,6 +293,9 @@ var errIstioTCPUnchecked = errors.New("could not check which cluster the TCP ser
 
 // GetFlows retrieves flows from Istio metrics via the shared Prometheus client
 func (s *IstioSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsResponse, error) {
+	if err := s.metrics.settingsError(); err != nil {
+		return nil, err
+	}
 	var missing []string
 
 	ambientNamespaces := s.ambientNamespaceFn()
@@ -319,7 +325,9 @@ func (s *IstioSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRes
 		}, nil
 	}
 	if err != nil {
-		log.Printf("[istio] Error querying HTTP flows: %v", err)
+		if ctx.Err() == nil {
+			log.Printf("[istio] Error querying HTTP flows: %v", err)
+		}
 		return &FlowsResponse{
 			Source:    "istio",
 			Timestamp: time.Now(),

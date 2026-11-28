@@ -141,10 +141,6 @@ func TestCostSummaryWithTwoUnlabeledClusters(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(k8s.ResetTestState)
-	t.Cleanup(func() {
-		prometheuspkg.Reset()
-		prometheuspkg.Initialize(nil, nil, "", nil)
-	})
 
 	for _, tc := range []struct {
 		name       string
@@ -159,18 +155,14 @@ func TestCostSummaryWithTwoUnlabeledClusters(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store := &unlabeledCostStore{foreign: tc.foreign}
-			prometheuspkg.Reset()
-			prometheuspkg.Initialize(nil, nil, "test", nil)
-			prometheuspkg.SetManualURL(store.serve(t).URL)
+
+			client := testMetrics(t, store.serve(t).URL)
 			if tc.configured {
-				if err := prometheuspkg.SetWorkloadMetricsScope(prom.WorkloadMetricsScope{ClusterLabels: map[string]string{"cluster": "a"}}, ""); err != nil {
+				if err := client.SetWorkloadMetricsScope(prom.WorkloadMetricsScope{ClusterLabels: map[string]string{"cluster": "a"}}, ""); err != nil {
 					t.Fatal(err)
 				}
 			}
-			client, err := prometheuspkg.ClientForOperation()
-			if err != nil {
-				t.Fatal(err)
-			}
+
 			if _, _, err := client.EnsureConnected(context.Background()); err != nil {
 				t.Fatal(err)
 			}
@@ -231,10 +223,6 @@ func TestNamespaceCostsCheckOnlyTheirNamespace(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(k8s.ResetTestState)
-	t.Cleanup(func() {
-		prometheuspkg.Reset()
-		prometheuspkg.Initialize(nil, nil, "", nil)
-	})
 
 	workloads := func(p PromCost) (bool, string, *pkgopencost.ClusterScope) {
 		r := p.Workloads(context.Background(), "shop", nil)
@@ -256,16 +244,12 @@ func TestNamespaceCostsCheckOnlyTheirNamespace(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store := &unlabeledCostStore{foreignPodsIn: tc.foreignIn}
-			prometheuspkg.Reset()
-			prometheuspkg.Initialize(nil, nil, "test", nil)
-			prometheuspkg.SetManualURL(store.serve(t).URL)
-			if err := prometheuspkg.SetWorkloadMetricsScope(prom.WorkloadMetricsScope{ClusterLabels: map[string]string{"cluster": "a"}}, ""); err != nil {
+
+			client := testMetrics(t, store.serve(t).URL)
+			if err := client.SetWorkloadMetricsScope(prom.WorkloadMetricsScope{ClusterLabels: map[string]string{"cluster": "a"}}, ""); err != nil {
 				t.Fatal(err)
 			}
-			client, err := prometheuspkg.ClientForOperation()
-			if err != nil {
-				t.Fatal(err)
-			}
+
 			if _, _, err := client.EnsureConnected(context.Background()); err != nil {
 				t.Fatal(err)
 			}

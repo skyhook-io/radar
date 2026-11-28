@@ -100,9 +100,8 @@ func templateKinds(kind string) []string {
 }
 
 // cachedServicePorts reads the destination's pod template and its namespace's
-// Services from Radar's cache.
-func cachedServicePorts(namespace, workload, kind, protocol string) ([]int, bool) {
-	cache := k8s.GetResourceCache()
+// Services from the traffic member's cache.
+func cachedServicePorts(cache *k8s.ResourceCache, namespace, workload, kind, protocol string) ([]int, bool) {
 	if cache == nil || cache.Services() == nil {
 		return nil, false
 	}

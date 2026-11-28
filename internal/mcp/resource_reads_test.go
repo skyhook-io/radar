@@ -1378,8 +1378,8 @@ func TestResourceReadsCollectorReasons(t *testing.T) {
 		restore()
 	}
 	old := k8s.GetConnectionStatus()
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnecting})
-	t.Cleanup(func() { k8s.SetConnectionStatus(old) })
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnecting})
+	t.Cleanup(func() { k8s.PublishTestConnectionStatus(old) })
 	_, err := checkDynamicResourceRead(context.Background(), "widgets", "example.test", "alpha", "list", k8s.ErrDynamicNotReady)
 	if err == nil || !strings.HasPrefix(err.Error(), "kind_sync_pending:") {
 		t.Fatalf("connecting dynamic: %v", err)
@@ -2140,7 +2140,7 @@ func TestResourceReadsNoNamespaceKindResolution(t *testing.T) {
 	// Without discovery, a connecting Radar is still loading; a connected one
 	// failed to start it, which says nothing about Radar's access.
 	for state, want := range map[k8s.ConnectionState]string{k8s.StateConnecting: "kind_sync_pending:", k8s.StateConnected: "read_error:"} {
-		k8s.SetConnectionStatus(k8s.ConnectionStatus{State: state})
+		k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: state})
 		_, _, err := handleGetResource(context.Background(), nil, getResourceInput{Kind: "widgets", Name: "present"})
 		if err == nil || !strings.HasPrefix(err.Error(), want) {
 			t.Fatalf("%s without discovery: %v", state, err)

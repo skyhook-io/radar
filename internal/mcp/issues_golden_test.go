@@ -478,6 +478,6 @@ func initGoldenHelm(t *testing.T) {
 	helm.ResetTestClient()
 	previousConfig := k8s.SetTestConfig(&rest.Config{Host: storage.URL})
 	t.Cleanup(func() { k8s.SetTestConfig(previousConfig) })
-	helm.Initialize()
+	helm.Initialize(nil)
 	t.Cleanup(helm.ResetTestClient)
 }

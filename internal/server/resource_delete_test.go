@@ -56,8 +56,8 @@ func TestDeleteResourceHandler(t *testing.T) {
 			if state == "" {
 				state = k8s.StateConnected
 			}
-			k8s.SetConnectionStatus(k8s.ConnectionStatus{State: state})
-			t.Cleanup(func() { k8s.SetConnectionStatus(previous) })
+			k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: state})
+			t.Cleanup(func() { k8s.PublishTestConnectionStatus(previous) })
 			router := chi.NewRouter()
 			s := &Server{}
 			router.Delete("/api/resources/{kind}/{namespace}/{name}", s.handleDeleteResource)
@@ -120,8 +120,8 @@ func TestDeleteResourceHandlerBindsToTheReviewedObject(t *testing.T) {
 			}
 			t.Cleanup(k8s.ResetTestDynamicState)
 			previous := k8s.GetConnectionStatus()
-			k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
-			t.Cleanup(func() { k8s.SetConnectionStatus(previous) })
+			k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+			t.Cleanup(func() { k8s.PublishTestConnectionStatus(previous) })
 			router := chi.NewRouter()
 			s := &Server{}
 			router.Delete("/api/resources/{kind}/{namespace}/{name}", s.handleDeleteResource)

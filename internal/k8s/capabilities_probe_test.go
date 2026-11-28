@@ -3,6 +3,7 @@ package k8s
 import (
 	"context"
 	"fmt"
+	"io"
 	"math"
 	"reflect"
 	"slices"
@@ -858,20 +859,14 @@ func TestContextSwitchLeavesNoPreviousClusterPermissions(t *testing.T) {
 		t.Fatal("seeding the permission cache did not take")
 	}
 
-	// Teardown starts with the registered reset hooks, while the previous
-	// cluster's resource cache is still live. Readers treat a nil permission
-	// result as cluster-wide access, so the cache must still hold the previous
-	// cluster's answer at that point.
 	var cachedAtTeardown atomic.Bool
-	contextSwitchMu.Lock()
-	previousCostReset := costResetFunc
-	costResetFunc = func() { cachedAtTeardown.Store(GetCachedPermissionResult() != nil) }
-	contextSwitchMu.Unlock()
-	t.Cleanup(func() {
-		contextSwitchMu.Lock()
-		costResetFunc = previousCostReset
-		contextSwitchMu.Unlock()
-	})
+	if !AdmitTestIntegrations(func(context.Context, *Connection) (io.Closer, func()) {
+		return testIntegrationClose(func() {
+			cachedAtTeardown.Store(GetCachedPermissionResult() != nil)
+		}), nil
+	}) {
+		t.Fatal("could not admit the connection to be retired")
+	}
 
 	_ = PerformContextSwitch("target")
 
@@ -911,3 +906,7 @@ func TestProbeResourceAccessRecordsOnlyConfirmedDenials(t *testing.T) {
 		t.Fatalf("the cached copy lost the confirmed denials: %+v", cached.DeniedNamespaces)
 	}
 }
+
+type testIntegrationClose func()
+
+func (f testIntegrationClose) Close() error { f(); return nil }

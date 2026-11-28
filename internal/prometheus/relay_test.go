@@ -14,8 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"k8s.io/client-go/kubernetes/fake"
-
 	"github.com/skyhook-io/radar/pkg/prom"
 )
 
@@ -56,7 +54,7 @@ func (f *fakeRelayTransport) calls() int {
 
 // withRelayTestClient installs a fresh global client pointed at a Prometheus
 // that counts every request it receives.
-func withRelayTestClient(t *testing.T) (*atomic.Int32, string) {
+func withRelayTestClient(t *testing.T) (*Client, *atomic.Int32, string) {
 	t.Helper()
 	var promHits atomic.Int32
 	promSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -65,17 +63,8 @@ func withRelayTestClient(t *testing.T) (*atomic.Int32, string) {
 	}))
 	t.Cleanup(promSrv.Close)
 
-	clientMu.Lock()
-	saved, savedRelay := globalClient, activeRelay
-	activeRelay = nil
-	clientMu.Unlock()
-	t.Cleanup(func() {
-		clientMu.Lock()
-		globalClient, activeRelay = saved, savedRelay
-		clientMu.Unlock()
-	})
-	Initialize(fake.NewClientset(), nil, "relay-test", nil)
-	return &promHits, promSrv.URL
+	client := testClient(t, "relay-test", nil)
+	return client, &promHits, promSrv.URL
 }
 
 func testRelayConfig(f *fakeRelayTransport, health func() (bool, string)) RelayConfig {
@@ -90,23 +79,23 @@ func testRelayConfig(f *fakeRelayTransport, health func() (bool, string)) RelayC
 }
 
 func TestRelayServesEveryPathAndNeverReachesPrometheus(t *testing.T) {
-	promHits, promURL := withRelayTestClient(t)
+	c, promHits, promURL := withRelayTestClient(t)
 	operatorScope := prom.WorkloadMetricsScope{ClusterLabels: map[string]string{"cluster": "prod"}}
-	SetManualURL(promURL)
-	if err := SetWorkloadMetricsScope(operatorScope, "beyla"); err != nil {
+	c.Configure(promURL, nil)
+	if err := c.SetWorkloadMetricsScope(operatorScope, "beyla"); err != nil {
 		t.Fatal(err)
 	}
 
 	f := &fakeRelayTransport{}
-	if err := EnableRelay(testRelayConfig(f, nil)); err != nil {
+	if err := c.EnableRelay(testRelayConfig(f, nil)); err != nil {
 		t.Fatal(err)
 	}
-	c := GetClient()
+
 	scope, _, ok := c.workloadMetricsConfig()
 	if !ok || !scope.SingleCluster || len(scope.ClusterLabels) != 0 {
 		t.Fatalf("relay scope not bound: %+v ok=%v", scope, ok)
 	}
-	if aside, ok := OperatorScopeDuringRelay(); !ok || aside.ClusterLabels["cluster"] != "prod" {
+	if aside, ok := c.OperatorScopeDuringRelay(); !ok || aside.ClusterLabels["cluster"] != "prod" {
 		t.Fatalf("operator scope set aside = %+v ok=%v, want the configured cluster label", aside, ok)
 	}
 
@@ -133,8 +122,10 @@ func TestRelayServesEveryPathAndNeverReachesPrometheus(t *testing.T) {
 	if len(methods) != 3 || methods[0] != http.MethodGet || methods[2] != http.MethodPost {
 		t.Fatalf("relay methods = %v, want GET for ordinary queries and POST for the scan", methods)
 	}
-	// Reset (a context switch) reconnects to the relay, not by discovery.
-	Reset()
+	// Dropping cached transport state keeps the member on the relay.
+	c.mu.Lock()
+	c.dropConnectionLocked()
+	c.mu.Unlock()
 	if _, err := c.Query(ctx, "up"); err != nil {
 		t.Fatalf("query after reset: %v", err)
 	}
@@ -146,16 +137,16 @@ func TestRelayServesEveryPathAndNeverReachesPrometheus(t *testing.T) {
 	}
 
 	// A configuration change while relayed is kept for later, not applied.
-	SetHeaders(map[string]string{"X-Scope-OrgID": "tenant"})
-	if !RelayActive() || c.GetStatus().Address != "Radar Hub relay" {
+	c.Configure(promURL, map[string]string{"X-Scope-OrgID": "tenant"})
+	if !c.RelayActive() || c.GetStatus().Address != "Radar Hub relay" {
 		t.Fatal("configuration change replaced the relay")
 	}
-	SetHeaders(nil)
+	c.Configure(promURL, nil)
 
-	if !DisableRelay() {
+	if !c.DisableRelay() {
 		t.Fatal("DisableRelay reported no relay")
 	}
-	if _, ok := OperatorScopeDuringRelay(); ok {
+	if _, ok := c.OperatorScopeDuringRelay(); ok {
 		t.Fatal("operator scope reported with no relay active")
 	}
 	if _, err := c.Query(ctx, "up"); err != nil {
@@ -177,37 +168,37 @@ func TestRelayServesEveryPathAndNeverReachesPrometheus(t *testing.T) {
 }
 
 func TestRelayRestoresOperatorScope(t *testing.T) {
-	_, promURL := withRelayTestClient(t)
-	SetManualURL(promURL)
+	c, _, promURL := withRelayTestClient(t)
+	c.Configure(promURL, nil)
 	operatorScope := prom.WorkloadMetricsScope{ClusterLabels: map[string]string{"cluster": "prod"}}
-	if err := SetWorkloadMetricsScope(operatorScope, ""); err != nil {
+	if err := c.SetWorkloadMetricsScope(operatorScope, ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := EnableRelay(testRelayConfig(&fakeRelayTransport{}, nil)); err != nil {
+	if err := c.EnableRelay(testRelayConfig(&fakeRelayTransport{}, nil)); err != nil {
 		t.Fatal(err)
 	}
-	DisableRelay()
-	scope, _, ok := GetClient().workloadMetricsConfig()
+	c.DisableRelay()
+	scope, _, ok := c.workloadMetricsConfig()
 	if !ok || scope.ClusterLabels["cluster"] != "prod" {
 		t.Fatalf("operator scope not restored: %+v ok=%v", scope, ok)
 	}
 }
 
 func TestRelayUnavailableIsReportedWithoutFallback(t *testing.T) {
-	promHits, promURL := withRelayTestClient(t)
-	SetManualURL(promURL)
+	c, promHits, promURL := withRelayTestClient(t)
+	c.Configure(promURL, nil)
 	unavailable := errors.New("OpenObserve unavailable: Radar Hub answered 502")
 	f := &fakeRelayTransport{err: unavailable}
 	var health atomic.Value
 	health.Store("")
-	err := EnableRelay(testRelayConfig(f, func() (bool, string) {
+	err := c.EnableRelay(testRelayConfig(f, func() (bool, string) {
 		msg := health.Load().(string)
 		return msg != "", msg
 	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := GetClient()
+
 	_, err = c.Query(t.Context(), "up")
 	if err == nil || !strings.HasPrefix(err.Error(), "OpenObserve unavailable") {
 		t.Fatalf("query error = %v", err)
@@ -237,16 +228,16 @@ func TestRelayUnavailableIsReportedWithoutFallback(t *testing.T) {
 }
 
 func TestRelaySameKeyRefreshesSourceOnly(t *testing.T) {
-	withRelayTestClient(t)
+	c, _, _ := withRelayTestClient(t)
 	f := &fakeRelayTransport{}
 	cfg := testRelayConfig(f, nil)
-	if err := EnableRelay(cfg); err != nil {
+	if err := c.EnableRelay(cfg); err != nil {
 		t.Fatal(err)
 	}
-	c := GetClient()
+
 	gen := c.DiscoveryGeneration()
 	cfg.Source.Warning = "name match"
-	if err := EnableRelay(cfg); err != nil {
+	if err := c.EnableRelay(cfg); err != nil {
 		t.Fatal(err)
 	}
 	if c.DiscoveryGeneration() != gen {
@@ -256,7 +247,7 @@ func TestRelaySameKeyRefreshesSourceOnly(t *testing.T) {
 		t.Fatalf("source not refreshed: %+v", st.Source)
 	}
 	cfg.Key = "key-2"
-	if err := EnableRelay(cfg); err != nil {
+	if err := c.EnableRelay(cfg); err != nil {
 		t.Fatal(err)
 	}
 	if c.DiscoveryGeneration() == gen {
@@ -264,57 +255,48 @@ func TestRelaySameKeyRefreshesSourceOnly(t *testing.T) {
 	}
 }
 
-func TestRelayChangeHooksRunOnlyWhenTheBackendSwitches(t *testing.T) {
-	withRelayTestClient(t)
-	relayHooksMu.Lock()
-	savedHooks := relayHooks
-	relayHooks = nil
-	relayHooksMu.Unlock()
-	t.Cleanup(func() {
-		relayHooksMu.Lock()
-		relayHooks = savedHooks
-		relayHooksMu.Unlock()
-	})
-	var calls int
-	OnRelayChange(func() {
-		// Runs outside the client's locks.
-		_ = RelayActive()
-		calls++
-	})
+func TestRelayBackendEpochChangesOnlyWhenTheBackendSwitches(t *testing.T) {
+	c, _, _ := withRelayTestClient(t)
 	cfg := testRelayConfig(&fakeRelayTransport{}, nil)
-	step := func(name string, do func(), want int) {
+	base := c.BackendEpoch()
+	step := func(name string, do func(), want uint64) {
 		t.Helper()
 		do()
-		if calls != want {
-			t.Fatalf("%s: hook calls = %d, want %d", name, calls, want)
+		if got := c.BackendEpoch() - base; got != want {
+			t.Fatalf("%s: backend epoch changed by %d, want %d", name, got, want)
 		}
 	}
-	step("start", func() { _ = EnableRelay(cfg) }, 1)
+	step("start", func() { _ = c.EnableRelay(cfg) }, 1)
 	cfg.Source.Warning = "name match"
-	step("same key", func() { _ = EnableRelay(cfg) }, 1)
+	step("same key", func() { _ = c.EnableRelay(cfg) }, 1)
 	cfg.Key = "key-2"
-	step("new key", func() { _ = EnableRelay(cfg) }, 2)
-	step("end", func() { DisableRelay() }, 3)
-	step("end again", func() { DisableRelay() }, 3)
+	step("new key", func() { _ = c.EnableRelay(cfg) }, 2)
+	step("end", func() { c.DisableRelay() }, 3)
+	step("end again", func() { c.DisableRelay() }, 3)
 }
 
 func TestRelaySurvivesReinitialize(t *testing.T) {
-	withRelayTestClient(t)
-	if err := EnableRelay(testRelayConfig(&fakeRelayTransport{}, nil)); err != nil {
+	c, _, _ := withRelayTestClient(t)
+	if err := c.EnableRelay(testRelayConfig(&fakeRelayTransport{}, nil)); err != nil {
 		t.Fatal(err)
 	}
-	Reinitialize(fake.NewClientset(), nil, "relay-test", nil)
-	st := GetClient().GetStatus()
+	cfg := c.relay.cfg
+	_ = c.Close()
+	c = testClient(t, "relay-test", nil)
+	if err := c.EnableRelay(cfg); err != nil {
+		t.Fatal(err)
+	}
+	st := c.GetStatus()
 	if st.Source == nil || st.Address != "Radar Hub relay" {
 		t.Fatalf("relay lost on reinitialize: %+v", st)
 	}
-	if _, _, ok := GetClient().workloadMetricsConfig(); !ok {
+	if _, _, ok := c.workloadMetricsConfig(); !ok {
 		t.Fatal("relay scope lost on reinitialize")
 	}
 }
 
 func TestRelayUnavailableClearsThroughHealthProbe(t *testing.T) {
-	withRelayTestClient(t)
+	c, _, _ := withRelayTestClient(t)
 	saved := relayHealthProbeInterval
 	relayHealthProbeInterval = 200 * time.Millisecond
 	t.Cleanup(func() { relayHealthProbeInterval = saved })
@@ -342,7 +324,7 @@ func TestRelayUnavailableClearsThroughHealthProbe(t *testing.T) {
 		return message != "", message
 	})
 	cfg.NewTransport = build
-	if err := EnableRelay(cfg); err != nil {
+	if err := c.EnableRelay(cfg); err != nil {
 		t.Fatal(err)
 	}
 	probeCount := func() int {
@@ -350,7 +332,6 @@ func TestRelayUnavailableClearsThroughHealthProbe(t *testing.T) {
 		defer mu.Unlock()
 		return len(probes)
 	}
-	c := GetClient()
 
 	if st := c.GetStatus(); !st.Source.Unavailable {
 		t.Fatalf("status = %+v", st.Source)
@@ -397,18 +378,23 @@ func (p probeTransport) Do(_ context.Context, _, path string, params url.Values)
 }
 
 func TestRelaySavedScopeDoesNotFollowAnotherContext(t *testing.T) {
-	withRelayTestClient(t)
+	c, _, _ := withRelayTestClient(t)
 	launch := prom.WorkloadMetricsScope{ClusterLabels: map[string]string{"cluster": "ctx-a"}}
-	if err := SetWorkloadMetricsScope(launch, `job="beyla"`); err != nil {
+	if err := c.SetWorkloadMetricsScope(launch, `job="beyla"`); err != nil {
 		t.Fatal(err)
 	}
-	if err := EnableRelay(testRelayConfig(&fakeRelayTransport{}, nil)); err != nil {
+	if err := c.EnableRelay(testRelayConfig(&fakeRelayTransport{}, nil)); err != nil {
 		t.Fatal(err)
 	}
-	Retire()
-	Reinitialize(fake.NewClientset(), nil, "ctx-b", nil)
-	DisableRelay()
-	c := GetClient()
+	_ = c.Close()
+	cfg := c.relay.cfg
+	c = testClient(t, "ctx-b", nil)
+	c.NoteWorkloadScopeCleared()
+	if err := c.EnableRelay(cfg); err != nil {
+		t.Fatal(err)
+	}
+	c.DisableRelay()
+
 	if scope, _, ok := c.workloadMetricsConfig(); ok {
 		t.Fatalf("context A's scope applied to context B: %+v", scope)
 	}
@@ -423,34 +409,39 @@ func TestRelaySavedScopeDoesNotFollowAnotherContext(t *testing.T) {
 	}
 }
 
-func TestRelaySavedScopeClearedOnReinitializeToAnotherContext(t *testing.T) {
-	withRelayTestClient(t)
+func TestRelayDisableLeavesScopeUnsetOnClientWithClearedScope(t *testing.T) {
+	c, _, _ := withRelayTestClient(t)
 	launch := prom.WorkloadMetricsScope{ClusterLabels: map[string]string{"cluster": "ctx-a"}}
-	if err := SetWorkloadMetricsScope(launch, ""); err != nil {
+	if err := c.SetWorkloadMetricsScope(launch, ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := EnableRelay(testRelayConfig(&fakeRelayTransport{}, nil)); err != nil {
+	if err := c.EnableRelay(testRelayConfig(&fakeRelayTransport{}, nil)); err != nil {
 		t.Fatal(err)
 	}
-	Reinitialize(fake.NewClientset(), nil, "ctx-b", nil)
-	DisableRelay()
-	if scope, _, ok := GetClient().workloadMetricsConfig(); ok {
+	cfg := c.relay.cfg
+	c = testClient(t, "ctx-b", nil)
+	c.NoteWorkloadScopeCleared()
+	if err := c.EnableRelay(cfg); err != nil {
+		t.Fatal(err)
+	}
+	c.DisableRelay()
+	if scope, _, ok := c.workloadMetricsConfig(); ok {
 		t.Fatalf("context A's scope applied to context B: %+v", scope)
 	}
 }
 
-func TestRelaySavedScopeKeptOnSameContextReinitialize(t *testing.T) {
-	withRelayTestClient(t)
+func TestRelayDisableRestoresSavedScopeAndBeylaSelector(t *testing.T) {
+	c, _, _ := withRelayTestClient(t)
 	launch := prom.WorkloadMetricsScope{ClusterLabels: map[string]string{"cluster": "ctx-a"}}
-	if err := SetWorkloadMetricsScope(launch, `job="beyla"`); err != nil {
+	if err := c.SetWorkloadMetricsScope(launch, `job="beyla"`); err != nil {
 		t.Fatal(err)
 	}
-	if err := EnableRelay(testRelayConfig(&fakeRelayTransport{}, nil)); err != nil {
+	if err := c.EnableRelay(testRelayConfig(&fakeRelayTransport{}, nil)); err != nil {
 		t.Fatal(err)
 	}
-	Reinitialize(fake.NewClientset(), nil, "relay-test", nil)
-	DisableRelay()
-	c := GetClient()
+	// Keeping the same member retains the scope set aside for Prometheus.
+	c.DisableRelay()
+
 	scope, _, ok := c.workloadMetricsConfig()
 	if !ok || scope.ClusterLabels["cluster"] != "ctx-a" {
 		t.Fatalf("same-context scope lost: %+v ok=%v", scope, ok)
@@ -467,13 +458,13 @@ func TestRelaySavedScopeKeptOnSameContextReinitialize(t *testing.T) {
 // scope keeps the single-cluster state older UIs know, with a note that says
 // OpenObserve scopes the charts rather than that an operator declared it.
 func TestRelayScopeNoteNamesOpenObserve(t *testing.T) {
-	withRelayTestClient(t)
+	c, _, _ := withRelayTestClient(t)
 	cfg := testRelayConfig(&fakeRelayTransport{}, nil)
-	if err := EnableRelay(cfg); err != nil {
+	if err := c.EnableRelay(cfg); err != nil {
 		t.Fatal(err)
 	}
 	req := ViewScopeRequest{View: "test", Metrics: []ViewMetric{{Name: "container_cpu_usage_seconds_total"}}}
-	scope, err := GetClient().ResolveViewScope(context.Background(), req, nil)
+	scope, err := c.ResolveViewScope(context.Background(), req, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -481,50 +472,50 @@ func TestRelayScopeNoteNamesOpenObserve(t *testing.T) {
 		t.Fatalf("scope = %s %q", scope.State, scope.Note)
 	}
 	cfg.Source.MatchedBy = "name"
-	if err := EnableRelay(cfg); err != nil {
+	if err := c.EnableRelay(cfg); err != nil {
 		t.Fatal(err)
 	}
-	scope, _ = GetClient().ResolveViewScope(context.Background(), req, nil)
+	scope, _ = c.ResolveViewScope(context.Background(), req, nil)
 	if scope.Note != "Scoped to this cluster through OpenObserve (matched by confirmed name)." {
 		t.Fatalf("name-matched note = %q", scope.Note)
 	}
-	DisableRelay()
-	if note := GetClient().relaySourceScopeNote(); note != "" {
+	c.DisableRelay()
+	if note := c.relaySourceScopeNote(); note != "" {
 		t.Fatalf("note without a relay = %q", note)
 	}
 }
 
 func TestRelayMissingThrottlingNote(t *testing.T) {
-	withRelayTestClient(t)
+	c, _, _ := withRelayTestClient(t)
 	cfg := testRelayConfig(&fakeRelayTransport{}, nil)
 	cfg.Source.Dialect = "collector"
 	cfg.Source.MissingFamilies = []string{"throttling", "volumes"}
-	if err := EnableRelay(cfg); err != nil {
+	if err := c.EnableRelay(cfg); err != nil {
 		t.Fatal(err)
 	}
-	if note := GetClient().relayMissingThrottlingNote(); !strings.Contains(note, "drops CPU throttling by default") {
+	if note := c.relayMissingThrottlingNote(); !strings.Contains(note, "drops CPU throttling by default") {
 		t.Fatalf("collector note = %q", note)
 	}
 
 	cfg.Key = "key-2"
 	cfg.Source.Dialect = "standard"
-	if err := EnableRelay(cfg); err != nil {
+	if err := c.EnableRelay(cfg); err != nil {
 		t.Fatal(err)
 	}
-	if note := GetClient().relayMissingThrottlingNote(); note != "OpenObserve has no data for this chart." {
+	if note := c.relayMissingThrottlingNote(); note != "OpenObserve has no data for this chart." {
 		t.Fatalf("standard note = %q", note)
 	}
 
 	cfg.Key = "key-3"
 	cfg.Source.MissingFamilies = []string{"volumes"}
-	if err := EnableRelay(cfg); err != nil {
+	if err := c.EnableRelay(cfg); err != nil {
 		t.Fatal(err)
 	}
-	if note := GetClient().relayMissingThrottlingNote(); note != "" {
+	if note := c.relayMissingThrottlingNote(); note != "" {
 		t.Fatalf("throttling collected, note = %q", note)
 	}
-	DisableRelay()
-	if note := GetClient().relayMissingThrottlingNote(); note != "" {
+	c.DisableRelay()
+	if note := c.relayMissingThrottlingNote(); note != "" {
 		t.Fatalf("no relay, note = %q", note)
 	}
 

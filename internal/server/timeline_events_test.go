@@ -23,8 +23,8 @@ import (
 // deltas page ascending by arrival; a foreign-epoch cursor is 400.
 func TestHandleTimelineEvents_Contract(t *testing.T) {
 	prev := k8s.GetConnectionStatus()
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
-	t.Cleanup(func() { k8s.SetConnectionStatus(prev) })
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	t.Cleanup(func() { k8s.PublishTestConnectionStatus(prev) })
 
 	timeline.ResetStore()
 	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 100}); err != nil {
@@ -200,8 +200,8 @@ func TestHandleTimelineEvents_Contract(t *testing.T) {
 // to say why it is empty. A bare "not available" sends the operator hunting.
 func TestHandleTimelineEvents_ExplainsUnreachableDatabase(t *testing.T) {
 	prev := k8s.GetConnectionStatus()
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
-	t.Cleanup(func() { k8s.SetConnectionStatus(prev) })
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	t.Cleanup(func() { k8s.PublishTestConnectionStatus(prev) })
 
 	timeline.ResetStore()
 	t.Cleanup(func() {

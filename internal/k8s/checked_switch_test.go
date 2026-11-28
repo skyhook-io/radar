@@ -67,7 +67,7 @@ func setupCheckedSwitch(t *testing.T, targetServer string, connected bool) (targ
 	if connected {
 		state = StateConnected
 	}
-	SetConnectionStatus(ConnectionStatus{State: state, Context: "current"})
+	PublishTestConnectionStatus(ConnectionStatus{State: state, Context: "current"})
 
 	stopped := false
 	SetSessionStopper(func() { stopped = true })

@@ -62,8 +62,8 @@ func TestMetricsSourceRefreshInsideTunnel(t *testing.T) {
 
 func TestMetricsPodSampleRefusedWhileDisconnected(t *testing.T) {
 	prev := k8s.GetConnectionStatus()
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateDisconnected, Error: "apiserver unreachable"})
-	t.Cleanup(func() { k8s.SetConnectionStatus(prev) })
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateDisconnected, Error: "apiserver unreachable"})
+	t.Cleanup(func() { k8s.PublishTestConnectionStatus(prev) })
 	s := &Server{}
 	req := httptest.NewRequest(http.MethodGet, "/api/agent/metrics-pod-sample", nil)
 	req = req.WithContext(auth.ContextWithUser(req.Context(), &auth.User{Username: "owner"}))

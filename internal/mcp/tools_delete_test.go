@@ -500,7 +500,7 @@ func TestDeleteResourceRefusesUntilConnected(t *testing.T) {
 	gvr := schema.GroupVersionResource{Version: "v1", Resource: "configmaps"}
 	dyn := setupDeletionResource(t, gvr, "ConfigMapList", k8s.APIResource{Version: "v1", Kind: "ConfigMap", Name: "configmaps", Namespaced: true}).(*dynamicfake.FakeDynamicClient)
 	prev := k8s.GetConnectionStatus()
-	t.Cleanup(func() { k8s.SetConnectionStatus(prev) })
+	t.Cleanup(func() { k8s.PublishTestConnectionStatus(prev) })
 	for _, tc := range []struct {
 		status k8s.ConnectionStatus
 		want   string
@@ -508,7 +508,7 @@ func TestDeleteResourceRefusesUntilConnected(t *testing.T) {
 		{k8s.ConnectionStatus{State: k8s.StateConnecting}, "cluster_connecting"},
 		{k8s.ConnectionStatus{State: k8s.StateDisconnected, Error: "dial tcp: i/o timeout"}, "cluster_disconnected"},
 	} {
-		k8s.SetConnectionStatus(tc.status)
+		k8s.PublishTestConnectionStatus(tc.status)
 		for _, kind := range []string{"ConfigMap", "UndiscoveredKind"} {
 			for _, dryRun := range []bool{true, false} {
 				result, _, err := handleDeleteResource(context.Background(), nil, deleteResourceInput{Kind: kind, Namespace: "demo", Name: "held", DryRun: &dryRun, Confirm: "stale"})

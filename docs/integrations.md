@@ -714,6 +714,8 @@ TLS references resolve local Secret names and delegated `namespace/name` names c
 
 ---
 
+Integration members for Metrics, Argo CD, cost, and traffic are available from the first request after Radar connects to Kubernetes. Discovery can continue in the background. Saving settings cancels work on the replaced members and refreshes affected views. See [Connection lifecycle](connection-lifecycle.md#connection-identity).
+
 ## Prometheus Operator
 
 [Prometheus Operator](https://prometheus-operator.dev/) simplifies Prometheus setup on Kubernetes, providing CRDs for defining monitoring targets, alerting rules, and scrape configurations declaratively.
@@ -1789,6 +1791,13 @@ Event destinations retain the reference’s API group, kind, namespace and name.
 | Certificate | `networking.internal.knative.dev/v1alpha1` | — | Yes | — |
 | ServerlessService | `networking.internal.knative.dev/v1alpha1` | — | Yes | — |
 
+## Metrics backend discovery
+
+Prometheus discovery watches Services and Pods through the cache of the
+connection it serves. When you select **Discover** on a Hub-managed agent,
+Radar checks Hub’s metrics-source decision before choosing the client to
+connect. Automatic connects use the agent’s current decision.
+
 ## OpenCost and Kubecost
 
 [OpenCost](https://www.opencost.io/) is a CNCF tool for Kubernetes cost monitoring, exposing cloud provider pricing and workload resource allocation as Prometheus metrics.
@@ -1813,6 +1822,8 @@ installations use operator configuration.
 
 Local Settings tests Kubecost mode, and Automatic with any Kubecost override
 (URL, API key or cluster ID), before saving; a failed test blocks the save.
+While disconnected, Radar saves an explicit URL without verification if the
+cluster ID is unavailable and reports that the check was deferred.
 Automatic without Kubecost overrides, or Prometheus mode, saves a preference
 without asserting that the backend is reachable.
 

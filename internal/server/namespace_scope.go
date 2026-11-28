@@ -193,9 +193,6 @@ func (s *Server) invalidatePostContextSwitchCaches() {
 	if s.gitopsIssuesMemo != nil {
 		s.gitopsIssuesMemo.clear()
 	}
-	if s.openCostCurrency != nil {
-		s.openCostCurrency.Invalidate()
-	}
 	usagedata.ContextSwitched()
 	clearPackagesCache()
 	clearApplicationsCache()

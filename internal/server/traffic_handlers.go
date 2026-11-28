@@ -1,7 +1,9 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -9,7 +11,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/connectionruntime"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/portforward"
 	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/internal/traffic"
 )
@@ -98,7 +102,7 @@ const recentSourcesMaxAge = 2 * time.Minute
 func (s *Server) handleGetTrafficSources(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	manager := traffic.GetManager()
+	manager := connectionruntime.SetFor(k8s.BoundOrCurrent(r.Context())).Traffic
 	if manager == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "Traffic manager not initialized")
 		return
@@ -115,6 +119,10 @@ func (s *Server) handleGetTrafficSources(w http.ResponseWriter, r *http.Request)
 		if ctx.Err() != nil {
 			return // the client left
 		}
+		if portforward.IsMemberClosed(ctx, err) {
+			s.writeError(w, http.StatusServiceUnavailable, "Traffic connection closed. Retry the request")
+			return
+		}
 		log.Printf("[traffic] Error detecting sources: %v", err)
 		s.writeError(w, http.StatusInternalServerError, "Failed to detect traffic sources")
 		return
@@ -128,7 +136,8 @@ func (s *Server) handleGetTrafficSources(w http.ResponseWriter, r *http.Request)
 func (s *Server) handleGetTrafficFlows(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	manager := traffic.GetManager()
+	conn := k8s.BoundOrCurrent(r.Context())
+	manager := connectionruntime.SetFor(conn).Traffic
 	if manager == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "Traffic manager not initialized")
 		return
@@ -147,12 +156,19 @@ func (s *Server) handleGetTrafficFlows(w http.ResponseWriter, r *http.Request) {
 
 	response, err := manager.GetFlows(ctx, opts)
 	if err != nil {
+		if r.Context().Err() != nil {
+			return
+		}
+		if portforward.IsMemberClosed(r.Context(), err) {
+			s.writeError(w, http.StatusServiceUnavailable, "Traffic connection closed. Retry the request")
+			return
+		}
 		log.Printf("[traffic] Error getting flows: %v", err)
 		s.writeError(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}
 
-	flows := resolveFlowWorkloads(k8s.GetResourceCache(), response.Flows)
+	flows := resolveFlowWorkloads(conn.ResourceCache(), response.Flows)
 	byPod := r.URL.Query().Get("groupBy") == "pod"
 	s.writeJSON(w, trafficFlowsPayload(response, s.visibleFlows(r, flows, namespaces, opts), byPod))
 }
@@ -403,18 +419,26 @@ func (s *Server) handleGetTrafficRecords(w http.ResponseWriter, r *http.Request)
 	}
 	opts.Match = &match
 
-	manager := traffic.GetManager()
+	conn := k8s.BoundOrCurrent(r.Context())
+	manager := connectionruntime.SetFor(conn).Traffic
 	if manager == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "Traffic manager not initialized")
 		return
 	}
 	response, err := manager.GetFlows(r.Context(), opts)
 	if err != nil {
+		if r.Context().Err() != nil {
+			return
+		}
+		if portforward.IsMemberClosed(r.Context(), err) {
+			s.writeError(w, http.StatusServiceUnavailable, "Traffic connection closed. Retry the request")
+			return
+		}
 		log.Printf("[traffic] Error getting flow records: %v", err)
 		s.writeError(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}
-	flows := s.visibleFlows(r, resolveFlowWorkloads(k8s.GetResourceCache(), response.Flows), namespaces, opts)
+	flows := s.visibleFlows(r, resolveFlowWorkloads(conn.ResourceCache(), response.Flows), namespaces, opts)
 	s.writeJSON(w, trafficRecordsPayload(response, flows))
 }
 
@@ -434,9 +458,16 @@ func trafficRecordsPayload(response *traffic.FlowsResponse, flows []traffic.Flow
 // handleTrafficFlowsStream provides SSE stream of traffic flows
 // GET /api/traffic/flows/stream
 func (s *Server) handleTrafficFlowsStream(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	admission, err := k8s.CaptureServingConnection()
+	if err != nil {
+		s.writeError(w, http.StatusServiceUnavailable, "No cluster connection is serving")
+		return
+	}
+	ctx, cancel := context.WithCancel(admission.Bind(r.Context()))
+	defer cancel()
+	r = r.WithContext(ctx)
 
-	manager := traffic.GetManager()
+	manager := connectionruntime.SetFor(admission.Connection()).Traffic
 	if manager == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "Traffic manager not initialized")
 		return
@@ -463,6 +494,10 @@ func (s *Server) handleTrafficFlowsStream(w http.ResponseWriter, r *http.Request
 
 	flowCh, err := manager.StreamFlows(ctx, opts)
 	if err != nil {
+		if portforward.IsMemberClosed(r.Context(), err) {
+			s.writeError(w, http.StatusServiceUnavailable, "Traffic connection closed. Retry the request")
+			return
+		}
 		log.Printf("[traffic] Error starting flow stream: %v", err)
 		s.writeError(w, http.StatusServiceUnavailable, err.Error())
 		return
@@ -474,17 +509,26 @@ func (s *Server) handleTrafficFlowsStream(w http.ResponseWriter, r *http.Request
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
 
-	flusher, ok := w.(http.Flusher)
-	if !ok {
+	if _, ok := w.(http.Flusher); !ok {
 		s.writeError(w, http.StatusInternalServerError, "Streaming not supported")
 		return
 	}
+	controller := http.NewResponseController(w)
+	send := func(frame string) error {
+		if err := controller.SetWriteDeadline(time.Now().Add(5 * time.Second)); err != nil && !errors.Is(err, http.ErrNotSupported) {
+			return err
+		}
+		defer controller.SetWriteDeadline(time.Time{})
+		if _, err := w.Write([]byte(frame)); err != nil {
+			return err
+		}
+		return controller.Flush()
+	}
 
 	// Send initial connection event
-	if _, err := w.Write([]byte("event: connected\ndata: {}\n\n")); err != nil {
+	if err := send("event: connected\ndata: {}\n\n"); err != nil {
 		return
 	}
-	flusher.Flush()
 
 	// Heartbeat ticker
 	heartbeat := time.NewTicker(15 * time.Second)
@@ -493,6 +537,8 @@ func (s *Server) handleTrafficFlowsStream(w http.ResponseWriter, r *http.Request
 	for {
 		select {
 		case <-ctx.Done():
+			return
+		case <-admission.Done():
 			return
 
 		case flow, ok := <-flowCh:
@@ -510,23 +556,20 @@ func (s *Server) handleTrafficFlowsStream(w http.ResponseWriter, r *http.Request
 			if err != nil {
 				log.Printf("[traffic] Error marshaling flow: %v", err)
 				// Notify client of the error
-				if _, writeErr := w.Write([]byte("event: error\ndata: {\"error\":\"Failed to serialize flow data\"}\n\n")); writeErr != nil {
+				if err := send("event: error\ndata: {\"error\":\"Failed to serialize flow data\"}\n\n"); err != nil {
 					return
 				}
-				flusher.Flush()
 				continue
 			}
 
-			if _, err := w.Write([]byte("event: flow\ndata: " + string(data) + "\n\n")); err != nil {
+			if err := send("event: flow\ndata: " + string(data) + "\n\n"); err != nil {
 				return
 			}
-			flusher.Flush()
 
 		case <-heartbeat.C:
-			if _, err := w.Write([]byte("event: heartbeat\ndata: {}\n\n")); err != nil {
+			if err := send("event: heartbeat\ndata: {}\n\n"); err != nil {
 				return
 			}
-			flusher.Flush()
 		}
 	}
 }
@@ -534,7 +577,7 @@ func (s *Server) handleTrafficFlowsStream(w http.ResponseWriter, r *http.Request
 // handleSetTrafficSource sets the active traffic source
 // POST /api/traffic/source
 func (s *Server) handleSetTrafficSource(w http.ResponseWriter, r *http.Request) {
-	manager := traffic.GetManager()
+	manager := connectionruntime.SetFor(k8s.BoundOrCurrent(r.Context())).Traffic
 	if manager == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "Traffic manager not initialized")
 		return
@@ -567,7 +610,7 @@ func (s *Server) handleSetTrafficSource(w http.ResponseWriter, r *http.Request) 
 // handleGetActiveTrafficSource returns the currently active traffic source
 // GET /api/traffic/source
 func (s *Server) handleGetActiveTrafficSource(w http.ResponseWriter, r *http.Request) {
-	manager := traffic.GetManager()
+	manager := connectionruntime.SetFor(k8s.BoundOrCurrent(r.Context())).Traffic
 	if manager == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "Traffic manager not initialized")
 		return
@@ -586,7 +629,7 @@ func (s *Server) handleGetActiveTrafficSource(w http.ResponseWriter, r *http.Req
 func (s *Server) handleTrafficConnect(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	manager := traffic.GetManager()
+	manager := connectionruntime.SetFor(k8s.BoundOrCurrent(r.Context())).Traffic
 	if manager == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "Traffic manager not initialized")
 		return
@@ -594,6 +637,13 @@ func (s *Server) handleTrafficConnect(w http.ResponseWriter, r *http.Request) {
 
 	connInfo, err := manager.Connect(ctx)
 	if err != nil {
+		if ctx.Err() != nil {
+			return
+		}
+		if portforward.IsMemberClosed(ctx, err) {
+			s.writeError(w, http.StatusServiceUnavailable, "Traffic connection closed. Retry the request")
+			return
+		}
 		log.Printf("[traffic] Error connecting: %v", err)
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -605,7 +655,7 @@ func (s *Server) handleTrafficConnect(w http.ResponseWriter, r *http.Request) {
 // handleTrafficConnectionStatus returns current connection status
 // GET /api/traffic/connection
 func (s *Server) handleTrafficConnectionStatus(w http.ResponseWriter, r *http.Request) {
-	manager := traffic.GetManager()
+	manager := connectionruntime.SetFor(k8s.BoundOrCurrent(r.Context())).Traffic
 	if manager == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "Traffic manager not initialized")
 		return

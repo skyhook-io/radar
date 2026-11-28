@@ -33,6 +33,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/cloud"
+	"github.com/skyhook-io/radar/internal/connectionruntime"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/pkg/k8score"
@@ -404,18 +405,17 @@ func TestMain(m *testing.M) {
 		panic("InitTestResourceCache: " + err.Error())
 	}
 
-	// Mark cluster as connected so requireConnected guards pass
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{
-		State:   k8s.StateConnected,
-		Context: "fake-test",
-	})
+	integrationRuntime := connectionruntime.New(nil, connectionruntime.Settings{})
+	if !k8s.AdmitTestIntegrations(integrationRuntime.Build) {
+		panic("admit smoke test integrations")
+	}
 
 	// Initialize the timeline store so /api/changes endpoints work
 	if err := timeline.InitStore(timeline.DefaultStoreConfig()); err != nil {
 		panic("InitStore: " + err.Error())
 	}
 
-	srv := New(Config{DevMode: true})
+	srv := New(Config{DevMode: true, IntegrationRuntime: integrationRuntime})
 	testServerSrv = srv
 	testServer = httptest.NewServer(srv.Handler())
 
@@ -577,10 +577,10 @@ func TestSmokeDashboardCRDs(t *testing.T) {
 
 func TestSmokeDashboardHelmRequiresConnection(t *testing.T) {
 	// Temporarily set disconnected
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{
 		State: k8s.StateDisconnected,
 	})
-	defer k8s.SetConnectionStatus(k8s.ConnectionStatus{
+	defer k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{
 		State:   k8s.StateConnected,
 		Context: "fake-test",
 	})
@@ -1079,7 +1079,7 @@ func TestConnectionRetryInClusterProbesBeforeTeardown(t *testing.T) {
 	previousContext := k8s.SetTestContextName("in-cluster")
 	t.Cleanup(func() { k8s.SetTestContextName(previousContext) })
 	previousStatus := k8s.GetConnectionStatus()
-	t.Cleanup(func() { k8s.SetConnectionStatus(previousStatus) })
+	t.Cleanup(func() { k8s.PublishTestConnectionStatus(previousStatus) })
 	stopped := false
 	k8s.SetSessionStopper(func() { stopped = true })
 	t.Cleanup(func() { k8s.SetSessionStopper(nil) })
@@ -2138,8 +2138,8 @@ func TestSmokeRequireConnected(t *testing.T) {
 	}
 
 	// Temporarily disconnect
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateDisconnected})
-	defer k8s.SetConnectionStatus(k8s.ConnectionStatus{
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateDisconnected})
+	defer k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{
 		State:   k8s.StateConnected,
 		Context: "fake-test",
 	})

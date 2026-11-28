@@ -15,7 +15,6 @@ import (
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/skyhook-io/radar/internal/portforward"
-	promclient "github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/pkg/prom"
 )
 
@@ -34,17 +33,11 @@ const (
 // beylaJobSelector returns the PromQL job-label matcher fragment (e.g.
 // `job=~".*beyla.*"`) used to scope Beyla queries, honoring any operator
 // override.
-func beylaJobSelector() string {
-	if selector := BeylaJobSelector(); selector != "" {
-		return selector
-	}
-	return defaultBeylaJobSelector
-}
-
 // beylaScopes keeps each Beyla metric family to this cluster's series. The
 // families are checked separately: one scraped without the cluster label must
 // not empty the others.
 type beylaScopes struct {
+	job    string
 	l4, l7 clusterScope
 	// l7Unchecked is set when Radar could not check which cluster the HTTP
 	// series belong to. They are left out, and named as missing, rather than
@@ -55,20 +48,23 @@ type beylaScopes struct {
 // l4Selector and l7Selector are the full matcher fragments for each family:
 // the job selector plus the family's cluster matchers. Operator-facing messages
 // name beylaJobSelector instead, since that is the flag the operator can change.
-func (sc beylaScopes) l4Selector() string { return sc.l4.with(beylaJobSelector()) }
-func (sc beylaScopes) l7Selector() string { return sc.l7.with(beylaJobSelector()) }
+func (sc beylaScopes) l4Selector() string { return sc.l4.with(sc.job) }
+func (sc beylaScopes) l7Selector() string { return sc.l7.with(sc.job) }
 
 // resolveScopes decides each family's cluster scope. Filtering applies only to
 // a configured metrics store: one Radar discovered in the cluster holds this
 // cluster's metrics.
 func (s *BeylaSource) resolveScopes(ctx context.Context, w rateWindow) (beylaScopes, error) {
-	url, _ := metricsConfig()
-	l4, err := scopeForMetric(ctx, s.flowMetricName(), beylaJobSelector(), url != "", w.span())
+	url := ""
+	if s.metrics != nil {
+		url = s.metrics.url
+	}
+	l4, err := s.metrics.scopeForMetric(ctx, s.flowMetricName(), s.jobSelector(), url != "", w.span())
 	if err != nil {
 		return beylaScopes{}, err
 	}
-	l7, err := scopeForMetric(ctx, beylaL7Metric, beylaJobSelector(), url != "", w.span())
-	return beylaScopes{l4: l4, l7: l7, l7Unchecked: err != nil}, nil
+	l7, err := s.metrics.scopeForMetric(ctx, beylaL7Metric, s.jobSelector(), url != "", w.span())
+	return beylaScopes{job: s.jobSelector(), l4: l4, l7: l7, l7Unchecked: err != nil}, nil
 }
 
 func (s *BeylaSource) identityRows(ctx context.Context, query string) ([]map[string]string, error) {
@@ -93,12 +89,12 @@ func (s *BeylaSource) clusterMismatch(ctx context.Context, opts FlowOptions, sc 
 }
 
 func (s *BeylaSource) l4Mismatch(ctx context.Context, opts FlowOptions, sc clusterScope) string {
-	return s.familyMismatch(ctx, sc, "Beyla network", beylaActiveSeries(s.flowMetricName(), beylaJobSelector(), opts.Namespace,
+	return s.familyMismatch(ctx, sc, "Beyla network", beylaActiveSeries(s.flowMetricName(), s.jobSelector(), opts.Namespace,
 		[]string{"k8s_src_namespace", "k8s_dst_namespace"}, rateWindowFor(opts.Since)))
 }
 
 func (s *BeylaSource) l7Mismatch(ctx context.Context, opts FlowOptions, sc clusterScope) string {
-	return s.familyMismatch(ctx, sc, "Beyla HTTP", beylaActiveSeries(beylaL7Metric, beylaJobSelector(), opts.Namespace,
+	return s.familyMismatch(ctx, sc, "Beyla HTTP", beylaActiveSeries(beylaL7Metric, s.jobSelector(), opts.Namespace,
 		[]string{"k8s_namespace_name"}, rateWindowFor(opts.Since)))
 }
 
@@ -143,9 +139,10 @@ func usableSample(val float64) bool {
 
 // BeylaSource implements TrafficSource for Grafana Beyla via Prometheus metrics.
 type BeylaSource struct {
+	metrics   *metricsInputs
 	k8sClient kubernetes.Interface
 	queryFn   promQueryFunc
-	// servicePorts reads a destination's Service ports; nil reads Radar's cache.
+	// servicePorts reads a destination's Service ports; nil reads the member's cache.
 	servicePorts servicePortLookup
 
 	// mu guards the fields Detect resolves and the pollers read. Manager releases
@@ -163,6 +160,16 @@ func NewBeylaSource(client kubernetes.Interface) *BeylaSource {
 	s := &BeylaSource{k8sClient: client}
 	s.queryFn = s.defaultQuery
 	return s
+}
+
+func (s *BeylaSource) jobSelector() string {
+	if s.metrics == nil {
+		return defaultBeylaJobSelector
+	}
+	if s.metrics.job != "" {
+		return s.metrics.job
+	}
+	return defaultBeylaJobSelector
 }
 
 func (s *BeylaSource) Name() string { return "beyla" }
@@ -183,7 +190,7 @@ func (s *BeylaSource) setFlowMetric(metric string) {
 }
 
 func (s *BeylaSource) defaultQuery(ctx context.Context, query string) (*prom.QueryResult, error) {
-	client, connectionErr := promclient.ClientForOperation()
+	client, connectionErr := s.metrics.clientForOperation()
 	if connectionErr != nil {
 		return nil, connectionErr
 	}
@@ -196,7 +203,7 @@ func (s *BeylaSource) query(ctx context.Context, query string) (*prom.QueryResul
 
 // Connect delegates to the shared Prometheus client's EnsureConnected.
 func (s *BeylaSource) Connect(ctx context.Context, contextName string) (*portforward.ConnectionInfo, error) {
-	client, connectionErr := promclient.ClientForOperation()
+	client, connectionErr := s.metrics.clientForOperation()
 	if connectionErr != nil {
 		return &portforward.ConnectionInfo{Connected: false, Error: connectionErr.Error()}, nil
 	}
@@ -216,7 +223,7 @@ func (s *BeylaSource) Connect(ctx context.Context, contextName string) (*portfor
 // ConnectionInfo implements ConnectionReporter. Beyla's data path is the
 // shared Prometheus client, so its status is the only honest answer here.
 func (s *BeylaSource) ConnectionInfo() *portforward.ConnectionInfo {
-	client := promclient.GetClient()
+	client, _ := s.metrics.clientForOperation()
 	if client == nil {
 		return &portforward.ConnectionInfo{Connected: false}
 	}
@@ -232,7 +239,7 @@ func (s *BeylaSource) Detect(ctx context.Context) (*DetectionResult, error) {
 	// single regex union of the two names: a cluster part-way through migrating
 	// from Beyla to OBI would run both, and summing them would double every edge.
 	for _, metric := range []string{beylaFlowMetric, obiFlowMetric} {
-		qr, err := s.query(ctx, fmt.Sprintf(`count(%s{%s})`, metric, beylaJobSelector()))
+		qr, err := s.query(ctx, fmt.Sprintf(`count(%s{%s})`, metric, s.jobSelector()))
 		if err != nil || qr == nil || len(qr.Series) == 0 {
 			continue
 		}
@@ -276,7 +283,7 @@ func (s *BeylaSource) Detect(ctx context.Context) (*DetectionResult, error) {
 		result.Version = version
 		result.Present = true
 		result.Message = fmt.Sprintf("Beyla %s is in Prometheus, but none of its metrics match %s. "+
-			"Point --beyla-job-selector at the job Beyla is scraped under.", version, beylaJobSelector())
+			"Point --beyla-job-selector at the job Beyla is scraped under.", version, s.jobSelector())
 		return result, nil
 	}
 
@@ -319,7 +326,7 @@ func (s *BeylaSource) buildInfoVersion(ctx context.Context, scoped bool) string 
 	for _, metric := range []string{"beyla_build_info", "obi_build_info"} {
 		query := metric
 		if scoped {
-			query = fmt.Sprintf(`%s{%s}`, metric, beylaJobSelector())
+			query = fmt.Sprintf(`%s{%s}`, metric, s.jobSelector())
 		}
 		qr, err := s.query(ctx, query)
 		if err != nil || qr == nil {
@@ -428,7 +435,9 @@ func (s *BeylaSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRes
 	}
 	flows, presence, err := s.getFlowsInternal(ctx, opts, scopes)
 	if err != nil {
-		log.Printf("[beyla] Error fetching flows: %v", err)
+		if ctx.Err() == nil {
+			log.Printf("[beyla] Error fetching flows: %v", err)
+		}
 		return &FlowsResponse{Source: "beyla", Timestamp: time.Now(), Flows: []Flow{},
 			Warning:     fmt.Sprintf("Failed to query Beyla metrics: %v", err),
 			WarningKind: WarningTransient}, nil
@@ -749,7 +758,12 @@ func (s *BeylaSource) getFlowsInternal(ctx context.Context, opts FlowOptions, sc
 		}
 		lookup := s.servicePorts
 		if lookup == nil {
-			lookup = cachedServicePorts
+			lookup = func(namespace, workload, kind, protocol string) ([]int, bool) {
+				if s.metrics == nil {
+					return nil, false
+				}
+				return cachedServicePorts(s.metrics.cache, namespace, workload, kind, protocol)
+			}
 		}
 		presence.portsFilled = inferServicePorts(edges, l7Flows, presence.transport, lookup)
 	}

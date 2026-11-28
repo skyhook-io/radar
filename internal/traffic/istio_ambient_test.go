@@ -252,17 +252,15 @@ func TestIstioGetFlows_IdleReceiverDoesNotHideClientReports(t *testing.T) {
 // While client reports into ambient namespaces are read, the HTTP cluster
 // check covers them too, so they cannot bring another cluster's traffic in.
 func TestIstioScopeCheckCoversClientReportsWhenAmbient(t *testing.T) {
-	useConfiguredStore(t)
+	inputs := &metricsInputs{url: "http://metrics.example", spansClusters: noOtherTrafficCluster}
 	var mu sync.Mutex
 	selectors := map[string]string{}
-	prev := resolveTrafficScope
-	resolveTrafficScope = func(_ context.Context, metric, selector string, _ time.Duration) (string, promclient.SeriesIsolation, error) {
+	inputs.resolve = func(_ context.Context, metric, selector string, _ time.Duration) (string, promclient.SeriesIsolation, error) {
 		mu.Lock()
 		selectors[metric] = selector
 		mu.Unlock()
 		return `cluster="a"`, promclient.SeriesIsolation{Labels: map[string]string{"cluster": "a"}}, nil
 	}
-	t.Cleanup(func() { resolveTrafficScope = prev })
 
 	for _, tc := range []struct {
 		ambient  []string
@@ -272,6 +270,7 @@ func TestIstioScopeCheckCoversClientReportsWhenAmbient(t *testing.T) {
 		{[]string{"amb"}, istioAllReportsSelector},
 	} {
 		s := newTestIstio(fakeIstioProm(nil, nil))
+		s.metrics = inputs
 		s.ambientNamespaceFn = func() []string { return tc.ambient }
 		if _, err := s.GetFlows(context.Background(), DefaultFlowOptions()); err != nil {
 			t.Fatal(err)
@@ -316,22 +315,22 @@ func TestIstioGetFlows_TooManyAmbientNamespacesSaysWhatIsMissing(t *testing.T) {
 	for i := 0; len(istioHTTPQuery("istio_requests_total", istio5xxSelector, "", clusterScope{}, many, rateWindowFor(0))) <= istioQueryBudget; i++ {
 		many = append(many, fmt.Sprintf("ns-%04d", i))
 	}
-	useConfiguredStore(t)
+	inputs := &metricsInputs{url: "http://metrics.example", spansClusters: noOtherTrafficCluster}
 	var httpScopeSelectors []string
-	prev := resolveTrafficScope
-	resolveTrafficScope = func(_ context.Context, metric, selector string, _ time.Duration) (string, promclient.SeriesIsolation, error) {
+	inputs.resolve = func(_ context.Context, metric, selector string, _ time.Duration) (string, promclient.SeriesIsolation, error) {
 		if metric == "istio_requests_total" {
 			httpScopeSelectors = append(httpScopeSelectors, selector)
 		}
 		return "", promclient.SeriesIsolation{}, nil
 	}
-	t.Cleanup(func() { resolveTrafficScope = prev })
+
 	var queries []string
 	fake := fakeIstioProm(raw, nil)
 	s := newTestIstio(func(ctx context.Context, q string) (*prom.QueryResult, error) {
 		queries = append(queries, q)
 		return fake(ctx, q)
 	})
+	s.metrics = inputs
 	s.ambientNamespaceFn = func() []string { return many }
 	resp, err := s.GetFlows(context.Background(), DefaultFlowOptions())
 	if err != nil {
@@ -510,17 +509,16 @@ func TestIstioGetFlows_UsesTheRequestedWindow(t *testing.T) {
 // The view's range also reaches the cluster-scope checks and the empty-map
 // explanation, so traffic another cluster sent within the range is found.
 func TestIstioGetFlows_ScopeChecksUseTheRequestedWindow(t *testing.T) {
-	useConfiguredStore(t)
+	inputs := &metricsInputs{url: "http://metrics.example", spansClusters: noOtherTrafficCluster}
 	var mu sync.Mutex
 	var windows []time.Duration
-	prev := resolveTrafficScope
-	resolveTrafficScope = func(_ context.Context, _, _ string, w time.Duration) (string, promclient.SeriesIsolation, error) {
+	inputs.resolve = func(_ context.Context, _, _ string, w time.Duration) (string, promclient.SeriesIsolation, error) {
 		mu.Lock()
 		windows = append(windows, w)
 		mu.Unlock()
 		return `cluster="a"`, promclient.SeriesIsolation{Labels: map[string]string{"cluster": "a"}}, nil
 	}
-	t.Cleanup(func() { resolveTrafficScope = prev })
+
 	var queries []string
 	src := newTestIstio(func(_ context.Context, q string) (*prom.QueryResult, error) {
 		mu.Lock()
@@ -528,6 +526,7 @@ func TestIstioGetFlows_ScopeChecksUseTheRequestedWindow(t *testing.T) {
 		mu.Unlock()
 		return &prom.QueryResult{}, nil
 	})
+	src.metrics = inputs
 	opts := DefaultFlowOptions()
 	opts.Since = time.Hour
 	if _, err := src.GetFlows(context.Background(), opts); err != nil {

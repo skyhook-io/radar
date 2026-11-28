@@ -9,6 +9,7 @@ import (
 )
 
 type Metrics struct {
+	Closed     func() bool
 	Connection func(context.Context) (bool, error)
 	PVCUsage   func(context.Context, string, []string, []prom.WorkloadPodIdentity) prometheuspkg.PVCUsageBatch
 	CNPGScope  func(context.Context, string, string, []prom.WorkloadPodIdentity, time.Duration) (string, prometheuspkg.SeriesIsolation, error)

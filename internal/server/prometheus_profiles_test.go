@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,7 +15,7 @@ import (
 	"github.com/skyhook-io/radar/internal/connectionruntime"
 	"github.com/skyhook-io/radar/internal/connections"
 	"github.com/skyhook-io/radar/internal/k8s"
-	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
+	"github.com/skyhook-io/radar/internal/opencost"
 	"github.com/skyhook-io/radar/pkg/prom"
 	"k8s.io/client-go/rest"
 )
@@ -23,8 +24,8 @@ func setupLocalProfileTest(t *testing.T) *Server {
 	s := setupPrometheusIntegrationTest(t, nil)
 	t.Cleanup(k8s.SetTestLocalMode())
 	connection := k8s.GetConnectionStatus()
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
-	t.Cleanup(func() { k8s.SetConnectionStatus(connection) })
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	t.Cleanup(func() { k8s.PublishTestConnectionStatus(connection) })
 	t.Cleanup(k8s.SetTestProfileSource("/fixture/team", "dev", "developer"))
 	old := k8s.SetTestConfig(&rest.Config{Host: "https://kubernetes"})
 	t.Cleanup(func() { k8s.SetTestConfig(old) })
@@ -33,10 +34,8 @@ func setupLocalProfileTest(t *testing.T) *Server {
 		t.Fatal(err)
 	}
 	s.localConnections = connections.NewResolver(config.NewProfileStore(), target, nil)
-	s.localRuntime = connectionruntime.New(s.localConnections, nil)
-	connections.RegisterRefresh(s.localRuntime.Refresh)
-	t.Cleanup(func() { connections.RegisterRefresh(nil) })
-	t.Cleanup(prometheuspkg.Retire)
+	s.integrationRuntime = connectionruntime.New(s.localConnections, connectionruntime.Settings{})
+	admitTestIntegrations(t, s.integrationRuntime)
 	return s
 }
 
@@ -67,7 +66,7 @@ func updateProfile(t *testing.T, s *Server, view connections.ProfileView, action
 
 func (s *Server) localPrometheusView() connections.ProfileView {
 	target, _ := k8s.CurrentProfileTarget()
-	return s.localRuntime.Apply(target, true)[config.IntegrationMetrics].View
+	return s.localConnections.ResolveAll(target, true)[config.IntegrationMetrics].View
 }
 
 func TestLocalProfileSaveConflictAndCredentialProtection(t *testing.T) {
@@ -116,7 +115,7 @@ func TestLocalProfileLegacyAdoptionAndCompletion(t *testing.T) {
 		t.Fatal(err)
 	}
 	view := s.localPrometheusView()
-	if view.Legacy == nil || len(prometheuspkg.CurrentHeaders()) != 0 {
+	if view.Legacy == nil || len(testMetricsHeaders()) != 0 {
 		t.Fatal("legacy credentials activated without adoption")
 	}
 	res := updateProfile(t, s, view, "adopt", backend.URL+"/edited", nil)
@@ -131,8 +130,9 @@ func TestLocalProfileLegacyAdoptionAndCompletion(t *testing.T) {
 	}
 	restore := k8s.SetTestProfileSource("/fixture/team", "second", "developer")
 	defer restore()
+	admitTestIntegrations(t, s.integrationRuntime)
 	view = s.localPrometheusView()
-	if view.Legacy != nil || len(prometheuspkg.CurrentHeaders()) != 0 {
+	if view.Legacy != nil || len(testMetricsHeaders()) != 0 {
 		t.Fatal("second context repeated import offer or inherited credentials")
 	}
 	if res := updateProfile(t, s, view, "dismiss_previous_notice", "unfinished-url", nil); res.Code != 200 {
@@ -169,11 +169,45 @@ func TestLocalProfileChangedTargetCanReplaceWithoutAdoption(t *testing.T) {
 
 func TestLocalProfileReadWhileDisconnectedDoesNotActivate(t *testing.T) {
 	s := setupLocalProfileTest(t)
-	prometheuspkg.Retire()
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateDisconnected})
+	k8s.RetireServingConnection()
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateDisconnected})
 	view := s.localPrometheusView()
-	if view.State != "auto" || prometheuspkg.GetClient() != nil {
+	if view.State != "auto" || currentTestIntegrations().Metrics != nil {
 		t.Fatalf("offline read activated metrics: %+v", view)
+	}
+}
+
+func TestOfflineMetricsSaveProbesAnIsolatedClientAndServesAfterAdmission(t *testing.T) {
+	s := setupLocalProfileTest(t)
+	t.Cleanup(k8s.SnapshotTestConnection())
+	k8s.RetireServingConnection()
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "offline-credential" {
+			t.Errorf("request credential = %q", got)
+		}
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
+	}))
+	defer backend.Close()
+	headers := map[string]string{"Authorization": "offline-credential"}
+	response := updateProfile(t, s, s.localPrometheusView(), "save", backend.URL, &headers)
+	var saved localConnectionResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &saved); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != http.StatusOK || !saved.Checked || !saved.Connected {
+		t.Fatalf("offline save returned %d %s", response.Code, response.Body.String())
+	}
+	if k8s.ServingConnectionID() != "" || currentTestIntegrations().Metrics != nil {
+		t.Fatal("offline save published a running client")
+	}
+
+	admitTestIntegrations(t, s.integrationRuntime)
+	client, err := connectionruntime.CaptureMetrics(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if addr, _, err := client.EnsureConnected(t.Context()); err != nil || addr != backend.URL {
+		t.Fatalf("first connection used %q, err=%v", addr, err)
 	}
 }
 
@@ -195,6 +229,36 @@ func TestLocalProfileEnvironmentOriginGuidance(t *testing.T) {
 	res := updateProfile(t, s, s.localPrometheusView(), "save", "https://different.example", nil)
 	if res.Code != 400 || !strings.Contains(res.Body.String(), "environment references in clusters.json") || strings.Contains(res.Body.String(), "synthetic-secret") {
 		t.Fatalf("guidance: %d %s", res.Code, res.Body.String())
+	}
+}
+
+func TestOfflineKubecostSaveWithoutClusterIDDefersProbe(t *testing.T) {
+	s := setupLocalProfileTest(t)
+	k8s.RetireServingConnection()
+	view := getLocalConnections(t, s).Profiles[config.IntegrationCost]
+	url := "https://kubecost.example.com"
+	body, err := json.Marshal(connections.Update{
+		Target: view.Target, Revision: view.Revision, Kind: config.IntegrationCost,
+		Action: "save", URL: &url,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	s.handleUpdateLocalConnection(response, httptest.NewRequest(http.MethodPut, "/api/integrations/connections", strings.NewReader(string(body))))
+	var saved localConnectionResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &saved); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != http.StatusOK || saved.Connected || saved.Checked || !strings.Contains(saved.Error, "could not verify Kubecost without this cluster's ID") {
+		t.Fatalf("offline cost save returned %d %s", response.Code, response.Body.String())
+	}
+	if got := saved.Profiles[config.IntegrationCost]; got.URL != url || got.State != "saved" {
+		t.Fatalf("saved cost settings = %+v", got)
+	}
+	admitTestIntegrations(t, s.integrationRuntime)
+	if _, err := currentTestIntegrations().Cost.Selected(t.Context()); !errors.Is(err, opencost.ErrKubecostClusterID) {
+		t.Fatalf("first cost operation returned %v, want missing cluster ID", err)
 	}
 }
 

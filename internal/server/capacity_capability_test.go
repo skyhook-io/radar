@@ -26,8 +26,8 @@ import (
 func TestKarpenterCapabilityReportsAbsenceBeforeRBACDenial(t *testing.T) {
 	initCapacityContractDynamicState(t, false, false)
 	previousConnection := k8s.GetConnectionStatus()
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
-	defer k8s.SetConnectionStatus(previousConnection)
+	k8s.PublishTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	defer k8s.PublishTestConnectionStatus(previousConnection)
 	previousClient := k8s.SetTestClient(&kubernetes.Clientset{})
 	defer k8s.SetTestClient(previousClient)
 
@@ -79,8 +79,8 @@ func TestKarpenterCapabilityShortCircuitsWithoutUsableConnection(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			previousConnection := k8s.GetConnectionStatus()
-			k8s.SetConnectionStatus(tt.connection)
-			defer k8s.SetConnectionStatus(previousConnection)
+			k8s.PublishTestConnectionStatus(tt.connection)
+			defer k8s.PublishTestConnectionStatus(previousConnection)
 			previousClient := k8s.SetTestClient(tt.client)
 			defer k8s.SetTestClient(previousClient)
 

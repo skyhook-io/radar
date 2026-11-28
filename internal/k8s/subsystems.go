@@ -21,11 +21,14 @@ import (
 // The progress callback receives human-readable status messages suitable for
 // display in the UI (e.g. via SSE connection status updates).
 func InitAllSubsystems(ctx context.Context, progress func(string)) error {
-	return initAllSubsystems(ctx, progress, 0, nil)
+	return Current().InitSubsystems(ctx, progress)
 }
 
-func initAllSubsystems(ctx context.Context, progress func(string), discoveryWait time.Duration, tracker *ContextSwitchTracker) error {
-	conn := Current()
+func (conn *Connection) InitSubsystems(ctx context.Context, progress func(string)) error {
+	return conn.initAllSubsystems(ctx, progress, 0, nil)
+}
+
+func (conn *Connection) initAllSubsystems(ctx context.Context, progress func(string), discoveryWait time.Duration, tracker *ContextSwitchTracker) error {
 	subsystemStart := time.Now()
 
 	// 1. Timeline — before caches so events during warmup are captured
@@ -48,12 +51,6 @@ func initAllSubsystems(ctx context.Context, progress func(string), discoveryWait
 	}
 	progress("Loading workloads...")
 	t := time.Now()
-
-	// Snapshot callback refs before parallel section
-	contextSwitchMu.RLock()
-	trReinitFn := trafficReinitFunc
-	promReinitFn := prometheusReinitFunc
-	contextSwitchMu.RUnlock()
 
 	// Discovery can outlive a failed or cancelled switch if an exec plugin stalls.
 	discoveryDone := make(chan struct{})
@@ -150,30 +147,6 @@ func initAllSubsystems(ctx context.Context, progress func(string), discoveryWait
 		conn.initMetricsHistory()
 		logTiming("   Metrics history init: %v (parallel)", time.Since(mt))
 	}()
-
-	if trReinitFn != nil {
-		remainingWg.Add(1)
-		go func() {
-			defer remainingWg.Done()
-			tt := time.Now()
-			if err := trReinitFn(); err != nil {
-				log.Printf("Warning: traffic init failed: %v", err)
-			}
-			logTiming("   Traffic init: %v (parallel)", time.Since(tt))
-		}()
-	}
-
-	if promReinitFn != nil {
-		remainingWg.Add(1)
-		go func() {
-			defer remainingWg.Done()
-			pt := time.Now()
-			if err := promReinitFn(); err != nil {
-				log.Printf("Warning: Prometheus init failed: %v", err)
-			}
-			logTiming("   Prometheus init: %v (parallel)", time.Since(pt))
-		}()
-	}
 
 	remainingWg.Wait()
 	logTiming("   Remaining subsystems (parallel): %v", time.Since(t))
@@ -275,7 +248,7 @@ func runCRDWarmupSequence(ctx context.Context, deferredDone <-chan struct{}, sti
 
 // ResetAllSubsystems tears down all subsystems in reverse order of init.
 // Init order: 1) timeline, 2) resource cache + API discovery, 3) dynamic cache,
-// 4) remaining (metrics history, traffic, prometheus).
+// 4) metrics history.
 // Safe to call on first boot when singletons are nil.
 // Each reset is wrapped in a panic recover so a failure in one subsystem
 // does not prevent remaining subsystems from being torn down.
@@ -287,31 +260,7 @@ func resetAllSubsystems(conn *Connection) {
 	// The point of no return: nothing can be admitted against the connection
 	// whose resources are about to go.
 	RetireServingConnection()
-	// Step 4 subsystems (reverse): prometheus, traffic, metrics history
-	contextSwitchMu.RLock()
-	costResetFn := costResetFunc
-	contextSwitchMu.RUnlock()
-	if costResetFn != nil {
-		safeReset("cost source", costResetFn)
-	}
-
-	contextSwitchMu.RLock()
-	promResetFn := prometheusResetFunc
-	contextSwitchMu.RUnlock()
-	if promResetFn != nil {
-		safeReset("prometheus", promResetFn)
-	}
-
-	// Closing a traffic source waits for its in-flight Connect. Interrupt its
-	// tunnel first, including an attempt still waiting to become ready.
 	safeReset("automatic port-forwards", conn.PortForwards().Close)
-	contextSwitchMu.RLock()
-	trResetFn := trafficResetFunc
-	contextSwitchMu.RUnlock()
-	if trResetFn != nil {
-		safeReset("traffic", trResetFn)
-	}
-
 	safeReset("metrics history", conn.closeMetricsHistory)
 
 	safeReset("dynamic resource cache", conn.closeDynamicResourceCache)

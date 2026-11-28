@@ -39,7 +39,10 @@ func isIstioWaypoint(l map[string]string) bool {
 // cachedIstioWaypoints returns the waypoint Deployments in Radar's cache, or
 // nil when Deployments are not cached and waypoints cannot be recognized.
 func cachedIstioWaypoints() map[istioWorkload]bool {
-	cache := k8s.GetResourceCache()
+	return nil
+}
+
+func istioWaypoints(cache *k8s.ResourceCache) map[istioWorkload]bool {
 	if cache == nil {
 		return nil
 	}
@@ -69,7 +72,10 @@ func cachedIstioWaypoints() map[istioWorkload]bool {
 // cachedAmbientNamespaces returns the cached namespaces enrolled in ambient
 // mode, sorted, or nil when Namespaces are not cached.
 func cachedAmbientNamespaces() []string {
-	cache := k8s.GetResourceCache()
+	return nil
+}
+
+func ambientNamespaces(cache *k8s.ResourceCache) []string {
 	if cache == nil {
 		return nil
 	}

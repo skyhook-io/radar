@@ -22,7 +22,7 @@ External MCP callers name no connection. Each Helm write or preview uses the con
 ## Connection identity
 
 - **Admission.** When Radar starts serving a cluster (startup, a switch, Retry, auth recovery, a namespace rescope) it admits a connection with an ID `<bootNonce>-<n>`. IDs never repeat within a process, and the boot nonce keeps them distinct across restarts.
-- **Retirement.** The point of no return of any destructive path (switch, rescope, rebuild, auth demotion, shutdown) clears the serving ID before tearing anything down. Between retirement and the next admission nothing is serving. Shutdown also closes admissions.
+- **Retirement.** The point of no return of a switch, rescope, rebuild, auth demotion or shutdown clears the serving ID and closes that admission’s Done signal. Radar cancels the retired integration members and stops their forwards before closing the connection’s forward manager and caches. Traffic flow streams end when their admission or traffic member closes. Between retirement and the next admission nothing is serving. Shutdown closes admissions and cancels ongoing connection operations.
 - **Not health.** A disconnect without teardown (a failed liveness check, a Helm transport error) keeps the ID: it says which connection was admitted, not whether it is healthy.
 - **Publication.** The ID is published as `connectionId` on `/api/connection`, the Retry result, SSE `connection_state` frames and the SSE initial snapshot.
 
@@ -45,17 +45,17 @@ sequenceDiagram
   alt B fails preflight
     Radar-->>Tab: failed · nothing torn down · still K7QXM2RDTA-1
   else B passes
-    Note over Radar: 2. before-switch callbacks: Diagnose runs marked stale,<br/>Argo CD connection reset · in-flight operations cancelled
+    Note over Radar: 2. before-switch callbacks: Diagnose runs marked stale,<br/>in-flight context operations cancelled
     Note over Radar: 3. sessions stopped: port-forwards, exec terminals
     Radar->>Radar: 4. retire K7QXM2RDTA-1 · writes get 503
-    Radar->>A: 4. tear down: cost source, Prometheus, traffic,<br/>metrics history, PolicyReport index, DynamicResourceCache,<br/>ResourceDiscovery, ResourceCache, timeline
+    Radar->>A: 4. close integration members, automatic forwards,<br/>metrics history, PolicyReport index, DynamicResourceCache,<br/>ResourceDiscovery, ResourceCache, timeline
     Note over Radar: 5. install B's clients · restore the namespace scope ·<br/>drop capability, permission, server-version and platform caches
-    Radar->>B: 6. build: timeline, ResourceCache + ResourceDiscovery,<br/>DynamicResourceCache, then metrics history,<br/>traffic, Prometheus in the background
+    Radar->>B: 6. build: timeline, ResourceCache + ResourceDiscovery,<br/>DynamicResourceCache, then metrics history
     alt build fails
       Radar-->>Tab: disconnected · no ID · "Back to A"
     else build succeeds
-      Note over Radar: 7. after-switch callbacks: per-user namespace picks and<br/>RBAC index, MCP permission cache, integration settings,<br/>SSE topology view
-      Radar->>Radar: 8. admit K7QXM2RDTA-2
+      Note over Radar: 7. after-switch callbacks: per-user namespace picks and<br/>RBAC index, MCP permission cache and SSE topology view
+      Radar->>Radar: 8. build integrations and admit K7QXM2RDTA-2
       Radar-->>Tab: connected B · K7QXM2RDTA-2 (SSE context_changed and status)
       Tab->>Tab: adopt K7QXM2RDTA-2, reset views
       Note over Tab,Radar: a tab still sending K7QXM2RDTA-1 gets 409 context_changed
@@ -63,7 +63,9 @@ sequenceDiagram
   end
 ```
 
-Switching back to A admits `K7QXM2RDTA-3`, never `-1` again. After a restart the nonce changes (say `P4WNB7ZHQE-1`), so an ID from the previous process also gets 409. The client bundle, REST config and API discovery belong to one connection. A subsystem rebuild on the same clients installs a fresh connection with its own discovery slot.
+Switching back to A admits `K7QXM2RDTA-3`, never `-1` again. After a restart the nonce changes (say `P4WNB7ZHQE-1`), so an ID from the previous process also gets 409. The client bundle, REST config and API discovery belong to one connection. A subsystem rebuild on the same clients installs a fresh connection with its own discovery slot. Metrics, Argo CD, cost and currency, traffic, and the Helm uninstall memo are available from the first request after admission. Backend checks and discovery can continue in the background. Reads already using a retired connection keep their captured memo.
+
+Saving settings replaces the affected members on the same admission. A Metrics change also replaces cost and traffic because they use that metrics backend. Other members and the Helm memo retain their state. Radar cancels requests on replaced members and stops their automatic forwards as soon as the replacement is published.
 
 Code: `internal/k8s/connection_state.go` (admission, retirement, publication), `internal/k8s/connection_binding.go` (capture).
 

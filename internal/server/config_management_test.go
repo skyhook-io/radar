@@ -13,10 +13,10 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/config"
+	"github.com/skyhook-io/radar/internal/connectionruntime"
 	"github.com/skyhook-io/radar/internal/connections"
 	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/k8s"
-	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/internal/settings"
 )
 
@@ -216,9 +216,7 @@ func TestOperatorConfigReadPrivacy(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("USERPROFILE", t.TempDir())
 	t.Setenv("RADAR_CLOUD_MODE", "false")
-	prometheuspkg.Initialize(nil, nil, "test", nil)
-	t.Cleanup(func() { prometheuspkg.Initialize(nil, nil, "", nil) })
-	prometheuspkg.Configure("https://private-machine-user:private-machine-password@metrics.example/prom?token=private-machine-token", nil)
+
 	cfg := config.Config{Kubeconfig: "/private-machine-path", KubeconfigDirs: []string{"/private-machine-directory"}, TimelineDBPath: "/private-machine-db", AIHistoryDBPath: "/private-machine-ai", AIConsent: map[string]string{"private-machine-consent": "v1"}, PrometheusHeadersFromEnv: map[string]string{"Authorization": "PRIVATE_MACHINE_ENV"}, ArgoCDToken: "private-machine-token", KubecostAPIKey: "private-machine-key", Port: 9280}
 	if err := config.Save(cfg); err != nil {
 		t.Fatal(err)
@@ -226,7 +224,9 @@ func TestOperatorConfigReadPrivacy(t *testing.T) {
 	if err := settings.Save(settings.Settings{Theme: "dark", PinnedKinds: []settings.PinnedKind{{Name: "private-machine-pin"}}, ActiveNamespaces: map[string][]string{"private-machine-context": {"private-machine-ns"}}}); err != nil {
 		t.Fatal(err)
 	}
-	s := &Server{authConfig: auth.Config{Mode: "proxy"}, effectiveConfig: &cfg}
+	s := serverWithTestIntegrations(t, connectionruntime.Settings{})
+	s.authConfig, s.effectiveConfig = auth.Config{Mode: "proxy"}, &cfg
+	configureTestMetrics(t, s, "https://private-machine-user:private-machine-password@metrics.example/prom?token=private-machine-token", nil)
 	w := httptest.NewRecorder()
 	s.handleGetConfig(w, httptest.NewRequest(http.MethodGet, "/api/config", nil))
 	if strings.Contains(strings.ToLower(w.Body.String()), "private-machine") || strings.Contains(w.Body.String(), "PRIVATE_MACHINE_ENV") {

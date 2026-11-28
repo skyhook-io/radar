@@ -78,7 +78,7 @@ func TestListHelmReleasesObservedRowsFollowEachCallersAccess(t *testing.T) {
 	helm.ResetTestClient()
 	previousConfig := k8s.SetTestConfig(&rest.Config{Host: storage.URL})
 	t.Cleanup(func() { k8s.SetTestConfig(previousConfig) })
-	helm.Initialize()
+	helm.Initialize(nil)
 	t.Cleanup(helm.ResetTestClient)
 
 	alice := &pkgauth.UserPermissions{AllowedNamespaces: []string{"team-a", "team-b"}}

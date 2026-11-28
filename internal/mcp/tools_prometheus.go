@@ -13,9 +13,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/connectionruntime"
+
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/prometheus/common/model"
 
+	"github.com/skyhook-io/radar/internal/portforward"
 	"github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/pkg/prom"
 )
@@ -26,6 +29,8 @@ var (
 	promSuggestionTimeout = 5 * time.Second
 	promNearMissTimeout   = 2 * time.Second
 )
+
+var errMetricsConnectionClosed = errors.New("metrics connection closed. Retry the request")
 
 var (
 	promMetricNamePattern     = regexp.MustCompile(`^[a-zA-Z_:][a-zA-Z0-9_:]*$`)
@@ -137,12 +142,8 @@ const openObserveMetricNamesNote = "listing metric names isn't available for met
 
 // metricsFromOpenObserve reports whether metrics are being served from
 // OpenObserve (local or through Radar Hub) right now.
-func metricsFromOpenObserve() bool {
-	if !prometheus.RelayActive() {
-		return false
-	}
-	c := prometheus.GetClient()
-	if c == nil {
+func metricsFromOpenObserve(c *prometheus.Client) bool {
+	if !c.RelayActive() {
 		return false
 	}
 	st := c.GetStatus()
@@ -179,7 +180,8 @@ func handleQueryPrometheus(ctx context.Context, req *mcp.CallToolRequest, input 
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	p, connErr := connectProm(ctx)
+	set := connectionruntime.Capture(ctx)
+	p, connErr := connectProm(ctx, set)
 	if connErr != nil {
 		return nil, nil, connErr
 	}
@@ -239,7 +241,7 @@ func handleQueryPrometheus(ctx context.Context, req *mcp.CallToolRequest, input 
 	if len(result.Series) == 0 {
 		resp.Note = partialNote + "query returned no data — verify metric and label names with discover_metrics"
 		prefix := promMetricFamilyPrefix(input.Query)
-		if prefix != "" && !metricsFromOpenObserve() {
+		if prefix != "" && !metricsFromOpenObserve(set.Metrics) {
 			discoveryCtx, discoveryCancel := context.WithTimeout(ctx, promSuggestionTimeout)
 			values, truncated, discoveryErr := discoverPromLabelValues(
 				discoveryCtx,
@@ -293,14 +295,15 @@ func handleDiscoverMetrics(ctx context.Context, req *mcp.CallToolRequest, input 
 		limit = promDiscoverMaxLimit
 	}
 
-	if (input.Label == "" || input.Label == "__name__") && metricsFromOpenObserve() {
+	set := connectionruntime.Capture(ctx)
+	if (input.Label == "" || input.Label == "__name__") && metricsFromOpenObserve(set.Metrics) {
 		return toJSONResult(discoverMetricsResponse{Match: input.Match, Note: openObserveMetricNamesNote})
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, promQueryTimeout)
 	defer cancel()
 
-	p, connErr := connectProm(ctx)
+	p, connErr := connectProm(ctx, set)
 	if connErr != nil {
 		return nil, nil, connErr
 	}
@@ -345,6 +348,9 @@ func handleDiscoverMetrics(ctx context.Context, req *mcp.CallToolRequest, input 
 	// successful discovery into an error. The limit bounds the catalog pulled
 	// on large backends (names beyond it simply degrade to empty type/help).
 	metadata, mdErr := p.Metadata(ctx, promMetadataLimit)
+	if portforward.IsMemberClosed(ctx, mdErr) {
+		return nil, nil, errMetricsConnectionClosed
+	}
 	if mdErr != nil {
 		log.Printf("[mcp] discover_metrics: metadata fetch failed, returning bare names: %v", mdErr)
 	}
@@ -369,6 +375,9 @@ func handleDiscoverMetrics(ctx context.Context, req *mcp.CallToolRequest, input 
 		resp.Usage = "some results are counters (type=counter) — they only ever increase, so wrap them in rate(metric[5m]) before querying; gauges can be queried directly"
 	}
 	nearMisses, pattern := discoverPromNearMisses(ctx, p, input.Match, values)
+	if set.Metrics != nil && set.Metrics.Closed() {
+		return nil, nil, errMetricsConnectionClosed
+	}
 	resp.NearMisses = nearMisses
 	if len(resp.NearMisses) > 0 {
 		if resp.Usage != "" {
@@ -575,13 +584,16 @@ func handleGetPrometheusRules(ctx context.Context, req *mcp.CallToolRequest, inp
 	ctx, cancel := context.WithTimeout(ctx, promQueryTimeout)
 	defer cancel()
 
-	p, connErr := connectProm(ctx)
+	p, connErr := connectProm(ctx, connectionruntime.Capture(ctx))
 	if connErr != nil {
 		return nil, nil, connErr
 	}
 
 	groups, err := p.Rules(ctx, input.Type)
 	if err != nil {
+		if portforward.IsMemberClosed(ctx, err) {
+			return nil, nil, errMetricsConnectionClosed
+		}
 		var httpErr *prom.HTTPError
 		if errors.As(err, &httpErr) && httpErr.StatusCode == 404 {
 			return nil, nil, errors.New("this metrics backend does not expose /api/v1/rules (common for managed offerings like Amazon Managed Prometheus) — alerting rules are not queryable here")
@@ -754,15 +766,21 @@ func adjustStep(window time.Duration, stepStr string, maxPoints int) (time.Durat
 	return time.Duration(math.Ceil(step.Seconds())) * time.Second, nil
 }
 
-func connectProm(ctx context.Context) (*prom.Client, error) {
-	client, connectionErr := prometheus.ClientForOperation()
+func connectProm(ctx context.Context, set connectionruntime.Set) (*prom.Client, error) {
+	client, connectionErr := set.MetricsClient()
 	if connectionErr != nil {
 		return nil, connectionErr
 	}
 	if _, _, err := client.EnsureConnected(ctx); err != nil {
+		if portforward.IsMemberClosed(ctx, err) {
+			return nil, errMetricsConnectionClosed
+		}
 		return nil, promNotConnectedError(client, err)
 	}
 	p := client.PromForMCP()
+	if client.Closed() {
+		return nil, errMetricsConnectionClosed
+	}
 	if p == nil {
 		return nil, errors.New("prometheus connection was reset — retry")
 	}
@@ -827,6 +845,9 @@ func promHTTPError(err error, noun, value string) error {
 // gets a tailored hint (there's no body/status to carry the info); HTTP errors
 // go through promHTTPError (status + body, no URL leak).
 func promQueryError(ctx context.Context, query string, timeout time.Duration, err error) error {
+	if portforward.IsMemberClosed(ctx, err) {
+		return errMetricsConnectionClosed
+	}
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return fmt.Errorf("prometheus query timed out after %s — narrow the time window, add aggregation (sum/avg by), or wrap with topk(5, ...); raise timeout (max 180) only as a last resort: %s",
 			timeout, query)
@@ -855,6 +876,9 @@ func promQueryError(ctx context.Context, query string, timeout time.Duration, er
 // promDiscoverError is the discovery twin of promQueryError — the timeout hint
 // points at the match selector rather than the query.
 func promDiscoverError(ctx context.Context, match string, err error) error {
+	if portforward.IsMemberClosed(ctx, err) {
+		return errMetricsConnectionClosed
+	}
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return fmt.Errorf("prometheus discovery timed out after %s — add or tighten the match selector to reduce the series scanned", promQueryTimeout)
 	}

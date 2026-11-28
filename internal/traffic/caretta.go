@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"maps"
 	"net/http"
 	"net/url"
 	"sort"
@@ -18,8 +17,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
-	"github.com/skyhook-io/radar/internal/config"
-	"github.com/skyhook-io/radar/internal/connections"
 	"github.com/skyhook-io/radar/internal/errorlog"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/portforward"
@@ -81,7 +78,9 @@ var metricsServiceLocations = []struct {
 
 // CarettaSource implements TrafficSource for Caretta
 type CarettaSource struct {
+	metrics             *metricsInputs
 	forwards            *portforward.Manager
+	handles             *portforward.Handles
 	forward             *portforward.Handle
 	reconnectAfter      time.Time // nonzero while recovering a previously bound forward
 	reconnectDelay      time.Duration
@@ -94,7 +93,6 @@ type CarettaSource struct {
 	metricsPort         int    // port for port-forward
 	metricsURL          string // manual override URL from --prometheus-url flag
 	headers             map[string]string
-	managedMetrics      bool
 	isConnected         bool
 	currentContext      string // current K8s context name
 	detectedNamespace   string // namespace Caretta itself was detected in
@@ -121,12 +119,6 @@ type CarettaSource struct {
 // tryMetricsEndpointLocked path, which holds c.mu.Lock() and cannot
 // re-enter as a reader — sync.RWMutex isn't reentrant.
 func (c *CarettaSource) applyHeaders(req *http.Request) error {
-	if c.managedMetrics {
-		url, headers := metricsConfig()
-		if url != c.metricsURL || !maps.Equal(headers, c.headers) {
-			return fmt.Errorf("metrics connection changed; retry the request")
-		}
-	}
 	for k, v := range c.headers {
 		req.Header.Set(k, v)
 	}
@@ -284,10 +276,8 @@ func (c *CarettaSource) resultFromPods(pods []corev1.Pod, result *DetectionResul
 
 // GetFlows retrieves flows from Caretta via Prometheus metrics
 func (c *CarettaSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsResponse, error) {
-	if c.managedMetrics {
-		if err := connections.Refresh(config.IntegrationMetrics); err != nil {
-			return nil, err
-		}
+	if err := c.metrics.settingsError(); err != nil {
+		return nil, err
 	}
 	c.mu.RLock()
 	connected := c.isConnected
@@ -323,7 +313,9 @@ func (c *CarettaSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsR
 	}
 	flows, err := c.queryPrometheusForFlows(ctx, endpoint, opts, scope)
 	if err != nil {
-		log.Printf("[caretta] Error querying Prometheus: %v", err)
+		if ctx.Err() == nil {
+			log.Printf("[caretta] Error querying Prometheus: %v", err)
+		}
 		return &FlowsResponse{
 			Source:    "caretta",
 			Timestamp: time.Now(),
@@ -755,13 +747,13 @@ func carettaLinksQuery(namespace string, sc clusterScope) string {
 // store the operator configured can hold several clusters; Caretta's own
 // caretta-vm and any store found in the cluster hold this one.
 func (c *CarettaSource) resolveClusterScope(ctx context.Context) (clusterScope, error) {
-	if c.metricsURL != "" && metricsRelayActive() {
+	if c.metricsURL != "" && c.metrics != nil && c.metrics.relayActive != nil && c.metrics.relayActive() {
 		// Caretta reads the configured store directly, but while an
 		// OpenObserve relay serves metrics the shared cluster check answers
 		// for OpenObserve ("one cluster, nothing to filter"), not for this
 		// store. The operator's own scope for the store still applies;
 		// without one, read it unfiltered and say it may hold other clusters'.
-		if scope, ok := operatorScopeDuringRelay(); ok {
+		if scope, ok := c.metrics.operatorScope(); ok {
 			m, err := scope.Matchers()
 			if err != nil {
 				return clusterScope{}, err
@@ -770,7 +762,7 @@ func (c *CarettaSource) resolveClusterScope(ctx context.Context) (clusterScope, 
 		}
 		return clusterScope{mixed: true}, nil
 	}
-	return scopeForMetric(ctx, "caretta_links_observed", "", c.metricsURL != "", 0)
+	return c.metrics.scopeForMetric(ctx, "caretta_links_observed", "", c.metricsURL != "", 0)
 }
 
 func (c *CarettaSource) identityRows(ctx context.Context, query string) ([]map[string]string, error) {
@@ -925,10 +917,8 @@ func (c *CarettaSource) Close() error {
 
 // Connect establishes connection to metrics service, starting port-forward if needed
 func (c *CarettaSource) Connect(ctx context.Context, contextName string) (*portforward.ConnectionInfo, error) {
-	if c.managedMetrics {
-		if err := connections.Refresh(config.IntegrationMetrics); err != nil {
-			return nil, err
-		}
+	if err := c.metrics.settingsError(); err != nil {
+		return nil, err
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -1006,11 +996,15 @@ func (c *CarettaSource) tryConnectLocked(ctx context.Context, contextName string
 	if c.metricsURL != "" {
 		addr := strings.TrimRight(c.metricsURL, "/")
 		if c.tryMetricsEndpointLocked(ctx, addr) {
+			verified := c.carettaMetricsPresentLocked(ctx, addr)
+			if err := ctx.Err(); err != nil {
+				return &portforward.ConnectionInfo{Error: err.Error(), ContextName: contextName}
+			}
 			log.Printf("[caretta] Connected using manual metrics URL: %s", addr)
 			c.prometheusAddr = addr
 			c.metricsBasePath = ""
 			c.boundIsCarettaStore = false
-			c.backendVerified = c.carettaMetricsPresentLocked(ctx, addr)
+			c.backendVerified = verified
 			c.backendWarning = ""
 			return &portforward.ConnectionInfo{
 				Connected:   true,
@@ -1078,6 +1072,9 @@ func (c *CarettaSource) tryConnectLocked(ctx context.Context, contextName string
 		// Start a new managed port-forward
 		log.Printf("[caretta] Starting port-forward to %s/%s:%d (targetPort=%d)", info.namespace, info.name, info.port, info.targetPort)
 		forward, err := c.forwards.Start(ctx, portforward.OwnerTraffic, info.namespace, info.name, info.targetPort)
+		if err == nil && c.handles != nil {
+			err = c.handles.Track(forward)
+		}
 		if err != nil {
 			lastErr = fmt.Sprintf("Failed to start port-forward to %s/%s: %v", info.namespace, info.name, err)
 			log.Printf("[caretta] %s", lastErr)
@@ -1436,12 +1433,9 @@ func (c *CarettaSource) GetMetricsServiceInfo() (namespace, service string, port
 }
 
 // queryPrometheusRaw executes a PromQL query and returns the parsed response.
-// Used by IstioSource to share Prometheus discovery infrastructure.
 func (c *CarettaSource) queryPrometheusRaw(ctx context.Context, query string) (*prometheusResponse, error) {
-	if c.managedMetrics {
-		if err := connections.Refresh(config.IntegrationMetrics); err != nil {
-			return nil, err
-		}
+	if err := c.metrics.settingsError(); err != nil {
+		return nil, err
 	}
 	return c.queryMetrics(ctx, c.metricsEndpoint(ctx), query)
 }
