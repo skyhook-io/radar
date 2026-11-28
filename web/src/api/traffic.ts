@@ -156,6 +156,7 @@ export interface TrafficEndpointPair {
   destination: TrafficEndpointRef
   port: number
   directionUnknown?: boolean
+  likelyOverlay?: boolean
 }
 
 /** The selection rides in the query string, URL-encoded. Proxies in front of

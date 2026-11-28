@@ -637,6 +637,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/dashboard/helm", s.handleDashboardHelm)
 			r.Get("/cluster-info", s.handleClusterInfo)
 			r.Get("/capabilities", s.handleCapabilities)
+			r.Get("/cloud/owner-access/review", s.handleOwnerAccessReview)
 			r.Get("/capacity", s.handleCapacityOverview)
 			r.Get("/capacity/pools", s.handleCapacityPools)
 			r.Get("/capacity/pools/{name}", s.handleCapacityPool)
@@ -1599,6 +1600,7 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 		WorkloadHistory:              true,
 		CNPGWorkspace:                true,
 		CNPGProtectionSetup:          true,
+		CNPGPostureChecks:            true,
 		VeleroWorkspace:              true,
 		VeleroBackupNow:              true,
 		VeleroSchedulePause:          true,
@@ -1612,6 +1614,7 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 		TrafficRecords:               true,
 		GitOpsWriteEvidence:          true,
 		GitOpsActionCapabilities:     true,
+		OwnerAccessGrantReview:       true,
 		ArgoRollbackSync:             true,
 		ArgoSyncInheritance:          true,
 		ArgoEnableSelfHealOff:        true,
@@ -1672,6 +1675,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	if cloudMode() && !pkgauth.UserTokenMode() && cloud.OwnerAccessConfigured() {
 		approved := cloud.OwnerAccess()
 		caps.OwnerAccess = &approved
+		caps.OwnerAccessSetup = readOwnerAccessSetup()
 	}
 	caps.CloudConnect = s.cloudConnectCapability()
 	caps.Features = advertisedFeatures()

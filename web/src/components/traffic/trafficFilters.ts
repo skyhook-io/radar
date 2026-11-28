@@ -479,6 +479,7 @@ export function endpointPair(flow: AggregatedFlow): TrafficEndpointPair {
     destination: ref(flow.destination),
     port: flow.port,
     ...(flow.directionUnknown && { directionUnknown: true }),
+    ...(flow.likelyOverlay && { likelyOverlay: true }),
   }
 }
 
@@ -559,8 +560,8 @@ export function graphEndpointId(e: { namespace?: string; name: string }): string
   return e.namespace ? `${e.namespace}/${e.name}` : e.name
 }
 
-export function pairKey(source: { namespace?: string; name: string }, destination: { namespace?: string; name: string }, port: number, directionUnknown?: boolean): string {
-  return `${graphEndpointId(source)}->${graphEndpointId(destination)}:${port}${directionUnknown ? ':u' : ''}`
+export function pairKey(source: { namespace?: string; name: string }, destination: { namespace?: string; name: string }, port: number, directionUnknown?: boolean, likelyOverlay?: boolean): string {
+  return `${graphEndpointId(source)}->${graphEndpointId(destination)}:${port}${directionUnknown ? ':u' : ''}${likelyOverlay ? ':v' : ''}`
 }
 
 /**
@@ -577,12 +578,12 @@ export function selectedEdgeMatcher(
   drawn: (e: TrafficFlow['source']) => { namespace?: string; name: string },
 ): (f: TrafficFlow) => boolean {
   if (!pairs) return () => true
-  const keys = new Set(pairs.map(p => pairKey(p.source, p.destination, p.port, p.directionUnknown)))
+  const keys = new Set(pairs.map(p => pairKey(p.source, p.destination, p.port, p.directionUnknown, p.likelyOverlay)))
   const callers = responsesCallerOriented ? null : new Set(pairs.map(p => `${graphEndpointId(p.source)}->${graphEndpointId(p.destination)}`))
   return f => {
     const src = drawn(f.source)
     const dst = drawn(f.destination)
-    if (keys.has(pairKey(src, dst, f.port, f.directionUnknown))) return true
+    if (keys.has(pairKey(src, dst, f.port, f.directionUnknown, f.likelyOverlay))) return true
     // The response travels callee to caller: reversed, it is the edge's.
     return !!callers && f.l7Protocol === 'HTTP' && f.l7Type === 'RESPONSE' &&
       callers.has(`${graphEndpointId(dst)}->${graphEndpointId(src)}`)
@@ -611,14 +612,14 @@ export function selectionRawPairs(
     return selection.type === 'node'
       ? sourceId === selection.nodeId || destId === selection.nodeId
       : sourceId === selection.sourceId && destId === selection.destId &&
-        !!flow.directionUnknown === !!selection.directionUnknown
+        !!flow.directionUnknown === !!selection.directionUnknown && !!flow.likelyOverlay === !!selection.likelyOverlay
   })
   // An edge stands for its port; an edge merged from several ports shows one
   // of them and carries the rest (edgesOnPort).
   const selected = selection.type === 'node' ? touching : edgesOnPort(touching, f => f, selection.port)
   for (const flow of selected) {
     for (const pair of flow.rawPairs ?? []) {
-      pairs.set(pairKey(pair.source, pair.destination, pair.port, pair.directionUnknown), pair)
+      pairs.set(pairKey(pair.source, pair.destination, pair.port, pair.directionUnknown, pair.likelyOverlay), pair)
     }
   }
   if (pairs.size === 0) return null

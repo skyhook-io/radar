@@ -914,3 +914,24 @@ describe('mergeEdgePortInto', () => {
     expect(merge({ port: 0, portSource: 'serviceMultiple' }, { port: 0 })).toEqual({ port: 0, portSource: 'serviceMultiple' })
   })
 })
+
+describe('likely-overlay edges in a selection', () => {
+  const tcp: AggregatedFlow = {
+    source: { namespace: '', name: 'node-a', kind: 'Pod' }, destination: { namespace: '', name: 'node-b', kind: 'Pod' },
+    protocol: 'tcp', port: 0, flowCount: 1, bytesSent: 0, bytesRecv: 0, connections: 0, lastSeen: '',
+  }
+  const overlay: AggregatedFlow = { ...tcp, protocol: 'udp', likelyOverlay: true }
+  const flows: GraphFlow[] = [tcp, overlay].map(f => ({ ...f, rawPairs: [endpointPair(f)] }))
+
+  it('selects the edge the user clicked, not the other traffic between the two nodes', () => {
+    expect(selectionRawPairs(flows, { type: 'edge', sourceId: 'node-a', destId: 'node-b', port: 0 })).toEqual([endpointPair(tcp)])
+    expect(selectionRawPairs(flows, { type: 'edge', sourceId: 'node-a', destId: 'node-b', port: 0, likelyOverlay: true })).toEqual([endpointPair(overlay)])
+  })
+
+  it('keeps overlay records off the other edge', () => {
+    const on = selectedEdgeMatcher([endpointPair(tcp)], true, e => e)
+    const record = (f: AggregatedFlow) => ({ ...f, lastSeen: '2025-01-01T00:00:00Z' }) as unknown as TrafficFlow
+    expect(on(record(tcp))).toBe(true)
+    expect(on(record(overlay))).toBe(false)
+  })
+})

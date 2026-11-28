@@ -29,7 +29,7 @@ func Kinds() []resourceid.GroupKind {
 		KnativeEventDestinations, KnativeTriggerBrokers, KnativeRouteRevisions,
 		IstioGateways, IstioServiceHosts(""), ArgoWorkflowTemplates,
 		TraefikBackends, TraefikRouteConfig, TraefikSecrets, ContourBackends,
-		ContourSecrets, PodPlacement, Reflections, Storage, MachineNodes,
+		ContourSecrets, PodPlacement, Reflections, Storage, VolumeSnapshots, RestoredVolumeSnapshots, MachineNodes,
 		AnalysisRuns, SealedSecrets,
 	} {
 		add(f.Targets...)

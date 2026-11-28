@@ -62,41 +62,19 @@ tests:
           path: subjects[0].name
           value: radar:owner-access:velero
         documentIndex: 5
-  - it: provisions backup-data access and deletion only with separate approvals
+  - it: opts in to backup data without granting stored backup deletion
     set:
       cloud.defaultRbac.integrationWrite.velero-download.owner: true
-      cloud.defaultRbac.integrationWrite.velero-delete.owner: true
     asserts:
       - hasDocuments:
-          count: 10
-      - equal:
-          path: rules
-          value:
-            - apiGroups: [velero.io]
-              resources: [deletebackuprequests]
-              verbs: [list, create]
-        documentIndex: 6
-      - equal:
-          path: subjects[0].name
-          value: radar:owner-access:velero-delete
-        documentIndex: 7
+          count: 8
       - equal:
           path: rules
           value:
             - apiGroups: [velero.io]
               resources: [downloadrequests]
               verbs: [create, get, delete]
-        documentIndex: 8
-      - equal:
-          path: subjects[0].name
-          value: radar:owner-access:velero-download
-        documentIndex: 9
-  - it: download approval does not provision deletion
-    set:
-      cloud.defaultRbac.integrationWrite.velero-download.owner: true
-    asserts:
-      - hasDocuments:
-          count: 8
+        documentIndex: 6
       - equal:
           path: subjects[0].name
           value: radar:owner-access:velero-download
@@ -105,7 +83,6 @@ tests:
     set:
       rbac.namespaces: [apps, databases]
       cloud.defaultRbac.integrationWrite.velero-download.owner: true
-      cloud.defaultRbac.integrationWrite.velero-delete.owner: true
     asserts:
       - hasDocuments:
           count: 6
@@ -131,7 +108,6 @@ tests:
     set:
       cloud.defaultRbac.ownerClusterRole: custom-operator
       cloud.defaultRbac.integrationWrite.velero-download.owner: true
-      cloud.defaultRbac.integrationWrite.velero-delete.owner: true
     asserts:
       - hasDocuments:
           count: 2

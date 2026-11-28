@@ -397,6 +397,8 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
   const [timeRange, setTimeRange] = useState<string>('5m')
   const [hideSystem, setHideSystem] = useState(true)
   const [hideExternal, setHideExternal] = useState(false)
+  // Off by default: the classification is a guess, and real traffic matches it.
+  const [hideOverlay, setHideOverlay] = useState(false)
   const [minConnections, setMinConnections] = useState(0)
   // The unit the threshold above was picked under. Stored because the number alone
   // is ambiguous: 100 is a valid step in both scales and means something different
@@ -623,6 +625,8 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
   const activeDnsPattern = l7Capabilities.hasDNSQueries ? dnsPattern : ''
   const activeMinConnections = effectiveThreshold(minConnections, minConnectionsUnit, volumeUnit(isRateBased))
 
+  const hasOverlayFlows = useMemo(() => !!flowsData?.aggregated?.some(f => f.likelyOverlay), [flowsData?.aggregated])
+
   const filteredFlows = useMemo<AggregatedFlow[]>(() => {
     if (!flowsData?.aggregated) return []
 
@@ -651,6 +655,8 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
       if (isAlwaysFiltered(flow.source.name) || isAlwaysFiltered(flow.destination.name)) {
         return false
       }
+
+      if (hideOverlay && flow.likelyOverlay) return false
 
       // If hiding external, skip flows with external endpoints
       if (hideExternal) {
@@ -701,7 +707,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
 
       return true
     })
-  }, [flowsData?.aggregated, hideSystem, hideExternal, activeMinConnections, hiddenNamespaces, addonMode, l7Protocol, activeMethods, activeStatusRanges, activeVerdicts, activeDnsPattern])
+  }, [flowsData?.aggregated, hideSystem, hideExternal, hideOverlay, activeMinConnections, hiddenNamespaces, addonMode, l7Protocol, activeMethods, activeStatusRanges, activeVerdicts, activeDnsPattern])
 
   // The graph's filters, applied to individual records for the list view
   const rawFlowPasses = useCallback((flow: TrafficFlow) => {
@@ -720,6 +726,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
     if (isAlwaysFiltered(flow.source.name) || isAlwaysFiltered(flow.destination.name)) return false
 
     if (hideExternal && (isExternal(flow.source.kind) || isExternal(flow.destination.kind))) return false
+    if (hideOverlay && flow.likelyOverlay) return false
 
     if (addonMode === 'hide') {
       if (isClusterAddon(sourceName, flow.source.namespace) || isClusterAddon(destName, flow.destination.namespace)) return false
@@ -748,7 +755,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
     }
 
     return true
-  }, [hideSystem, hideExternal, hiddenNamespaces, addonMode, l7Protocol, activeMethods, activeStatusRanges, activeVerdicts, activeDnsPattern, drawnEndpoint])
+  }, [hideSystem, hideExternal, hideOverlay, hiddenNamespaces, addonMode, l7Protocol, activeMethods, activeStatusRanges, activeVerdicts, activeDnsPattern, drawnEndpoint])
 
   const filteredRawFlows = useMemo(
     () => (flowsData?.flows ?? []).filter(rawFlowPasses),
@@ -859,7 +866,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
       // Traffic whose direction is known is kept apart from traffic whose direction
       // is not, the same way the backend aggregation keys it: merging them would
       // give one edge a single arrowhead answer that is wrong for half its bytes.
-      const key = `${sourceKey}->${destKey}|${flow.directionUnknown ? 'u' : 'o'}`
+      const key = `${sourceKey}->${destKey}|${flow.directionUnknown ? 'u' : 'o'}${flow.likelyOverlay ? '|v' : ''}`
 
       const existing = aggregatedMap.get(key)
       if (existing) {
@@ -963,7 +970,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
   // Everything that makes it a different view. A refresh doesn't, so a view
   // that was drawn keeps being drawn as its size drifts past the budget.
   const viewKey = JSON.stringify([
-    sourcesData?.active ?? '', namespaces, timeRange, focusKey ?? '', groupByWorkload, hideSystem, hideExternal, activeMinConnections,
+    sourcesData?.active ?? '', namespaces, timeRange, focusKey ?? '', groupByWorkload, hideSystem, hideExternal, hideOverlay, activeMinConnections,
     [...hiddenNamespaces].sort(), addonMode, aggregateExternal, detectServices, collapseInternet,
     l7Protocol, [...activeMethods].sort(), [...activeStatusRanges].sort(), [...activeVerdicts].sort(), activeDnsPattern,
   ])
@@ -1338,6 +1345,9 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
         setHideSystem={setHideSystem}
         hideExternal={hideExternal}
         setHideExternal={setHideExternal}
+        hasOverlayFlows={hasOverlayFlows}
+        hideOverlay={hideOverlay}
+        setHideOverlay={setHideOverlay}
         minConnections={activeMinConnections}
         setMinConnections={chooseMinConnections}
         showNamespaceGroups={showNamespaceGroups}

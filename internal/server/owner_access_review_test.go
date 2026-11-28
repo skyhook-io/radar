@@ -1,0 +1,207 @@
+package server
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"slices"
+	"strings"
+	"testing"
+
+	authv1 "k8s.io/api/authorization/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes/fake"
+	clienttesting "k8s.io/client-go/testing"
+	"sigs.k8s.io/yaml"
+
+	"github.com/skyhook-io/radar/internal/auth"
+	pkgauth "github.com/skyhook-io/radar/pkg/auth"
+)
+
+func TestOwnerAccessReviewMatchesChart(t *testing.T) {
+	raw, err := os.ReadFile("../../deploy/helm/radar/files/integration-write-baseline.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var policy struct {
+		Entries []struct {
+			Capability string
+			Group      string
+			Resources  []string
+			Verbs      []string
+		}
+	}
+	if err := yaml.Unmarshal(raw, &policy); err != nil {
+		t.Fatal(err)
+	}
+	expected, checked := []string{}, []string{}
+	for _, entry := range policy.Entries {
+		for _, resource := range entry.Resources {
+			for _, verb := range entry.Verbs {
+				expected = append(expected, strings.Join([]string{entry.Capability, entry.Group, resource, verb}, ":"))
+			}
+		}
+	}
+	for id, grant := range ownerAccessReviewPermissions {
+		for _, permission := range grant.permissions {
+			resource := permission.resource
+			if permission.subresource != "" {
+				resource += "/" + permission.subresource
+			}
+			for _, verb := range permission.verbs {
+				checked = append(checked, strings.Join([]string{id, grant.group, resource, verb}, ":"))
+			}
+		}
+	}
+	slices.Sort(expected)
+	slices.Sort(checked)
+	if !slices.Equal(checked, expected) {
+		t.Fatalf("Owner grant review checks %v, chart grants %v", checked, expected)
+	}
+}
+
+func TestOwnerAccessReviewReportsEffectInEachScope(t *testing.T) {
+	const argoGroup = pkgauth.OwnerAccessGroupPrefix + "argocd"
+	client := fake.NewSimpleClientset()
+	client.PrependReactor("create", "selfsubjectaccessreviews", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		review := action.(clienttesting.CreateAction).GetObject().(*authv1.SelfSubjectAccessReview)
+		attrs := review.Spec.ResourceAttributes
+		review.Status.Allowed = attrs.Verb == "impersonate" && attrs.Resource == "groups" && attrs.Name == argoGroup
+		return true, review, nil
+	})
+	client.PrependReactor("create", "subjectaccessreviews", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		review := action.(clienttesting.CreateAction).GetObject().(*authv1.SubjectAccessReview)
+		attrs := review.Spec.ResourceAttributes
+		grantOnly := review.Spec.User == "" && slices.Equal(review.Spec.Groups, []string{argoGroup})
+		ownAccount := review.Spec.User == "owner" && slices.Contains(review.Spec.Groups, "system:authenticated") &&
+			slices.Contains(review.Spec.Groups, "radar:owner")
+		if (!grantOnly && !ownAccount) || attrs.Group != "argoproj.io" || attrs.Resource != "applications" {
+			return true, nil, errors.New("unexpected identity or resource")
+		}
+		switch attrs.Namespace {
+		case "custom-role":
+			review.Status.Allowed = ownAccount
+		case "works":
+			review.Status.Allowed = slices.Contains(review.Spec.Groups, argoGroup)
+		case "missing":
+			review.Status.Allowed = attrs.Verb == "get"
+		case "unknown":
+			review.Status.EvaluationError = "authorizer unavailable"
+		}
+		return true, review, nil
+	})
+
+	owner := &auth.User{Username: "owner", Groups: []string{"radar:owner", argoGroup}}
+	approved := []string{"argocd", "cnpg", "velero", "unrecognized"}
+	namespaces := []string{"custom-role", "missing", "unknown", "works"}
+	groupList := &metav1.APIGroupList{
+		Groups: []metav1.APIGroup{{Name: "argoproj.io"}, {Name: "velero.io"}},
+	}
+	result := reviewOwnerAccess(context.Background(), client, nil, approved, namespaces, groupList)
+	if !result.NamespaceScoped || result.ScopeCount != 4 || result.CheckedScopeCount != 4 {
+		t.Fatalf("scope = %+v", result)
+	}
+	if got, want := result.Grants["argocd"], (ownerAccessReviewResult{Verified: 1, Incomplete: 2, Unknown: 1}); got != want {
+		t.Errorf("Argo grant = %+v, want %+v", got, want)
+	}
+	if got := result.Grants["cnpg"]; !got.APINotServed {
+		t.Errorf("CNPG group was not served: %+v", got)
+	}
+	if got := result.Grants["velero"]; !got.CannotImpersonate {
+		t.Errorf("Radar cannot impersonate the Velero group: %+v", got)
+	}
+	if got, want := result.Grants["unrecognized"], (ownerAccessReviewResult{Unknown: 4}); got != want {
+		t.Errorf("unrecognized grant = %+v, want %+v", got, want)
+	}
+	personal := reviewOwnerAccess(context.Background(), client, owner, approved, namespaces, groupList)
+	if got, want := personal.Account["argocd"], (ownerAccountAccessReview{Added: 1, Already: 1, Incomplete: 1, Unknown: 1}); got != want {
+		t.Errorf("personal Argo access = %+v, want %+v", got, want)
+	}
+	if result.Account != nil || personal.Grants != nil {
+		t.Fatal("grant and personal checks must remain separate")
+	}
+}
+
+func TestOwnerAccessReviewComparesBothVeleroGroupsForTheOwner(t *testing.T) {
+	const backups = pkgauth.OwnerAccessGroupPrefix + "velero"
+	const downloads = pkgauth.OwnerAccessGroupPrefix + "velero-download"
+	client := fake.NewSimpleClientset()
+	client.PrependReactor("create", "selfsubjectaccessreviews", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		review := action.(clienttesting.CreateAction).GetObject().(*authv1.SelfSubjectAccessReview)
+		review.Status.Allowed = true
+		return true, review, nil
+	})
+	client.PrependReactor("create", "subjectaccessreviews", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		review := action.(clienttesting.CreateAction).GetObject().(*authv1.SubjectAccessReview)
+		groups := review.Spec.Groups
+		if !slices.Contains(groups, "radar:idp:ops") || slices.Contains(groups, backups) != slices.Contains(groups, downloads) {
+			return true, nil, errors.New("the switch must preserve independent groups and add or remove both managed Velero groups together")
+		}
+		review.Status.Allowed = slices.Contains(groups, backups)
+		return true, review, nil
+	})
+	owner := &auth.User{Username: "owner", Groups: []string{"radar:owner", "radar:idp:ops", backups, downloads}}
+	result := reviewOwnerAccess(context.Background(), client, owner, []string{"velero", "velero-download"}, nil, nil)
+	for _, id := range []string{"velero", "velero-download"} {
+		if got := result.Account[id]; got != (ownerAccountAccessReview{Added: 1}) {
+			t.Errorf("switch effect for %s = %+v; want added", id, got)
+		}
+	}
+}
+
+func TestOwnerAccessReviewReportsVeleroAPIWithoutApprovedGrants(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	for _, test := range []struct {
+		name      string
+		apiGroups *metav1.APIGroupList
+		want      *bool
+	}{
+		{name: "served", apiGroups: &metav1.APIGroupList{Groups: []metav1.APIGroup{{Name: "velero.io"}}}, want: new(true)},
+		{name: "absent", apiGroups: &metav1.APIGroupList{}, want: new(false)},
+		{name: "unknown"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result := reviewOwnerAccess(context.Background(), client, nil, nil, nil, test.apiGroups)
+			if got := result.VeleroAPIServed; (got == nil) != (test.want == nil) || got != nil && *got != *test.want {
+				t.Fatalf("unexpected Velero API state for %s", test.name)
+			}
+			if len(client.Actions()) != 0 {
+				t.Fatal("discovery without approved grants must not run access reviews")
+			}
+		})
+	}
+}
+
+func TestOwnerAccessReviewBoundsNamespaceSample(t *testing.T) {
+	namespaces := []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"}
+	client := fake.NewSimpleClientset()
+	client.PrependReactor("create", "selfsubjectaccessreviews", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		review := action.(clienttesting.CreateAction).GetObject().(*authv1.SelfSubjectAccessReview)
+		review.Status.Allowed = true
+		return true, review, nil
+	})
+	client.PrependReactor("create", "subjectaccessreviews", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		review := action.(clienttesting.CreateAction).GetObject().(*authv1.SubjectAccessReview)
+		review.Status.Allowed = true
+		return true, review, nil
+	})
+	result := reviewOwnerAccess(context.Background(), client, nil, []string{"argocd"}, namespaces, nil)
+	if result.ScopeCount != 10 || result.CheckedScopeCount != 8 || result.Grants["argocd"] != (ownerAccessReviewResult{Verified: 8}) {
+		t.Fatalf("expected eight verified scopes out of ten configured: %+v", result)
+	}
+}
+
+func TestOwnerAccessReviewRejectsNonOwner(t *testing.T) {
+	t.Setenv("RADAR_CLOUD_MODE", "true")
+	t.Setenv("RADAR_CLOUD_OWNER_ACCESS", "argocd")
+	r := httptest.NewRequest(http.MethodGet, "/api/cloud/owner-access/review", nil)
+	r = r.WithContext(auth.ContextWithUser(r.Context(), &auth.User{Username: "member", Groups: []string{"radar:member"}}))
+	w := httptest.NewRecorder()
+	(&Server{}).handleOwnerAccessReview(w, r)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", w.Code)
+	}
+}

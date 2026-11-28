@@ -112,9 +112,15 @@ func (r *PermissionCheckResult) CredentialRejectedNamespaces(resource string, na
 	return out
 }
 
+type OwnerAccessSetup struct {
+	Mode    string            `json:"mode"`
+	Blocked map[string]string `json:"blocked,omitempty"`
+}
+
 // Capabilities represents the features available based on RBAC permissions
 type Capabilities struct {
 	OwnerAccess            *[]string                `json:"ownerAccess,omitempty"`
+	OwnerAccessSetup       *OwnerAccessSetup        `json:"ownerAccessSetup,omitempty"`
 	ConfigManagement       string                   `json:"configManagement"`
 	Exec                   bool                     `json:"exec"` // Can create pods/exec (terminal feature)
 	PodExecUID             bool                     `json:"podExecUID,omitempty"`
@@ -215,6 +221,7 @@ type FeatureCapabilities struct {
 	// The workspace and its read/action surfaces, excluding protection setup.
 	CNPGWorkspace       bool `json:"cnpgWorkspace"`
 	CNPGProtectionSetup bool `json:"cnpgProtectionSetup"`
+	CNPGPostureChecks   bool `json:"cnpgPostureChecks"` // Cluster posture Checks in the workspace's audit findings
 	// GET /api/velero/workspace and GET /api/velero/schedules/{namespace}/{name}/activity
 	VeleroWorkspace     bool `json:"veleroWorkspace"`
 	VeleroBackupNow     bool `json:"veleroBackupNow"`     // POST /api/velero/schedules/{namespace}/{name}/backup
@@ -232,6 +239,7 @@ type FeatureCapabilities struct {
 	ServiceEndpointSlices        bool `json:"serviceEndpointSlices"`    // GET /api/services/{namespace}/{name}/endpointslices
 	TrafficRecords               bool `json:"trafficRecords"`           // GET /api/traffic/flows/records
 	GitOpsWriteEvidence          bool `json:"gitopsWriteEvidence"`      // POST /api/gitops/write-evidence
+	OwnerAccessGrantReview       bool `json:"ownerAccessGrantReview"`   // GET /api/cloud/owner-access/review
 	GitOpsActionCapabilities     bool `json:"gitopsActionCapabilities"` // GET /api/gitops/capabilities/{kind}/{namespace}/{name}
 	AgentSigninCheck             bool `json:"agentSigninCheck"`         // GET /api/agents/signin
 	// POST /api/argo/applications/{namespace}/{name}/rollback starts a sync to

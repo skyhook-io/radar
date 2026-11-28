@@ -157,6 +157,9 @@ func referrerIndexSources() []runtime.Object {
 
 		u("karpenter.sh/v1", "NodeClaim", "", "claim-1", `{"status":{"nodeName":"node-a"}}`),
 		u("cluster.x-k8s.io/v1beta1", "Machine", "shop", "m1", `{"status":{"nodeRef":{"name":"node-b"}}}`),
+
+		u("snapshot.storage.k8s.io/v1", "VolumeSnapshot", "shop", "daily", `{"spec":{"volumeSnapshotClassName":"csi-snapclass","source":{"persistentVolumeClaimName":"data"}},"status":{"boundVolumeSnapshotContentName":"snapcontent-1"}}`),
+		u("snapshot.storage.k8s.io/v1", "VolumeSnapshotContent", "", "snapcontent-1", `{"spec":{"volumeSnapshotClassName":"csi-snapclass","volumeSnapshotRef":{"namespace":"shop","name":"daily","uid":"uid-1"}}}`),
 	}
 }
 

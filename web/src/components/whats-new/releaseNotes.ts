@@ -1,5 +1,5 @@
 import type { LucideIcon } from 'lucide-react'
-import { Activity, BellOff, Bot, Boxes, Braces, Database, GitBranch, GitCompareArrows, HardDrive, Hourglass, Layers, MessageCircleQuestionMark, Network, RefreshCcw, Scale, ScanSearch, ScrollText, Search, ShieldAlert, SlidersHorizontal, Undo2, Zap } from 'lucide-react'
+import { Activity, BellOff, Bot, Boxes, Braces, Bug, ChartLine, Database, Download, GitBranch, GitCompareArrows, HardDrive, History, Hourglass, Layers, MessageCircleQuestionMark, Network, RefreshCcw, Scale, ScanSearch, ScrollText, Search, ShieldAlert, SlidersHorizontal, Undo2, Zap } from 'lucide-react'
 import { compareVersions } from '../../utils/version'
 
 export interface ReleaseHighlight {
@@ -48,6 +48,80 @@ export const CHANGELOG_URL = 'https://radarhq.io/changelog'
 // major release must have its own entry: scripts/check-whats-new.sh refuses to
 // release one without it.
 export const RELEASE_NOTES: ReleaseNotes[] = [
+  {
+    version: 'v1.22.0',
+    highlights: [
+      {
+        id: 'app-deploys-timeline',
+        icon: History,
+        title: 'Detailed deployment and rollout history for applications and workloads',
+        description: 'Applications get a Deploys tab (Helm, Flux and Argo CD, with Argo sync diffs) and a richer Timeline; workloads get a Revisions tab to diff specs.',
+        leadDescription: "The Timeline tab in Applications now puts deploys, config changes and problems in one view. A new Deploys tab tracks Helm releases, Flux history and Argo CD syncs (with inline rendered diffs when the Argo CD API is connected), and a new Revisions tab on workloads lets you diff pod templates even when the image tag didn't change.",
+        importance: 7,
+        path: '/applications',
+        cta: 'Open Applications',
+      },
+      {
+        id: 'new-integration-views',
+        icon: Boxes,
+        title: 'New integrations: MetalLB, Longhorn and k3s',
+        description: 'MetalLB pools, peers and config Issues; Longhorn Volumes with live replicas, PV links and Issues; and k3s/RKE2 HelmChart badges and drawers.',
+        importance: 7,
+      },
+      {
+        id: 'issues-recent-changes',
+        icon: GitCompareArrows,
+        title: 'See what changed before an issue started',
+        description: 'Issue rows and expanded details show recent changes before failure, and related issues group into one panel per application.',
+        importance: 7,
+        path: '/issues',
+        cta: 'Open Issues',
+      },
+      {
+        id: 'vulnerabilities-exposure-csv',
+        icon: ShieldAlert,
+        title: 'Prioritize exposed CVEs and export CSV',
+        description: 'Sort CVEs by severity then external exposure, filter exposed workloads in UI or MCP, export full CSVs, and scan private Amazon ECR for Java4Shell.',
+        importance: 7,
+        path: '/checks/vulnerabilities',
+        cta: 'Open Vulnerabilities',
+      },
+      {
+        id: 'export-graphs',
+        icon: Download,
+        title: 'Export graphs to SVG and draw.io',
+        description: 'Export Topology and Live Traffic as editable draw.io diagrams with K8s icons and namespace containers, vector SVG, or theme-matched images.',
+        importance: 6,
+        path: '/topology',
+        cta: 'Open Topology',
+      },
+      {
+        id: 'better-pod-log-secret-debugging',
+        icon: Bug,
+        title: 'Better Pod, log and Secret debugging',
+        description: 'Start and reopen custom-image debug containers right from Pod details, stream ReplicaSet logs, copy Secret values unrevealed, and read any cert key.',
+        importance: 6,
+      },
+      {
+        id: 'more-metrics-sources',
+        icon: ChartLine,
+        title: 'OpenObserve, GKE and shared metrics stores',
+        description: 'Connect local Radar to shared OpenObserve, chart GKE system metrics via Managed Prometheus, and keep shared multi-cluster stores scoped cleanly.',
+        importance: 6,
+      },
+    ],
+    improvements: [
+      // The grid fills row by row: pair lines of similar length.
+      'Match kubectl short names in the kind filter and Cmd-K, and see other-namespace counts on empty lists',
+      'GitOps actions check missing permissions upfront and explain RBAC or admission refusals',
+      'Flux flags sources ahead of what is applied, builds Activity from history, and follows ArtifactGenerators and dependsOn',
+      'Traefik IngressRoute drawers show each rule path to ready backends, cert expiry and Middleware usage',
+      'Stop or terminate Argo Workflows and submit WorkflowTemplates right from Radar',
+      'Remote MCP clients can sign in with OAuth on standalone OIDC installs (--mcp-oauth / mcp.oauth.enabled)',
+      'Beyla Live Traffic infers ports from Services and lets you hide node-to-node overlay UDP',
+      'CloudNativePG Clusters gain a fleet backup/HA posture bar with one-click filters',
+    ],
+  },
   {
     version: 'v1.21.0',
     highlights: [

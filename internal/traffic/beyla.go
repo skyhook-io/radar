@@ -1194,12 +1194,13 @@ func (s *BeylaSource) queryUnorientable(ctx context.Context, opts FlowOptions, s
 			h.forward, h.backward = h.backward, 0
 		}
 		flows = append(flows, Flow{
-			Source:      Endpoint{Name: conv.key.srcWorkload, Namespace: conv.key.srcNs, Kind: mapBeylaKind(att.srcType), Workload: conv.key.srcWorkload},
-			Destination: Endpoint{Name: conv.key.dstWorkload, Namespace: conv.key.dstNs, Kind: mapBeylaKind(att.dstType), Workload: conv.key.dstWorkload},
-			Protocol:    mapBeylaTransport(conv.transport),
-			LastSeen:    time.Now(),
-			BytesSent:   h.forward,
-			BytesRecv:   h.backward,
+			Source:        Endpoint{Name: conv.key.srcWorkload, Namespace: conv.key.srcNs, Kind: mapBeylaKind(att.srcType), Workload: conv.key.srcWorkload},
+			Destination:   Endpoint{Name: conv.key.dstWorkload, Namespace: conv.key.dstNs, Kind: mapBeylaKind(att.dstType), Workload: conv.key.dstWorkload},
+			Protocol:      mapBeylaTransport(conv.transport),
+			LikelyOverlay: likelyOverlay(att.srcType, att.dstType, conv.transport, 0),
+			LastSeen:      time.Now(),
+			BytesSent:     h.forward,
+			BytesRecv:     h.backward,
 			// Beyla reports no request count for these, and deriving one from bytes
 			// would be a number it never measured.
 			DirectionUnknown: true,
@@ -1388,12 +1389,13 @@ func (s *BeylaSource) parseL4Flows(result *prom.QueryResult, w rateWindow) (map[
 		}
 
 		flow := &Flow{
-			Source:      Endpoint{Name: srcName, Namespace: srcNs, Kind: mapBeylaKind(srcType), Workload: srcName},
-			Destination: Endpoint{Name: dstName, Namespace: dstNs, Kind: mapBeylaKind(dstType), Workload: dstName, Port: port},
-			Protocol:    mapBeylaTransport(labels["transport"]),
-			Port:        port,
-			LastSeen:    time.Now(),
-			BytesSent:   int64(val * w.seconds),
+			Source:        Endpoint{Name: srcName, Namespace: srcNs, Kind: mapBeylaKind(srcType), Workload: srcName},
+			Destination:   Endpoint{Name: dstName, Namespace: dstNs, Kind: mapBeylaKind(dstType), Workload: dstName, Port: port},
+			Protocol:      mapBeylaTransport(labels["transport"]),
+			LikelyOverlay: likelyOverlay(srcType, dstType, labels["transport"], port),
+			Port:          port,
+			LastSeen:      time.Now(),
+			BytesSent:     int64(val * w.seconds),
 			// Deliberately not set here. Beyla exports rates, not connection counts,
 			// so there is no number to put in it — Hubble's `Connections: 1` means
 			// "one observed event" and sums to a real count, which does not carry
@@ -1499,6 +1501,14 @@ func parseIntLabel(s string) int {
 		return 0
 	}
 	return v
+}
+
+// likelyOverlay: node-to-node UDP is what a VXLAN or Geneve overlay looks like
+// from the physical NIC. Without dst_port (port 0) that is only a guess; with it,
+// only the overlay ports count.
+func likelyOverlay(srcType, dstType, transport string, port int) bool {
+	return strings.EqualFold(srcType, "node") && strings.EqualFold(dstType, "node") && strings.EqualFold(transport, "udp") &&
+		(port == 0 || port == 4789 || port == 8472 || port == 6081)
 }
 
 func mapBeylaKind(beylaType string) string {
