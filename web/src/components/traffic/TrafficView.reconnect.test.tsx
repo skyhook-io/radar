@@ -201,10 +201,13 @@ it.each([
         expect(queryClient.getQueryData(['traffic-connection'])).toEqual({ connected: false })
         expect(queryClient.getQueryState(['traffic-connection'])?.fetchStatus).toBe('idle')
       })
+      // The save's invalidation can restart the reconnect's detection, so only
+      // the second save is held to starting nothing.
+      const detectionsBeforeSecondSave = freshDetections
       await act(async () => invalidateIntegrationQueries(queryClient, ['metrics']))
       await settle()
       expect(connectOrigins).toEqual(['auto', 'auto', 'auto'])
-      expect(freshDetections).toBe(3)
+      expect(freshDetections).toBe(detectionsBeforeSecondSave)
       return
     }
     if (scenario === 'flows lose source without Settings invalidation') {
