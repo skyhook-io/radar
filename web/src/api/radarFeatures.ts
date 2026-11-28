@@ -74,6 +74,7 @@ export const RADAR_FEATURES = {
   veleroRuns: { label: 'Velero backup and restore lists', flag: 'veleroRuns', flagShippedWithEndpoint: true },
   veleroDeleteBackup: { label: 'Delete a Velero backup', flag: 'veleroDeleteBackup', flagShippedWithEndpoint: true },
   workloadRestartPreconditions: { label: 'Reviewed workload restarts', flag: 'workloadRestartPreconditions', flagShippedWithEndpoint: true, requireAffirmativeSupport: true },
+  reviewedWorkloadActions: { label: 'Reviewed workload actions', flag: 'reviewedWorkloadActions', flagShippedWithEndpoint: true, requireAffirmativeSupport: true },
   resourceDeletePreconditions: { label: 'Delete only the object you reviewed', flag: 'resourceDeletePreconditions', flagShippedWithEndpoint: true },
   gitopsWriteEvidence: { label: 'GitOps revert warnings', flag: 'gitopsWriteEvidence', flagShippedWithEndpoint: true },
   serviceEndpointSlices: { label: 'Service EndpointSlice inventories', flag: 'serviceEndpointSlices', flagShippedWithEndpoint: true },

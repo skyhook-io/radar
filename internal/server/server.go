@@ -869,6 +869,8 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 
 			// Workload restart, scale, rollback. Writes are bound to the connection
 			// the caller names (bindWrite in connection_binding.go).
+			r.Post("/workloads/{kind}/{namespace}/{name}/actions/preview", s.bindWrite(s.handleWorkloadActionPreview))
+			r.Post("/workloads/{kind}/{namespace}/{name}/actions/execute", s.bindWrite(s.handleWorkloadActionExecute))
 			r.Post("/workloads/{kind}/{namespace}/{name}/restart", s.bindWrite(s.handleRestartWorkload))
 			r.Post("/workloads/{kind}/{namespace}/{name}/pause", s.bindWrite(s.handlePauseDeployment))
 			r.Post("/workloads/{kind}/{namespace}/{name}/resume", s.bindWrite(s.handleResumeDeployment))
@@ -1609,6 +1611,7 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 		VeleroDeleteBackup:           true,
 		ResourceDeletePreconditions:  true,
 		WorkloadRestartPreconditions: true,
+		ReviewedWorkloadActions:      true,
 		VeleroRunVolumes:             true,
 		VeleroRunArtifacts:           true,
 		ServiceEndpointSlices:        true,

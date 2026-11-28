@@ -34,21 +34,29 @@ func (m *WorkloadManager) RestartReviewedWorkload(ctx context.Context, kind, nam
 	}
 	builtin, _ := resourceid.BuiltinForName(kind)
 	gvr := schema.GroupVersionResource{Group: builtin.Group, Version: builtin.Version, Resource: builtin.Resource}
-	validate := func(obj *unstructured.Unstructured) error {
-		if !obj.GetDeletionTimestamp().IsZero() {
-			return fmt.Errorf("%s %s/%s: %w", obj.GetKind(), namespace, name, ErrWorkloadTerminating)
-		}
-		behavior := classifyWorkloadUpdateBehavior(kind, obj)
-		switch behavior.Type {
-		case "paused":
-			return fmt.Errorf("Deployment %s/%s: %w", namespace, name, ErrRestartPaused)
-		case "onDelete":
-			return fmt.Errorf("%w: OnDelete requires manual pod deletion", ErrRestartNotApplicable)
-		case "partitioned":
-			return fmt.Errorf("%w: the StatefulSet rolling update partition is %d", ErrRestartNotApplicable, *behavior.Partition)
-		}
+
+	return workloadrestart.Apply(ctx, m.dynClient.Resource(gvr).Namespace(namespace), name, review, CheckReviewedRestart,
+		time.Now(), time.RFC3339Nano, "spec", "template", "metadata", "annotations", "kubectl.kubernetes.io/restartedAt")
+}
+
+// CheckReviewedRestart reports whether changing the restart marker can restart the workload's pods.
+func CheckReviewedRestart(obj *unstructured.Unstructured) error {
+	if !obj.GetDeletionTimestamp().IsZero() {
+		return fmt.Errorf("%s %s/%s: %w", obj.GetKind(), obj.GetNamespace(), obj.GetName(), ErrWorkloadTerminating)
+	}
+	// An Argo Rollout uses spec.restartAt to evict old pods, independently
+	// of a paused promotion. The existing Rollout restart checks termination.
+	if obj.GetKind() == "Rollout" {
 		return nil
 	}
-	return workloadrestart.Apply(ctx, m.dynClient.Resource(gvr).Namespace(namespace), name, review, validate,
-		time.Now(), time.RFC3339Nano, "spec", "template", "metadata", "annotations", "kubectl.kubernetes.io/restartedAt")
+	behavior := classifyWorkloadUpdateBehavior(NormalizeWorkloadKind(obj.GetKind()), obj)
+	switch behavior.Type {
+	case "paused":
+		return fmt.Errorf("Deployment %s/%s: %w", obj.GetNamespace(), obj.GetName(), ErrRestartPaused)
+	case "onDelete":
+		return fmt.Errorf("%w: OnDelete requires manual pod deletion", ErrRestartNotApplicable)
+	case "partitioned":
+		return fmt.Errorf("%w: the StatefulSet rolling update partition is %d", ErrRestartNotApplicable, *behavior.Partition)
+	}
+	return nil
 }
