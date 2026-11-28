@@ -391,6 +391,7 @@ export function InvestigationView({
   const [busy, setBusy] = useState(false);
   const [requestPending, setRequestPending] = useState(false);
   const explanationRequestSerial = useRef(0);
+  const followupRequestSerial = useRef(0);
   const [explanationRequest, setExplanationRequest] = useState<{
     sequence: number;
     status: "running" | "error";
@@ -946,9 +947,16 @@ export function InvestigationView({
     setNarrowPane("activity");
     suppressEvidenceMotionRef.current = false;
     pinnedRef.current = true; // a user-initiated turn always follows to the bottom
+    const serial = ++followupRequestSerial.current;
     setRequestPending(true);
     addTurn(run.id, { question: q }).catch((e) => {
       setRequestPending(false);
+      // Hand the question back so a refusal (too long, say) can be fixed
+      // instead of retyped. Only when the server answered with a refusal: a
+      // network failure may hide an accepted turn. Not when a newer follow-up
+      // was sent since, or the engineer has started typing.
+      if (e instanceof DiagnoseError && serial === followupRequestSerial.current)
+        setInput((current) => (current === "" ? q : current));
       setActionError(e instanceof DiagnoseError ? e.message : "Couldn't send.");
       setActionRefusal(investigationRefusal(e));
     });

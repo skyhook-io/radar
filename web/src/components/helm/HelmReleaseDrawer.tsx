@@ -1556,7 +1556,7 @@ function OverviewTab({ release, onCopy, copied }: OverviewTabProps) {
             </button>
           </div>
           <div className="text-xs bg-theme-base/50 rounded p-3 max-h-96 overflow-auto">
-            <Markdown>{release.readme}</Markdown>
+            <Markdown allowImages>{release.readme}</Markdown>
           </div>
         </div>
       )}
