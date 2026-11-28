@@ -86,13 +86,13 @@ function DiagnoseResourceButton({
           : `Ask ${d.agentLabel} about this resource — reads its spec, events & logs.`
         : problem
           ? `Investigate with your own ${d.agentLabel} — runs locally and reads this resource's spec, events & logs.`
-          : d.questions
+          : d.targetQuestions
             ? `Ask your own ${d.agentLabel} a question about this resource — runs locally, reads its spec, events & logs.`
             : `Ask your own ${d.agentLabel} about this resource — runs locally, reads its spec, events & logs.`;
   // While an investigation is live, the button advertises it (and clicking focuses
   // the existing run rather than starting a new one — openInvestigation dedups).
   const showLabel = problem || running;
-  const asks = d.questions && !problem && !running;
+  const asks = d.targetQuestions && !problem && !running;
   // Asking about a resource with no live problem means saying what to ask; a
   // problem, or a run already live, opens straight away.
   const act = () => {

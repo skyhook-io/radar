@@ -662,10 +662,11 @@ export function DiagnoseSurface({
   ) : (
     <InvestigationHome
       agentLabel={d.agentLabel}
-      questions={d.questions}
+      questions={d.targetQuestions}
+      requireResource={d.targetQuestions && !d.questions}
       onOpenExample={openExample}
       onBrowseIssues={
-        d.questions || (d.runsLoaded && d.runs.length === 0)
+        d.targetQuestions || (d.runsLoaded && d.runs.length === 0)
           ? onBrowseIssues
           : undefined
       }
@@ -881,7 +882,7 @@ export function DiagnoseSurface({
               loaded={d.runsLoaded}
               loadFailed={d.runsLoadFailed}
               onRetry={d.refreshRuns}
-              questions={d.questions}
+              questions={d.targetQuestions}
               // Beside Home on the full page, Home already offers it.
               onOpenExample={
                 persistentHistory || exampleOpen || !openExample

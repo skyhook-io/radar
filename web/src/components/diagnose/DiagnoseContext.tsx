@@ -130,7 +130,8 @@ interface DiagnoseCtx {
   cliOverride: boolean;
   agentLabel: string; // label of the selected agent, e.g. "Claude Code"
   hosted: boolean; // selected agent runs on the host's backend, not this machine
-  questions: boolean; // the selected agent's backend opens a run from a question
+  questions: boolean; // the selected agent accepts a question without a resource
+  targetQuestions: boolean; // the agent accepts a question pinned to a resource
   agents: AgentInfo[]; // supported agents detected on PATH (for the picker)
   selectedAgent: string; // name of the chosen backend ("claude"/"codex")
   setSelectedAgent: (name: string) => void;
@@ -723,6 +724,8 @@ function RoutedDiagnoseProvider({
     : (selectedAgentInfo?.profiles?.[0] ?? profile);
   const agentLabel = agentLabelFor(selectedAgent, selectedAgentInfo?.label);
   const hosted = !!selectedAgentInfo?.hosted;
+  const questions = selectedAgentInfo?.questions === true;
+  const targetQuestions = questions || selectedAgentInfo?.targetQuestions === true;
   // Hosted Radar uses its existing per-user disclosure surface and supplies its
   // own copy. Local agents use the execution profile as the consent contract.
   const consentSurface = hosted
@@ -946,8 +949,29 @@ function RoutedDiagnoseProvider({
   const startRunRef = useRef<(t: Target) => void>(() => {});
   startRunRef.current = (t: Target) => {
     const seq = ++startSeqRef.current;
+    if (t.question && (!targetQuestions || (!questions && (!t.kind || !t.name)))) {
+      giveQuestionBack(t);
+      setStartFailure({
+        refusal: null,
+        message: targetQuestions
+          ? "Choose a resource to investigate this question."
+          : "This agent does not accept an opening question.",
+      });
+      return;
+    }
     createRun(
-      { ...t, kind: knownKindForPluralWithGroup(t.kind, t.group) ?? t.kind },
+      {
+        kind: knownKindForPluralWithGroup(t.kind, t.group) ?? t.kind,
+        group: t.group,
+        namespace: t.namespace,
+        name: t.name,
+        issueId: t.issueId,
+        fresh: t.fresh,
+        question: t.question,
+        namespaces: t.namespaces,
+        lookBack: t.lookBack,
+        askedAt: t.askedAt,
+      },
       {
         agent: selectedAgent || undefined,
         profile: hosted ? undefined : effectiveProfile,
@@ -1357,7 +1381,8 @@ function RoutedDiagnoseProvider({
     cliOverride,
     agentLabel,
     hosted,
-    questions: selectedAgentInfo?.questions === true,
+    questions,
+    targetQuestions,
     agents,
     selectedAgent,
     setSelectedAgent,

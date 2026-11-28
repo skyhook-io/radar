@@ -53,9 +53,11 @@ const actionClass =
 export function QuestionComposer({
   onBrowseIssues,
   onOpenExample,
+  requireResource = false,
 }: {
   onBrowseIssues?: () => void;
   onOpenExample?: () => void;
+  requireResource?: boolean;
 }) {
   const { openInvestigation, agentLabel, questionDraft, saveQuestionDraft } =
     useDiagnose();
@@ -74,7 +76,7 @@ export function QuestionComposer({
       ? { text: questionDraft.text.trim(), askedAt: questionDraft.askedAt }
       : null,
   );
-  const [pickerOpen, setPickerOpen] = useState(!!questionDraft?.pickResource);
+  const [pickerOpen, setPickerOpen] = useState(!!questionDraft?.pickResource || (requireResource && !questionDraft?.pin));
   const textRef = useRef<HTMLTextAreaElement>(null);
   const pickerInputRef = useRef<HTMLInputElement>(null);
   // Focus now so typing straight away lands in the box; once new text has
@@ -124,8 +126,8 @@ export function QuestionComposer({
       (pin
         ? suggestionsForPin(pinIssues ?? [], pin)
         : suggestionsFromIssues(issuesData?.issues ?? [])
-      ).filter((suggestion) => !asked.includes(suggestion.question)),
-    [pin, pinIssues, issuesData, asked],
+      ).filter((suggestion) => (!requireResource || pin || suggestion.pin) && !asked.includes(suggestion.question)),
+    [pin, pinIssues, issuesData, asked, requireResource],
   );
 
   useEffect(() => {
@@ -210,8 +212,9 @@ export function QuestionComposer({
 
   const question = text.trim();
   const tooLong = [...question].length > MAX_QUESTION_LENGTH;
+  const canSubmit = !!question && !tooLong && (!requireResource || !!pin);
   const submit = () => {
-    if (!question || tooLong) return;
+    if (!canSubmit) return;
     submitted.current = true;
     openInvestigation({
       fromComposer: true,
@@ -248,7 +251,7 @@ export function QuestionComposer({
         What are you seeing?
       </h1>
       <p className="mt-1 text-sm text-theme-text-tertiary">
-        Describe a problem, or ask whether something looks right. {agentLabel}{" "}
+        {requireResource ? "Choose a resource and describe what you want to investigate or change." : "Describe a problem, or ask whether something looks right."} {agentLabel}{" "}
         investigates it with Radar’s read-only tools and shows what it found,
         with the evidence.
       </p>
@@ -302,7 +305,7 @@ export function QuestionComposer({
               </span>
               <button
                 type="button"
-                onClick={() => setPin(null)}
+                onClick={() => { setPin(null); if (requireResource) setPickerOpen(true); }}
                 aria-label="Unpin resource"
                 className="rounded text-theme-text-tertiary hover:text-theme-text-primary"
               >
@@ -311,6 +314,7 @@ export function QuestionComposer({
             </span>
           ) : (
             <>
+              {!requireResource && <>
               <span className="text-xs text-theme-text-tertiary">Start in</span>
               {startIn.length === 0 ? (
                 <Tooltip
@@ -357,6 +361,7 @@ export function QuestionComposer({
                   ))}
                 </select>
               )}
+              </>}
               <button
                 type="button"
                 onClick={() => setPickerOpen((open) => !open)}
@@ -364,7 +369,7 @@ export function QuestionComposer({
                 className={actionClass}
               >
                 <AtSign className="h-3 w-3" />
-                Pin a resource
+                {requireResource ? "Choose a resource" : "Pin a resource"}
               </button>
             </>
           )}
@@ -395,7 +400,7 @@ export function QuestionComposer({
             </span>
             <button
               type="submit"
-              disabled={!question || tooLong}
+              disabled={!canSubmit}
               className="btn-brand ml-1 inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium disabled:opacity-50"
             >
               Investigate
