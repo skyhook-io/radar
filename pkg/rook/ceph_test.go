@@ -111,6 +111,8 @@ func TestStaleAfter(t *testing.T) {
 		{nil, 10 * time.Minute},
 		{"60s", 10 * time.Minute},
 		{"30m0s", 90 * time.Minute},
+		{"+30m", 90 * time.Minute},
+		{".5h", 90 * time.Minute},
 		{"not a duration", 10 * time.Minute},
 		{"-5m", 10 * time.Minute},
 	} {

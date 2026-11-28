@@ -44,7 +44,7 @@ describe('getCephClusterStatus', () => {
     expect(getCephClusterStatus(cluster('warning'), NOW).level).toBe('degraded')
     expect(getCephClusterStatus(cluster('error'), NOW).level).toBe('unhealthy')
     expect(getCephClusterStatus(cluster('reconcile-failed-health-ok'), NOW).level).toBe('degraded')
-    for (const name of ['stale', 'stale-error', 'checks-disabled', 'no-check-time', 'external-connected', 'no-status']) {
+    for (const name of ['stale', 'stale-error', 'checks-disabled', 'no-check-time', 'check-time-ahead', 'external-connected', 'no-status']) {
       expect(getCephClusterStatus(cluster(name), NOW).level, name).toBe('unknown')
     }
     expect(getCephClusterStatus(cluster('terminating'), NOW).level).toBe('neutral')
@@ -53,6 +53,7 @@ describe('getCephClusterStatus', () => {
     expect(getCephClusterStatusReason(cluster('error'), NOW)).toBe('OSD_FULL: 1 full osd(s)\nPOOL_FULL: 1 pool(s) full')
     expect(getCephClusterStatusReason(cluster('reconcile-failed-health-ok'), NOW)).toBe('failed to create cluster: failed to start ceph monitors')
     expect(getCephClusterStatusReason(cluster('stale-error'), NOW)).toMatch(/^Rook last reported HEALTH_ERR .*; the current health is unknown\.$/)
+    expect(getCephClusterStatusReason(cluster('check-time-ahead'), NOW)).toBe('Rook last reported HEALTH_OK with a check time ahead of this clock; the current health is unknown.')
     expect(getCephClusterStatusReason(cluster('healthy'), NOW)).toBeUndefined()
   })
   it('feeds the generic status with its reason', () => {
@@ -72,9 +73,19 @@ describe('getCephHealth', () => {
   it('derives the stale threshold from the configured interval', () => {
     expect(getCephStaleAfterMs(cluster('healthy'))).toBe(10 * 60_000)
     expect(getCephStaleAfterMs(cluster('long-interval-not-stale'))).toBe(90 * 60_000)
+    expect(getCephStaleAfterMs(cluster('signed-interval-not-stale'))).toBe(90 * 60_000)
     expect(parseGoDuration('1m30s')).toBe(90_000)
     expect(parseGoDuration('500ms')).toBe(500)
     expect(parseGoDuration('soon')).toBeUndefined()
+  })
+  it('reads durations as time.ParseDuration does', () => {
+    expect(parseGoDuration('+30m')).toBe(30 * 60_000)
+    expect(parseGoDuration('.5h')).toBe(30 * 60_000)
+    expect(parseGoDuration('1.h')).toBe(60 * 60_000)
+    expect(parseGoDuration('-5m')).toBe(-5 * 60_000)
+    expect(parseGoDuration('1500us')).toBe(1.5)
+    expect(parseGoDuration('0')).toBe(0)
+    for (const text of ['', '+', '.s', '1h0', '5', '1d', '1hm']) expect(parseGoDuration(text), text).toBeUndefined()
   })
 })
 
@@ -115,6 +126,9 @@ describe('columns', () => {
     const d = cluster('stale-error')
     d.status.ceph.details = { OSD_FULL: { severity: 'HEALTH_ERR', message: '1 full osd(s)' } }
     expect(getRookColumnValue(d, 'cephHealthChecks')).toBe('')
+    d.status.ceph.capacity = { bytesTotal: 3 * 1024 ** 4, bytesUsed: 1024 ** 4 }
+    expect(getRookColumnValue(d, 'cephCapacity')).toBe('')
+    expect(getRookSortValue(d, 'cephCapacity')).toBe(-1)
     expect(getRookSortValue(cluster('no-status'), 'cephCapacity')).toBe(-1)
     expect(getRookSortValue(cluster('no-status'), 'cephLastChecked')).toBe(-1)
   })
@@ -150,6 +164,9 @@ describe('Rook renderers', () => {
   })
   it('flags stale and disabled health and a failed reconcile', () => {
     expect(renderToStaticMarkup(<CephClusterRenderer data={cluster('stale-error')} />)).toContain('Ceph health is stale')
+    const ahead = cluster('check-time-ahead')
+    ahead.status.ceph.lastChecked = new Date(Date.now() + 60 * 60_000).toISOString()
+    expect(renderToStaticMarkup(<CephClusterRenderer data={ahead} />)).toContain('Rook stamped its last check ahead of this clock')
     expect(renderToStaticMarkup(<CephClusterRenderer data={cluster('checks-disabled')} />)).toContain('Ceph health checks are disabled')
     const failed = renderToStaticMarkup(<CephClusterRenderer data={freshCluster('reconcile-failed-health-ok')} />)
     expect(failed).toContain('last reconcile failed')

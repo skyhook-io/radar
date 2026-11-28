@@ -1368,7 +1368,7 @@ Configuration is kept apart from observed health. A replica size or failure doma
 | Reconcile failed (amber) | The condition named by `status.phase` is False (Rook writes `Progressing` False with the error in `status.message` and keeps retrying). Ceph itself can still be healthy |
 | HEALTH_WARN (amber), HEALTH_OK (green) | Current `status.ceph.health` |
 | Health checks disabled | `spec.healthCheck.daemonHealth.status.disabled`: Rook stops refreshing the health, so what is left is not current |
-| Health stale | Rook has not refreshed `lastChecked` in three health-check intervals (`spec.healthCheck.daemonHealth.status.interval`, default 60s), and never less than ten minutes, or the report has no check time. When `ceph status` fails Rook writes a fresh HEALTH_ERR instead, so a stale report usually means the operator is not running |
+| Health stale | Rook has not refreshed `lastChecked` in three health-check intervals (`spec.healthCheck.daemonHealth.status.interval`, default 60s), and never less than ten minutes, or the report has no check time or one more than five minutes ahead of Radar's clock. When `ceph status` fails Rook writes a fresh HEALTH_ERR instead, so a stale report usually means the operator is not running |
 | Rook phase (`Progressing`, `Ready`, `Connected`, …) | No health reported yet, for example while the cluster is created |
 | Not reported | No status |
 | Terminating | `metadata.deletionTimestamp` is set |
@@ -1377,7 +1377,7 @@ HEALTH_ERR outranks a failed reconcile, which outranks HEALTH_WARN and HEALTH_OK
 
 **CephBlockPool status:** Rook's `status.phase`: Ready (Rook configured the pool), Progressing, Failure, or Not reported without a status; Deletion blocked or Terminating while it is deleted.
 
-**Tables:** CephClusters show status, current health check codes, raw capacity used, phase, message, Ceph version, configured monitors, external mode and when Rook last checked the health. Capacity sorts by the share used. CephBlockPools show status, data protection, failure domain, device class and mirroring mode. These curated columns replace Rook's printer columns; the data dir host path and FSID move to the drawer.
+**Tables:** CephClusters show status, health check codes and raw capacity used from the current report, phase, message, Ceph version and configured monitors; external mode and when Rook last checked the health are in the column picker. Capacity sorts by the share used. CephBlockPools show status, data protection, failure domain, device class and mirroring mode. These curated columns replace Rook's printer columns; the data dir host path and FSID move to the drawer.
 
 ### Issues
 

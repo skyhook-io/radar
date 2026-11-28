@@ -86,6 +86,9 @@ func TestRookCephClusterIssuesIgnoreNonCurrentHealth(t *testing.T) {
 		{"stale", func(u *unstructured.Unstructured) {
 			_ = unstructured.SetNestedField(u.Object, "2026-11-20T11:00:00Z", "status", "ceph", "lastChecked")
 		}},
+		{"check time ahead of this clock", func(u *unstructured.Unstructured) {
+			_ = unstructured.SetNestedField(u.Object, "2026-11-20T13:00:00Z", "status", "ceph", "lastChecked")
+		}},
 		{"checks disabled", func(u *unstructured.Unstructured) {
 			_ = unstructured.SetNestedField(u.Object, true, "spec", "healthCheck", "daemonHealth", "status", "disabled")
 		}},

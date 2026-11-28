@@ -30,6 +30,11 @@ const minStaleAfter = 10 * time.Minute
 // report before the last one is stale.
 const staleIntervals = 3
 
+// maxClockSkew is how far ahead of this clock lastChecked may be. Rook stamps
+// it with the operator's clock; a time further ahead can't tell how old the
+// report is.
+const maxClockSkew = 5 * time.Minute
+
 // HealthState says what the reported Ceph health establishes about now.
 type HealthState string
 
@@ -37,9 +42,10 @@ const (
 	// HealthFresh: Rook checked within StaleAfter.
 	HealthFresh HealthState = "fresh"
 	// HealthStale: a report exists, but Rook has not refreshed it within
-	// StaleAfter, or it carries no check time. It says what Ceph reported
-	// then, not now. When `ceph status` itself fails Rook writes a fresh
-	// HEALTH_ERR instead, so a stale report points at the operator.
+	// StaleAfter, or it carries no check time, or one further ahead of this
+	// clock than ordinary skew. It says what Ceph reported then, not now.
+	// When `ceph status` itself fails Rook writes a fresh HEALTH_ERR instead,
+	// so a stale report points at the operator.
 	HealthStale HealthState = "stale"
 	// HealthDisabled: spec.healthCheck.daemonHealth.status.disabled stops
 	// Rook's status checks, so any status.ceph left behind is not current.
@@ -124,7 +130,7 @@ func ClusterHealth(cluster *unstructured.Unstructured, now time.Time) Health {
 		h.State = HealthDisabled
 	case h.Status == "":
 		h.State = HealthMissing
-	case h.LastChecked.IsZero() || now.Sub(h.LastChecked) > StaleAfter(cluster):
+	case h.LastChecked.IsZero() || now.Sub(h.LastChecked) > StaleAfter(cluster) || h.LastChecked.Sub(now) > maxClockSkew:
 		h.State = HealthStale
 	default:
 		h.State = HealthFresh

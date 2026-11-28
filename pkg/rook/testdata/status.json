@@ -39,8 +39,15 @@
     {"name": "long-interval-not-stale", "want": "HEALTH_OK", "object": {
       "spec": {"healthCheck": {"daemonHealth": {"status": {"interval": "30m0s"}}}},
       "status": {"phase": "Ready", "ceph": {"health": "HEALTH_OK", "lastChecked": "2026-11-20T11:00:00Z"}}}},
+    {"name": "signed-interval-not-stale", "want": "HEALTH_OK", "object": {
+      "spec": {"healthCheck": {"daemonHealth": {"status": {"interval": "+30m"}}}},
+      "status": {"phase": "Ready", "ceph": {"health": "HEALTH_OK", "lastChecked": "2026-11-20T11:40:00Z"}}}},
     {"name": "no-check-time", "want": "Health stale", "object": {
       "status": {"phase": "Ready", "ceph": {"health": "HEALTH_OK"}}}},
+    {"name": "check-time-ahead", "want": "Health stale", "object": {
+      "status": {"phase": "Ready", "ceph": {"health": "HEALTH_OK", "lastChecked": "2026-11-20T13:00:00Z"}}}},
+    {"name": "check-time-within-skew", "want": "HEALTH_OK", "object": {
+      "status": {"phase": "Ready", "ceph": {"health": "HEALTH_OK", "lastChecked": "2026-11-20T12:01:00Z"}}}},
     {"name": "checks-disabled", "want": "Health checks disabled", "object": {
       "spec": {"healthCheck": {"daemonHealth": {"status": {"disabled": true}}}},
       "status": {"phase": "Ready", "ceph": {"health": "HEALTH_OK", "lastChecked": "2026-11-20T11:59:30Z"}}}},

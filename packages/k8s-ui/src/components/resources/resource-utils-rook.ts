@@ -22,14 +22,19 @@ function parseTime(v: unknown): number | undefined {
 const DEFAULT_HEALTH_CHECK_INTERVAL_MS = 60_000
 const MIN_STALE_AFTER_MS = 10 * 60_000
 const STALE_INTERVALS = 3
-const GO_DURATION_UNIT_MS: Record<string, number> = { ms: 1, s: 1000, m: 60_000, h: 3_600_000 }
+/** How far ahead of this clock lastChecked may be. Mirrors maxClockSkew in pkg/rook. */
+const MAX_CLOCK_SKEW_MS = 5 * 60_000
+const GO_DURATION_UNIT_MS: Record<string, number> = { ns: 1e-6, us: 1e-3, 'µs': 1e-3, 'μs': 1e-3, ms: 1, s: 1000, m: 60_000, h: 3_600_000 }
+const GO_DURATION_TERM = /(\d+\.?\d*|\.\d+)(ns|us|µs|μs|ms|s|m|h)/g
+const GO_DURATION = new RegExp(`^([-+]?)(0|(?:${GO_DURATION_TERM.source})+)$`)
 
-/** Milliseconds in a Go duration ("60s", "1m30s"), or undefined if it isn't one. */
+/** Milliseconds in a Go duration ("60s", "1m30s", "+.5h"), or undefined where time.ParseDuration fails. */
 export function parseGoDuration(text: unknown): number | undefined {
-  if (typeof text !== 'string' || !/^(\d+(\.\d+)?(ms|s|m|h))+$/.test(text)) return undefined
+  const match = typeof text === 'string' ? GO_DURATION.exec(text) : null
+  if (!match) return undefined
   let total = 0
-  for (const [, amount, , unit] of text.matchAll(/(\d+(\.\d+)?)(ms|s|m|h)/g)) total += Number(amount) * GO_DURATION_UNIT_MS[unit]
-  return total
+  for (const [, amount, unit] of match[2].matchAll(GO_DURATION_TERM)) total += Number(amount) * GO_DURATION_UNIT_MS[unit]
+  return match[1] === '-' ? -total : total
 }
 
 /**
@@ -77,7 +82,7 @@ export function getCephHealth(data: any, now = Date.now()): CephHealth {
   let state: CephHealthState
   if (data?.spec?.healthCheck?.daemonHealth?.status?.disabled === true) state = 'disabled'
   else if (!status) state = 'missing'
-  else if (checkedAt === undefined || now - checkedAt > getCephStaleAfterMs(data)) state = 'stale'
+  else if (checkedAt === undefined || now - checkedAt > getCephStaleAfterMs(data) || checkedAt - now > MAX_CLOCK_SKEW_MS) state = 'stale'
   else state = 'fresh'
   return {
     status,
@@ -87,6 +92,12 @@ export function getCephHealth(data: any, now = Date.now()): CephHealth {
     previous: nonEmptyString(ceph?.previousHealth),
     checks,
   }
+}
+
+/** Whether Rook stamped the last check further ahead of this clock than ordinary skew, so the report's age is unknown. */
+export function isCephCheckAhead(health: CephHealth, now = Date.now()): boolean {
+  const checkedAt = parseTime(health.lastChecked)
+  return checkedAt !== undefined && checkedAt - now > MAX_CLOCK_SKEW_MS
 }
 
 /**
@@ -134,8 +145,12 @@ export function getCephClusterStatusReason(data: any, now = Date.now()): string 
       return health.checks.map(c => c.message ? `${c.code}: ${c.message}` : c.code).join('\n') || undefined
     case 'Reconcile failed':
       return getCephReconcileFailure(data)?.message || undefined
-    case 'Health stale':
-      return `Rook last reported ${health.status}${health.lastChecked ? ` ${formatRelativeAgeTime(health.lastChecked)}` : ' with no check time'}; the current health is unknown.`
+    case 'Health stale': {
+      const when = !health.lastChecked ? 'with no check time'
+        : isCephCheckAhead(health, now) ? 'with a check time ahead of this clock'
+        : formatRelativeAgeTime(health.lastChecked)
+      return `Rook last reported ${health.status} ${when}; the current health is unknown.`
+    }
     case 'Health checks disabled':
       return 'spec.healthCheck.daemonHealth.status.disabled stops Rook from refreshing the Ceph health.'
     default:
@@ -243,6 +258,11 @@ function healthCheckCodes(data: any): string {
   return getCephHealth(data).checks.map(c => c.code).join(', ')
 }
 
+/** Capacity is only as current as the health report: Rook keeps the last one between checks. Mirrors the summary in pkg/ai/context. */
+function currentCephCapacity(data: any): CephCapacity | undefined {
+  return getCephHealth(data).state === 'fresh' ? getCephCapacity(data) : undefined
+}
+
 export function getRookColumnValue(data: any, column: string): string | undefined {
   if (isCephCluster(data)) {
     switch (column) {
@@ -254,7 +274,7 @@ export function getRookColumnValue(data: any, column: string): string | undefine
         return health.state === 'fresh' ? healthCheckCodes(data) : ''
       }
       case 'cephCapacity': {
-        const capacity = getCephCapacity(data)
+        const capacity = currentCephCapacity(data)
         return capacity ? `${formatCephBytes(capacity.used)} / ${formatCephBytes(capacity.total)}` : ''
       }
       case 'cephVersion': return nonEmptyString(data.status?.version?.version) ?? ''
@@ -286,7 +306,7 @@ export function getRookSortValue(data: any, column: string): string | number | u
   if (value === undefined) return undefined
   switch (column) {
     case 'cephCapacity': {
-      const capacity = getCephCapacity(data)
+      const capacity = currentCephCapacity(data)
       return capacity ? capacity.used / capacity.total : -1
     }
     case 'cephMons': return positiveInteger(data.spec?.mon?.count) ?? -1

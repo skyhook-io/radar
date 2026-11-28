@@ -12,6 +12,7 @@ import {
   getCephOSDStores,
   getCephDeviceClasses,
   getCephStaleAfterMs,
+  isCephCheckAhead,
   formatCephBytes,
   getCephBlockPoolStatus,
   getCephBlockPoolDeletionBlocked,
@@ -57,7 +58,9 @@ export function CephClusterRenderer({ data }: { data: any }) {
     {health.state === 'stale' && <AlertBanner
       variant="unknown"
       title="Ceph health is stale"
-      message={`Rook has not refreshed the health in over ${staleAfterMinutes} minutes, so ${health.status} is what Ceph reported then, not now. Check that the Rook operator is running.`}
+      message={isCephCheckAhead(health)
+        ? `Rook stamped its last check ahead of this clock, so how long ago Ceph reported ${health.status} is unknown. Check the clocks on the Rook operator's node and this machine.`
+        : `Rook has not refreshed the health in over ${staleAfterMinutes} minutes, so ${health.status} is what Ceph reported then, not now. Check that the Rook operator is running.`}
     />}
     {health.state === 'disabled' && <AlertBanner
       variant="unknown"
