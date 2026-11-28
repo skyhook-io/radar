@@ -631,7 +631,7 @@ If an active context's credentials expire or are rejected, Radar disconnects clu
 
 ### Local integration connections
 
-In **Settings → Metrics / Argo CD / Cost**, configure the selected context and
+In **Settings → Metrics / Logs / Argo CD / Cost**, configure the selected context and
 choose **Save changes**. **Discard** resets the form without changing saved settings.
 Switching A → B → A restores A's settings. A context with no saved settings uses
 discovery. Local CLI and Desktop share `~/.radar/clusters.json`.
@@ -681,7 +681,7 @@ Changing URL origin (scheme, host or port) requires replacing or clearing every
 retained credential, including after copying. Plain HTTP is supported but
 does not encrypt credentials in transit; use HTTPS outside trusted local paths.
 
-**Connection checks:** Metrics saves first and then tests reachability; an
+**Connection checks:** Metrics and Logs (Loki) save first and then test reachability; an
 unreachable backend remains saved with a warning. Saving an Argo CD endpoint or
 token, Kubecost mode, or Automatic with any Kubecost override (URL, API key or
 cluster ID) tests an isolated candidate first; a failed test blocks the save and
@@ -707,11 +707,69 @@ are editing, Radar freezes the old draft; explicitly discard and reload to edit
 the new cluster. A stale save is rejected rather than applied to a different
 context or merged with a concurrent file edit.
 
+#### Loki
+
+**Settings → Logs (Loki)** connects the Loki that stores this cluster's pod logs.
+It stores a URL and optional headers per context, like Metrics: `X-Scope-OrgID`
+for a multi-tenant Loki, `Authorization` for a gateway that requires it. Header
+values are sent only to the server they were saved for and never returned.
+Headers need a URL: Radar never sends them to a Loki it discovered, and a
+shared installation started with `--loki-header` but no `--loki-url` refuses
+to start.
+
+Without a URL Radar finds Loki in the cluster: a Service named `loki-gateway`,
+`loki-query-frontend`, `loki-read` or `loki`, or labelled
+`app.kubernetes.io/name=loki`. Running in the cluster or with authentication,
+Radar looks only in the `loki`, `logging`, `monitoring` and `observability`
+namespaces and its own, so a Service someone creates in their own namespace
+can't take Loki's place; if Loki runs elsewhere, set `--loki-url`, and the
+status says so. A local Radar searches every namespace it can read, with those
+namespaces first. Within that order a gateway or query frontend comes first,
+and when the two best Services are equally good and in different namespaces,
+Radar connects to neither and asks for the URL. It tries
+the Service address first, then a port-forward to the port the Service targets
+on its pod (locally this needs `create pods/portforward` in Loki's namespace).
+Gossip, canary and headless Services are skipped unless nothing else matches.
+Each candidate gets a few seconds through its forward before Radar tries the
+next. When Radar can't list Services, Settings says so rather than reporting
+that no Loki was found.
+After a failed attempt, neither reading the status nor reading logs starts
+another one for 30 seconds; reads in that time return the last error. A
+cancelled or slow read keeps the connection.
+
+On connecting, Radar reads Loki's label names and picks the stream labels that
+carry the namespace, pod, container and Job name (`namespace`/`pod`/`container`
+for Promtail and Alloy, `kubernetes_*_name` for Fluent Bit, `namespace_name`/`pod_name` for
+the Logging operator's fluentd output, `k8s_*_name` for
+OpenTelemetry). Settings shows what it found. Loki without a namespace or pod
+label can be connected, but pod log history needs both. Only
+`/loki/api/v1/labels` is read in this release.
+
+**A Loki shared by several clusters.** Its streams usually carry a label naming
+the cluster (`cluster`, `k8s_cluster_name` or `cluster_name` are detected). In
+shared installations, `--loki-cluster=<value>` (or `<label>=<value>` for another
+label name) makes every History read match this cluster's value. With
+authentication, Radar refuses History while Loki has a cluster label and no
+value is set, since a pod name in one cluster would otherwise read the same
+name in another; without authentication the status says the label is there.
+When `--loki-cluster` names a value but Radar finds no label to match it on,
+History is refused. A cluster label Radar doesn't detect and nobody named is
+not matched. A local Radar reads with the connection you saved and takes no
+`--loki-cluster`.
+
+Launch flags: `--loki-url` (skips discovery), `--loki-header Key=Value`
+(repeatable) and, in shared installations, `--loki-cluster`. Locally they apply to the launch context only, as
+`--prometheus-url` does, and `--loki-header` needs `--loki-url` in the same
+launch. In shared installations the flags configure Loki for the process; with
+none, Radar discovers it. `GET /api/loki/status` reports the state with a
+redacted address and never a header value.
+
 #### File editing and refresh
 
 Let Settings create context keys and accepted target fingerprints. Each entry
 stores its own configuration directly under `profiles[context-key].integrations`,
-keyed by `metrics`, `argocd` and `cost`. For example, within an existing
+keyed by `metrics`, `argocd`, `cost` and `loki` (a `loki` entry has the same
+`url`/`headers`/`headersFromEnv` shape as `prometheus`). For example, within an existing
 context's `integrations.metrics` settings (keep the actual `target` and
 `identity` generated by Radar):
 

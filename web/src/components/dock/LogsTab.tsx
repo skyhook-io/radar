@@ -5,6 +5,8 @@ interface LogsTabProps {
   podName: string
   containers: string[]
   initialContainer?: string
+  /** Open on History (logs from Loki). */
+  history?: boolean
   initContainers?: string[]
 }
 
@@ -13,6 +15,7 @@ export function LogsTab({
   podName,
   containers,
   initialContainer,
+  history = false,
   initContainers,
 }: LogsTabProps) {
   return (
@@ -22,6 +25,7 @@ export function LogsTab({
         podName={podName}
         containers={containers}
         initialContainer={initialContainer}
+        history={history}
         initContainers={initContainers}
       />
     </div>

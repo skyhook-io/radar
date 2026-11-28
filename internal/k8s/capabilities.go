@@ -278,6 +278,8 @@ type FeatureCapabilities struct {
 	RuntimeAdvisoryProgress bool `json:"runtimeAdvisoryProgress"` // GET /api/vulnerabilities/java4shell/stream
 	// GET /api/sealedsecrets/controller
 	SealedSecretsController bool `json:"sealedSecretsController"`
+	LokiConnection          bool `json:"lokiConnection"` // GET /api/loki/status
+	LokiPodHistory          bool `json:"lokiPodHistory"` // GET /api/loki/pods/{namespace}/{name}/logs
 	// GET /api/traefik/routes
 	TraefikRoutes bool `json:"traefikRoutes"`
 	// POST /api/cronjobs/{namespace}/{name}/trigger accepts {"jobName": ...};
