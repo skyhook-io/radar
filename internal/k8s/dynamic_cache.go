@@ -276,6 +276,12 @@ var supportedCRDFallbacks = []supportedCRDResource{
 	{Group: "sinks.knative.dev", Versions: []string{"v1alpha1"}, Resource: "jobsinks", Kind: "JobSink", Namespaced: true},
 	{Group: "opentelemetry.io", Versions: []string{"v1beta1", "v1alpha1"}, Resource: "opentelemetrycollectors", Kind: "OpenTelemetryCollector", Namespaced: true},
 	{Group: "opentelemetry.io", Versions: []string{"v1alpha1"}, Resource: "instrumentations", Kind: "Instrumentation", Namespaced: true},
+	{Group: "logging.banzaicloud.io", Versions: []string{"v1beta1"}, Resource: "loggings", Kind: "Logging", Namespaced: false},
+	{Group: "logging.banzaicloud.io", Versions: []string{"v1beta1"}, Resource: "flows", Kind: "Flow", Namespaced: true},
+	{Group: "logging.banzaicloud.io", Versions: []string{"v1beta1"}, Resource: "clusterflows", Kind: "ClusterFlow", Namespaced: true},
+	{Group: "logging.banzaicloud.io", Versions: []string{"v1beta1"}, Resource: "outputs", Kind: "Output", Namespaced: true},
+	{Group: "logging.banzaicloud.io", Versions: []string{"v1beta1"}, Resource: "clusteroutputs", Kind: "ClusterOutput", Namespaced: true},
+	{Group: "logging.banzaicloud.io", Versions: []string{"v1beta1"}, Resource: "fluentbitagents", Kind: "FluentbitAgent", Namespaced: false},
 	{Group: "flagger.app", Versions: []string{"v1beta1"}, Resource: "canaries", Kind: "Canary", Namespaced: true},
 	{Group: "flagger.app", Versions: []string{"v1beta1"}, Resource: "metrictemplates", Kind: "MetricTemplate", Namespaced: true},
 	// k3s / RKE2 Helm controller. HelmChart shares its kind with Flux's source.toolkit.fluxcd.io HelmChart.

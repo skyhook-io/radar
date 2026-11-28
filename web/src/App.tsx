@@ -46,6 +46,7 @@ import { PrimaryNavRail } from './components/nav/PrimaryNavRail'
 import { resourceExpandedPath, resourceKindListNamespaceFilterTooltip, resourceKindListTitle, useResourceHostFeatures } from './integrations/resourceHosts'
 import { workspaceContextSwitchSearch, workspaceForPath, workspaceForView, workspaceLabels } from './integrations/workspaceRoutes'
 import { WorkspaceScreen } from './integrations/workspaceScreens'
+import { pendingInvalidations, type WorkspaceInvalidation } from './integrations/workspaceInvalidations'
 import { currentPageLabel } from './utils/page-links'
 import { navigateFromPrimaryRail } from './components/nav/navigation'
 import { useNavRailPinned } from './hooks/useNavRailPinned'
@@ -142,7 +143,7 @@ const FLEET_MODE_KINDS = new Set<NodeKind>([
 
 // Convert API resource name back to topology node ID prefix
 // Extended MainView type that includes traffic and cost
-type ExtendedMainView = MainView | 'traffic' | 'cost' | 'capacity' | 'cnpg' | 'velero' | 'workload' | 'checks' | 'gitops' | 'compare' | 'helmCompare' | 'issues' | 'applications' | 'investigations'
+type ExtendedMainView = MainView | 'traffic' | 'cost' | 'capacity' | 'cnpg' | 'velero' | 'logging' | 'workload' | 'checks' | 'gitops' | 'compare' | 'helmCompare' | 'issues' | 'applications' | 'investigations'
 
 // Views that have been laid out for phone width (640px and below). The rest
 // keep their desktop width on a phone and scroll sideways; add a view here in
@@ -954,7 +955,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     gitops: 'g o', checks: 'g u', cost: 'g c', capacity: 'g p',
     // Non-rail views (reachable via deep links / actions, not the rail) get no
     // dedicated mnemonic — listed for exhaustiveness so the type stays total.
-    workload: '', compare: '', helmCompare: '', investigations: '', cnpg: '', velero: '',
+    workload: '', compare: '', helmCompare: '', investigations: '', cnpg: '', velero: '', logging: '',
   }
   const views = Object.keys(VIEW_SHORTCUT_KEYS).filter(
     (v): v is ExtendedMainView => VIEW_SHORTCUT_KEYS[v as ExtendedMainView] !== '',
@@ -1162,8 +1163,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     secretsChanged: boolean
     timer: number | null
   }>({ changedKinds: new Set(), changedObjects: new Set(), structuralKinds: new Set(), environmentNamespaces: new Set(), environmentPods: new Map(), secretsChanged: false, timer: null })
-  const cnpgInvalidationPendingRef = useRef(false)
-  const veleroInvalidationPendingRef = useRef(false)
+  const workspaceInvalidationPendingRef = useRef(new Set<WorkspaceInvalidation>())
   // Traefik route facts scan every visible IngressRoute per request, so an open
   // drawer refreshes at most once per batch of this length.
   const traefikInvalidationRef = useRef<{ timer: number | null }>({ timer: null })
@@ -1200,8 +1200,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     const structural = event.operation === 'add' || event.operation === 'delete'
     const applicationWorkload = ['deployments', 'statefulsets', 'daemonsets', 'rollouts'].includes(kind)
 
-    if (event.group?.endsWith('.cnpg.io')) cnpgInvalidationPendingRef.current = true
-    if (event.group === 'velero.io') veleroInvalidationPendingRef.current = true
+    for (const due of pendingInvalidations([event])) workspaceInvalidationPendingRef.current.add(due)
 
     const fast = fastInvalidationRef.current
     fast.changedKinds.add(kind)
@@ -1255,25 +1254,22 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         // GitOps view is mounted (Phase 2 will make this relevance-aware).
         queryClient.invalidateQueries({ queryKey: ['gitops-tree'] })
         queryClient.invalidateQueries({ queryKey: ['gitops-insights'] })
-        if (cnpgInvalidationPendingRef.current) {
-          cnpgInvalidationPendingRef.current = false
-          queryClient.invalidateQueries({ queryKey: ['cnpg', 'workspace'] })
+        for (const due of workspaceInvalidationPendingRef.current) {
+          for (const queryKey of due.queryKeys) queryClient.invalidateQueries({ queryKey })
         }
-        if (veleroInvalidationPendingRef.current) {
-          veleroInvalidationPendingRef.current = false
-          queryClient.invalidateQueries({ queryKey: ['velero', 'workspace'] })
-          queryClient.invalidateQueries({ queryKey: ['velero', 'schedule-activity'] })
-        }
+        workspaceInvalidationPendingRef.current.clear()
         fastInvalidationRef.current = { changedKinds: new Set(), changedObjects: new Set(), structuralKinds: new Set(), environmentNamespaces: new Set(), environmentPods: new Map(), secretsChanged: false, timer: null }
       }, 3000)
     }
 
-    // Traefik route facts join routes, Middlewares, Services, Pods and Secrets;
-    // only an open drawer's query refetches.
+    // Traefik route facts join routes, Middlewares, Services, Pods and Secrets,
+    // and a pod's log shipping joins its Logging's Flows and Outputs; only an
+    // open drawer's query refetches.
     if (traefikInvalidationRef.current.timer === null) {
       traefikInvalidationRef.current.timer = window.setTimeout(() => {
         traefikInvalidationRef.current = { timer: null }
         queryClient.invalidateQueries({ queryKey: ['traefik'] })
+        queryClient.invalidateQueries({ queryKey: ['logging-pod'] })
       }, 15000)
     }
 

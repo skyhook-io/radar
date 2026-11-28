@@ -17,6 +17,9 @@ import {
 } from '@skyhook-io/k8s-ui/components/resources/resource-utils-secrets-store'
 import { useRBACSubject } from '../../../api/rbac'
 import { usePolicyResource } from '../../../api/policy'
+import { useLoggingPodShipping } from '../../../api/logging'
+import { useAPIResources } from '../../../api/apiResources'
+import { LOGGING_GROUP } from '@skyhook-io/k8s-ui/components/resources/resource-utils-logging'
 import { useNetworkAttachmentLookups } from '../../../api/networkAttachments'
 import { podLimitRangeNames, useNamespaceLimitRanges } from '../../../api/quotas'
 import { podAwaitsScheduling } from '../../capacity/podDemandGate'
@@ -91,6 +94,13 @@ export function PodRenderer({ data, onCopy, copied, onNavigate, onOpenLogs, reso
     'pods', namespace ?? '', podName, !!namespace && !!podName,
   )
 
+  const { data: apiResources } = useAPIResources()
+  const loggingInstalled = !!apiResources?.some((r) => r.group === LOGGING_GROUP && r.name === 'loggings')
+  const logShippingQuery = useLoggingPodShipping(namespace ?? '', podName ?? '', loggingInstalled)
+  const logShipping = loggingInstalled && logShippingQuery.support === 'supported'
+    ? { data: logShippingQuery.data ?? null, loading: logShippingQuery.isLoading, error: logShippingQuery.error as Error | null }
+    : undefined
+
   const { data: limitRanges, isSuccess: limitRangesReady } = useNamespaceLimitRanges(namespace ?? '', !!namespace)
 
   const networkAttachmentRefs = useMemo(() => uniqueNetworkAttachmentRefs(getPodNetworks(data).rows), [data])
@@ -132,6 +142,7 @@ export function PodRenderer({ data, onCopy, copied, onNavigate, onOpenLogs, reso
       rbacLoading={rbacLoading}
       rbacError={rbacError as Error | null}
       policyData={policyData ?? null}
+      logShipping={logShipping}
       policyLoading={policyLoading}
       policyError={policyError as Error | null}
       namespaceLimitRangeNames={limitRangesReady ? podLimitRangeNames(limitRanges) : undefined}

@@ -48,6 +48,7 @@ can see its namespace, apart from the few kinds Radar checks exactly, as
 | Kubernetes PodTemplate | Pod templates can contain inline container credentials. Relationship collection adds no caller grants, and native visibility adds no default caller grant. |
 | Knative JobSink | Newly collected relationship dependency; no default caller grant pending review of inline Job configuration. |
 | OpenTelemetry Collector and Instrumentation | Collector configuration and instrumentation environment values can contain inline credentials. Native visibility adds no default caller grants. |
+| Logging operator kinds (Output and ClusterOutput hold the credentials) | Output specs (Loki, S3, Elasticsearch, …) can hold inline credentials and endpoints. Collection is separately opt-in; native visibility adds no default caller grants. |
 | Flagger Canary and MetricTemplate | Canary webhook metadata and MetricTemplate provider headers may contain inline credentials. Collection is separately opt-in; native visibility adds no default caller grants. |
 | k3s HelmChart and HelmChartConfig | `spec.valuesContent` and `spec.set` may contain inline credentials. Collection is separately opt-in; native visibility adds no default caller grants. |
 | system-upgrade-controller Plan | `spec.upgrade.envs` and `spec.prepare.envs` may contain inline values, and `spec.secrets` names Secrets mounted into upgrade Jobs. Collection is separately opt-in; native visibility adds no default caller grants. |

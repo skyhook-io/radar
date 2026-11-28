@@ -16,6 +16,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/gitops"
 	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
+	"github.com/skyhook-io/radar/pkg/logging"
 	"github.com/skyhook-io/radar/pkg/longhorn"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -316,6 +317,8 @@ func detectCuratedConditionIssues(gvr schema.GroupVersionResource, kind string, 
 		}
 	case "postgresql.cnpg.io":
 		return detectCNPGIssues(gvr, kind, u)
+	case logging.Group:
+		return detectLoggingIssues(gvr, kind, u)
 	case agentSandboxGroup:
 		return detectSandboxSuspensionBlocked(gvr, kind, u)
 	case substrateGroup:

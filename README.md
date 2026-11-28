@@ -493,6 +493,7 @@ The Helm chart grants read access to common built-in Kubernetes kinds; Secrets, 
 | **Knative Networking** | Ingress, Certificate, ServerlessService |
 | **Karpenter** | NodePool, NodeClaim (+ provider-specific NodeClasses via auto-discovery) |
 | **OpenTelemetry Operator** | [OpenTelemetryCollector and Instrumentation](docs/integrations.md#opentelemetry-operator): reconciliation, configured pipelines and injection settings |
+| **Logging operator** | [Logging, Flows and outputs](docs/integrations.md#logging-operator): selection rules, redacted outputs, problem Issues, "Log shipping" on every Pod, and a pipeline page (`/logging`) with the running pods nothing routes |
 | **k3s Helm controller** | [HelmChart and HelmChartConfig](docs/integrations.md#k3s-helm-controller): `k3s` badge and a "change values in HelmChartConfig" note on the releases they install; values kept out of drawers, tables and the resource bodies sent to AI |
 | **System Upgrade Controller** | [Plan](docs/integrations.md#system-upgrade-controller): per-node upgrade progress, an Issue for an invalid Plan, and k3s/RKE2 upgrade Plans on the Upgrade impact page |
 | **Flagger** | [Canary and MetricTemplate](docs/integrations.md#flagger): recorded rollout state, target/autoscaler/template links and failed-rollout Issues |
