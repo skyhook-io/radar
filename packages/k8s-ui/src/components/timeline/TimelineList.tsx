@@ -44,6 +44,8 @@ export type { ActivityTypeFilter, ActivityFilterKey }
 
 export interface TimelineListProps {
   events: TimelineEvent[]
+  /** Host actions shown on an event's card, e.g. "Logs (Loki)" for a Pod. */
+  renderItemActions?: (item: TimelineEvent) => ReactNode
   isLoading: boolean
   onRefresh?: () => void
   onQueryChange?: (params: { timeRange: TimeRange; kinds: string[] }) => void
@@ -179,7 +181,7 @@ const TIME_RANGES: { value: TimeRange; label: string }[] = [
   { value: 'all', label: 'All' },
 ]
 
-export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasLimitedAccess, namespaces, onViewChange, currentView = 'list', onResourceClick, initialFilter, initialTimeRange, rangeOptions = TIME_RANGES, hideRangeSelector = false, showDeleted: showDeletedProp, onShowDeletedChange, search: searchProp, onSearchChange, activityFilter: activityFilterProp, onActivityFilterChange, kindFilter: kindFilterProp, onKindFilterChange, onVisibleWindowChange, scrollToMs, compact = false, selectedEventId, onSelectEvent, truncatedAt, isTruncated, truncationMessage, showRoutine = false, onShowRoutineChange, routineEvents, foldPerResource }: TimelineListProps) {
+export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasLimitedAccess, namespaces, onViewChange, currentView = 'list', onResourceClick, initialFilter, initialTimeRange, rangeOptions = TIME_RANGES, hideRangeSelector = false, showDeleted: showDeletedProp, onShowDeletedChange, search: searchProp, onSearchChange, activityFilter: activityFilterProp, onActivityFilterChange, kindFilter: kindFilterProp, onKindFilterChange, onVisibleWindowChange, scrollToMs, compact = false, selectedEventId, onSelectEvent, truncatedAt, isTruncated, truncationMessage, showRoutine = false, onShowRoutineChange, routineEvents, foldPerResource, renderItemActions }: TimelineListProps) {
   const [searchInternal, setSearchInternal] = useState('')
   const searchTerm = searchProp ?? searchInternal
   const setSearchTerm = onSearchChange ?? setSearchInternal
@@ -811,8 +813,8 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
   const toggleExpanded = useCallback((id: string) => setExpandedItem((previous) => (previous === id ? null : id)), [])
   // Rows are memoized on this, so Virtuoso's measuring re-renders skip the cards.
   const rowContext = useMemo<RowContext>(() => ({
-    expandedItem, toggleExpanded, onResourceClick, compact, selectedEventId, onSelectEvent, foldMotion, isFoldOpen, toggleFold,
-  }), [expandedItem, toggleExpanded, onResourceClick, compact, selectedEventId, onSelectEvent, foldMotion, isFoldOpen, toggleFold])
+    expandedItem, toggleExpanded, onResourceClick, compact, selectedEventId, onSelectEvent, foldMotion, isFoldOpen, toggleFold, renderItemActions,
+  }), [expandedItem, toggleExpanded, onResourceClick, compact, selectedEventId, onSelectEvent, foldMotion, isFoldOpen, toggleFold, renderItemActions])
 
   return (
     <div className="flex flex-col h-full w-full">
@@ -945,13 +947,15 @@ interface RowContext {
   foldMotion: ReadonlyMap<string, 'opening' | 'closing'>
   isFoldOpen: (key: string) => boolean
   toggleFold: (key: string) => void
+  renderItemActions?: (item: TimelineEvent) => ReactNode
 }
 
 const TimelineRow = memo(function TimelineRow({ row, first, context }: { row: ListRow; first: boolean; context: RowContext }) {
-  const { expandedItem, toggleExpanded, onResourceClick, compact, selectedEventId, onSelectEvent } = context
+  const { expandedItem, toggleExpanded, onResourceClick, compact, selectedEventId, onSelectEvent, renderItemActions } = context
   const card = (item: TimelineEvent) => (
     <ActivityCard
       item={item}
+      renderActions={renderItemActions}
       expanded={expandedItem === item.id}
       onToggle={() => toggleExpanded(item.id)}
       onResourceClick={onResourceClick}
@@ -1022,6 +1026,7 @@ const TimelineRow = memo(function TimelineRow({ row, first, context }: { row: Li
 
 interface ActivityCardProps {
   item: TimelineEvent
+  renderActions?: (item: TimelineEvent) => ReactNode
   expanded: boolean
   onToggle: () => void
   onResourceClick?: NavigateToResource
@@ -1030,7 +1035,7 @@ interface ActivityCardProps {
   onSelect?: () => void
 }
 
-function ActivityCard({ item, expanded, onToggle, onResourceClick, compact, selected, onSelect }: ActivityCardProps) {
+function ActivityCard({ item, expanded, onToggle, onResourceClick, compact, selected, onSelect, renderActions }: ActivityCardProps) {
   const isChange = isChangeEvent(item)
   const isHistorical = isHistoricalEvent(item)
   const isWarning = item.eventType === 'Warning'
@@ -1112,6 +1117,7 @@ function ActivityCard({ item, expanded, onToggle, onResourceClick, compact, sele
                 <span className="text-sm font-medium text-theme-text-primary truncate group-hover:text-blue-300">{item.name}</span>
               </button>
               {item.namespace && <span className="text-xs text-theme-text-tertiary">in {item.namespace}</span>}
+              {renderActions && <span onClick={(e) => e.stopPropagation()}>{renderActions(item)}</span>}
               {item.owner && (
                 <span className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
                   <span className="text-xs text-theme-text-quaternary">←</span>

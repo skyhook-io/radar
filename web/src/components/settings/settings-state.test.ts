@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  isConnectionQuery,
   costSourceApplyLabel,
   prometheusHeadersFromRows,
   pendingSections,
@@ -24,8 +25,8 @@ describe("Prometheus header edits", () => {
 });
 
 describe("Integration settings state", () => {
-  it.each(['prometheus', 'cost', 'argocd'] as const)("offers discard for a %s draft", (section) => {
-    expect(pendingSections({ prometheus: false, cost: false, argocd: false, ai: false, [section]: true })).toEqual([section]);
+  it.each(['prometheus', 'loki', 'cost', 'argocd'] as const)("offers discard for a %s draft", (section) => {
+    expect(pendingSections({ prometheus: false, loki: false, cost: false, argocd: false, ai: false, [section]: true })).toEqual([section]);
     expect(
       shouldShowSettingsFooter({
         canEditConfig: true,
@@ -39,7 +40,7 @@ describe("Integration settings state", () => {
   });
 
   it("offers review from other sections and retains the close guard", () => {
-    expect(pendingSections({ prometheus: true, cost: true, argocd: true, ai: true })).toEqual(['prometheus', 'cost', 'argocd', 'ai']);
+    expect(pendingSections({ prometheus: true, loki: true, cost: true, argocd: true, ai: true })).toEqual(['prometheus', 'loki', 'cost', 'argocd', 'ai']);
     expect(
       shouldShowSettingsFooter({
         canEditConfig: true,
@@ -63,5 +64,15 @@ describe("Integration settings state", () => {
     expect(costSourceApplyLabel("auto")).toBe("Test & apply source");
     expect(costSourceApplyLabel("kubecost")).toBe("Test & apply source");
     expect(costSourceApplyLabel("prometheus")).toBe("Apply source");
+  });
+});
+
+describe("isConnectionQuery", () => {
+  it("refreshes every integration's status after a connection save, Loki included", () => {
+    for (const key of ["prometheus-status", "opencost-summary", "gitops-tree", "argo-status", "loki-status"]) {
+      expect(isConnectionQuery([key]), key).toBe(true);
+    }
+    expect(isConnectionQuery(["resources"])).toBe(false);
+    expect(isConnectionQuery([1])).toBe(false);
   });
 });

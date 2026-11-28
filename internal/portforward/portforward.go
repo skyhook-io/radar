@@ -24,6 +24,7 @@ const (
 	OwnerTraffic    Owner = "traffic"
 	OwnerCost       Owner = "cost"
 	OwnerArgoCD     Owner = "argocd"
+	OwnerLoki       Owner = "loki"
 	// EstablishTimeout lets compound discovery flows budget for each managed tunnel attempt.
 	EstablishTimeout = 10 * time.Second
 )

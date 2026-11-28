@@ -35,6 +35,7 @@ function renderTabContent(tab: DockTab, isActive: boolean, viewNamespaces: strin
         podName={tab.podName!}
         containers={tab.containers!}
         initialContainer={tab.containerName}
+        history={tab.history}
         initContainers={tab.initContainers}
       />
     )

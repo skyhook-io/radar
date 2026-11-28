@@ -15,6 +15,7 @@ vi.mock('../../context/TimelineSource', () => ({
 }))
 vi.mock('../../contexts/CapabilitiesContext', () => ({ useHasLimitedAccess: () => false }))
 vi.mock('./TimelineRetentionNote', () => ({ TimelineRetentionBanner: () => null }))
+vi.mock('./LokiLogsAction', () => ({ useLokiTimelineActions: () => undefined }))
 
 const { TimelineList } = await import('./TimelineList')
 

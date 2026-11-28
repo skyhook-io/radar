@@ -17,6 +17,8 @@ export interface DockTab {
   podUID?: string
   containerName?: string
   containers?: string[]
+  /** Logs: open on History, read from the log store (Loki). */
+  history?: boolean
   /** Logs: which of `containers` are init containers, labelled in the selector. */
   initContainers?: string[]
   /** Terminal: run this command instead of a shell (one argv element, e.g. "psql"). */
@@ -88,7 +90,8 @@ function matchesDockTab(t: DockTab, tabData: Omit<DockTab, 'id'>): boolean {
   return t.namespace === tabData.namespace &&
          t.podName === tabData.podName &&
          t.containerName === tabData.containerName &&
-         t.shell === tabData.shell
+         t.shell === tabData.shell &&
+         !!t.history === !!tabData.history
 }
 
 export function DockProvider({ children }: { children: ReactNode }) {
@@ -289,10 +292,12 @@ export function useOpenLogs() {
     orgId?: string
     clusterId?: string
     clusterName?: string
+    /** Open on History (logs from Loki), e.g. for a pod that is gone. */
+    history?: boolean
   }) => {
-    const title = opts.containerName
+    const title = (opts.containerName
       ? `${opts.podName}/${opts.containerName}`
-      : opts.podName
+      : opts.podName) + (opts.history ? ' (history)' : '')
 
     addTab({
       type: 'logs',
@@ -301,6 +306,7 @@ export function useOpenLogs() {
       podName: opts.podName,
       containerName: opts.containerName,
       containers: opts.containers,
+      history: opts.history,
       initContainers: opts.initContainers,
       orgId: opts.orgId,
       clusterId: opts.clusterId,
