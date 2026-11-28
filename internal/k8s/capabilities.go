@@ -242,6 +242,8 @@ type FeatureCapabilities struct {
 	OwnerAccessGrantReview       bool `json:"ownerAccessGrantReview"`   // GET /api/cloud/owner-access/review
 	GitOpsActionCapabilities     bool `json:"gitopsActionCapabilities"` // GET /api/gitops/capabilities/{kind}/{namespace}/{name}
 	AgentSigninCheck             bool `json:"agentSigninCheck"`         // GET /api/agents/signin
+	GitOpsOutsideChanges         bool `json:"gitopsOutsideChanges"`     // GET /api/gitops/outside-changes/{kind}/{namespace}/{name}
+	GitOpsFieldWriters           bool `json:"gitopsFieldWriters"`       // GET /api/gitops/field-writers/{kind}/{namespace}/{name}
 	// POST /api/argo/applications/{namespace}/{name}/rollback starts a sync to
 	// the history entry (id 0 included), and .../resume also clears
 	// spec.syncPolicy.automated.enabled: false. An older Radar writes an

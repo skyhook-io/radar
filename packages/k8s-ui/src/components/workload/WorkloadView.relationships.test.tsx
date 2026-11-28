@@ -48,6 +48,14 @@ describe('workload GitOps manager', () => {
     expect(html).not.toContain('Managed By')
   })
 
+  it.each([false, true])('shows the host edit chip beside the GitOps chip (expanded=%s)', (expanded) => {
+    const html = renderToStaticMarkup(<WorkloadView kind="deployments" namespace="demo" name="web" onBack={() => {}} resource={workload}
+      relationships={{ managedBy: [app], managers: [app], ownership: { children: { complete: true } } }} expanded={expanded}
+      gitOpsEditChip={<span>Edited outside Flux marker</span>} />)
+    expect(html).toContain('Managed by')
+    expect(html).toContain('Edited outside Flux marker')
+  })
+
   it('keeps Managed By when the search left managers it could not settle', () => {
     const html = render({ managedBy: [app], managers: [app], ownership: { children: { complete: true }, managers: { remote: 1 } } })
     expect(html).toContain('Managed By')

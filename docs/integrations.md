@@ -930,7 +930,7 @@ These are dependencies, not owners: topology draws each source upstream, with
 the edge pointing into the object that reads it. A link does not prove that Flux
 permits the reference or has produced an artifact.
 
-**Diagnosis**: Conditions extracted to issues (Ready=False, Stalled=True, Reconciling=True). The Activity tab lists `status.history` and the root's recent notable events; the timeline names a HelmRelease's chart and release change. Per-resource diff not yet available for Flux (HelmRelease-installed resources don't carry `last-applied-configuration`; tracked in [#601](https://github.com/skyhook-io/radar/issues/601)).
+**Diagnosis**: Conditions extracted to issues (Ready=False, Stalled=True, Reconciling=True). The Activity tab lists `status.history` and the root's recent notable events; the timeline names a HelmRelease's chart and release change. The **Outside Flux** tab lists fields of managed objects last written by kubectl, Lens or another person's tool, from `managedFields`, and what the root's drift policy does about them. Per-resource diff not yet available for Flux (HelmRelease-installed resources don't carry `last-applied-configuration`; tracked in [#601](https://github.com/skyhook-io/radar/issues/601)).
 
 ### Flux Operator
 

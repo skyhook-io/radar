@@ -10,6 +10,7 @@ import { workloadPodAwaitsScheduling } from '../capacity/podDemandGate'
 import { Stethoscope } from 'lucide-react'
 import {
   WorkloadView as BaseWorkloadView,
+  OutsideEditChip,
   EditableYamlView,
   FetchResult,
   Section,
@@ -107,6 +108,7 @@ import {
   useApplications,
   fetchJSON,
   fetchYamlSchemas,
+  useGitOpsFieldWriters,
 } from '../../api/client'
 import { TIME_RANGES, PrometheusCharts, isPrometheusSupported } from '../resource/PrometheusCharts'
 import { RightsizingStrip } from '../resource/RightsizingStrip'
@@ -676,6 +678,13 @@ export function WorkloadView({
   })
   const resource = resourceResponse?.resource
   const relationships = resourceResponse?.relationships
+  const managerAnswer = relationships?.ownership?.manager
+  const managerLeadGroup = managerAnswer?.lead?.group
+  // The server decides whether the evidence is strong enough; this only skips
+  // objects it would never answer for (inherited managers, Secrets).
+  const fluxManaged = (managerLeadGroup === 'kustomize.toolkit.fluxcd.io' || managerLeadGroup === 'helm.toolkit.fluxcd.io')
+    && !managerAnswer?.via && !(apiKind === 'secrets' && !rest.group)
+  const fieldWriters = useGitOpsFieldWriters(apiKind, namespace, name, rest.group, fluxManaged)
   useRefreshRevisionsOnNewRollout(
     apiKind.toLowerCase(),
     namespace,
@@ -1557,6 +1566,7 @@ export function WorkloadView({
         gitOpsOwnerPending={gitOpsOwnerPending}
         gitOpsOwnerSource={gitOpsOwnerSource}
         gitOpsOwnerStatus={gitOpsOwnerStatus}
+        gitOpsEditChip={fluxManaged && fieldWriters.data?.changes.length ? <OutsideEditChip changes={fieldWriters.data.changes} /> : undefined}
         helmOwner={helmOwner}
         helmOwnerSource={helmOwnerSource}
         onOpenHelmRelease={handleOpenHelmRelease}
