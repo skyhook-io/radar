@@ -115,6 +115,20 @@ false
 {{- end -}}
 
 {{/*
+Whether Radar reads Kargo (rbac.crdGroups.kargo). An absent value means ON,
+like the declared default: a `--reuse-values` upgrade from a release that
+predates the key renders with the previous release's tree, and Kargo reads stay
+on unless someone sets false.
+*/}}
+{{- define "radar.kargoRbac" -}}
+{{- if ne (toString .Values.rbac.crdGroups.kargo) "false" -}}
+true
+{{- else -}}
+false
+{{- end -}}
+{{- end -}}
+
+{{/*
 Whether Radar calls Kubernetes with each person's own token instead of
 impersonating them (auth.kubernetesCredentials=user-token).
 */}}

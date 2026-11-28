@@ -6,6 +6,8 @@ import { loadRecentResources, recordRecentResource } from '../../hooks/useRecent
 import { useCommandItems, type CommandItemCallbacks } from './command-items'
 import { PENDING_RETRY_BUDGET_MS, PENDING_RETRY_MS, searchCoverageNote } from './searchCoverageNote'
 import { useDiagnose } from '../diagnose/DiagnoseContext'
+import { kargoDiscovered } from '../kargo/routes'
+import { kargoCommandItem } from '../kargo/useKargoSidebarWorkspace'
 
 interface RadarOmnibarProps extends CommandItemCallbacks {
   onOpenResource: (hit: SearchHit) => void
@@ -56,7 +58,16 @@ export const RadarOmnibar = forwardRef<OmnibarHandle, RadarOmnibarProps>(functio
     kind: apiResources ? [...new Set(apiResources.filter((r) => r.verbs?.includes('list')).map((r) => r.kind))].sort() : [],
   }), [nsScope, apiResources])
 
-  const commandItems = useCommandItems(callbacks)
+  const baseCommandItems = useCommandItems(callbacks)
+  const { support: kargoSupport } = useRadarFeature('kargoWorkspace')
+  const kargoAvailable = kargoDiscovered(apiResources) && kargoSupport !== 'unsupported'
+  const { onNavigateView } = callbacks
+  const commandItems = useMemo(
+    () => kargoAvailable
+      ? [...baseCommandItems, kargoCommandItem(() => onNavigateView('kargo'))]
+      : baseCommandItems,
+    [baseCommandItems, kargoAvailable, onNavigateView],
+  )
   // Words that find nothing (or more than a lookup) can become a question;
   // the composer opens with them so where and since when stay visible.
   const diagnose = useDiagnose()

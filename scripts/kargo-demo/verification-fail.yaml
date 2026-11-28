@@ -1,0 +1,19 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: smoke-fail
+  namespace: kargo-demo
+spec:
+  metrics:
+  - name: error-rate
+    provider:
+      job:
+        spec:
+          backoffLimit: 0
+          template:
+            spec:
+              restartPolicy: Never
+              containers:
+              - name: smoke-fail
+                image: busybox:1.36
+                command: ["sh", "-c", "echo checking error rate on uat; sleep 5; echo error rate 7.2% above 5% budget; exit 1"]

@@ -8,7 +8,7 @@ import { CardSection, ClusterName, Disclosure, EmptyState, KIND_CHIP_CLASS, Term
 import { Collapse, CollapseChevron, useDisclosure } from '../ui/Collapse';
 import { Tooltip } from '../ui/Tooltip';
 import { formatCompactAge, formatRelativeAgeTime } from '../../utils/format';
-import { diagnosticRoleLabel, diagnosticFactLabel, confidenceTitle, incidentParentLabel } from './diagnostic';
+import { diagnosticRoleLabel, diagnosticFactLabel, confidenceTitle, incidentParentLabel, incidentParentSubject } from './diagnostic';
 import { issueFirstSeenTitle, issueResourceCreatedTitle, issueTimingForDisplay } from './issue-timing';
 import {
   ISSUE_SEVERITY_BADGE_CLASS,
@@ -459,7 +459,7 @@ export function IssueRow({
       <Tooltip content={confidenceTitle(parent.confidence ?? '')} delay={200} wrapperClassName="min-w-0">
         <span className="truncate text-theme-text-tertiary">
           ↳ {incidentParentLabel(parent.fact_type, parent.confidence)}{' '}
-          <span className="font-medium text-theme-text-secondary">{parent.ref.kind} / {parent.ref.name}</span>
+          <span className="font-medium text-theme-text-secondary">{incidentParentSubject(parent)}</span>
         </span>
       </Tooltip>,
     );

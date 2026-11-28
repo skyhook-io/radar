@@ -67,6 +67,8 @@ import { ResourceRendererDispatch, getResourceStatus, diagnoseHealthHint, type D
 import type { ScalerDiagnosis } from '../resources/renderers/WorkloadRenderer'
 import { DetailShell, type DetailShellTab } from '../shared/DetailShell'
 import { gitOpsOwnerKindLabel, HelmManagedByChip, ManagedByChip, type HelmOwnerRef } from '../shared/ManagedByChip'
+import { KargoAuthorizedStageLine, KargoStageChips } from '../shared/KargoStage'
+import { kargoAuthorizedStages, type KargoStageRef } from '../../utils/kargo-authorized-stages'
 import { AlertBanner, getKindColorOutline, displayKindName, OperationalIssuesShownContext, ResourceRefBadge } from '../ui/drawer-components'
 import { Badge, type BadgeSeverity } from '../ui/Badge'
 import { Tooltip } from '../ui/Tooltip'
@@ -362,6 +364,10 @@ type WorkloadViewBaseProps = {
    * resource rather than from owner labels on a managed object.
    */
   onNavigateGitOpsPath?: (path: string) => void
+  /** The Kargo Stages allowed to set the version of the Argo CD Application that manages this resource, from its authorized-stage annotation. */
+  managerKargoStages?: KargoStageRef[] | null
+  /** Open the Kargo pipeline at a Stage. Without it, Kargo stages are named but not linked. */
+  onOpenKargoStage?: (stage: KargoStageRef) => void
   /** Opens the live traffic view focused on this workload. */
   onOpenLiveTraffic?: () => void
 
@@ -627,6 +633,8 @@ export function WorkloadView({
   helmOwnerSource,
   onOpenHelmRelease,
   onNavigateGitOpsPath,
+  managerKargoStages,
+  onOpenKargoStage,
   onOpenLiveTraffic,
 }: WorkloadViewProps) {
   // The live object preserves exact CRD capitalization (RayJob, TFJob); the URL
@@ -869,6 +877,8 @@ export function WorkloadView({
   // the drawer's renderer is thorough but the tab has the tree + insights +
   // operations the drawer can't reproduce inline.
   const gitOpsResourcePath = useMemo(() => gitOpsRouteForResource(resource), [resource])
+  const ownKargoStages = useMemo(() => kargoAuthorizedStages(resource), [resource])
+  const kargoStageChips = showGitOpsChip && gitopsOwner?.tool === 'argocd' && managerKargoStages?.length ? managerKargoStages : null
 
   // Copy to clipboard
   const copyToClipboard = useCallback((text: string, key: string) => {
@@ -1210,6 +1220,7 @@ export function WorkloadView({
             {(showGitOpsChip || helmOwner || (gitOpsResourcePath && onNavigateGitOpsPath) || onOpenLiveTraffic) && (
               <div className="mt-1 flex flex-wrap items-center gap-1.5">
                 {showGitOpsChip && <ManagedByChip manager={manager} owner={gitopsOwner} status={gitOpsOwnerStatus} verified={gitOpsOwnerVerified} pending={gitOpsOwnerPending} source={gitOpsOwnerSource} listing={listing} onOpen={onOpenGitOpsResource} />}
+                {kargoStageChips && <KargoStageChips stages={kargoStageChips} onOpen={onOpenKargoStage} />}
                 {helmOwner && <HelmManagedByChip manager={manager} owner={helmOwner} source={helmOwnerSource} onOpen={onOpenHelmRelease} />}
                 {gitOpsResourcePath && onNavigateGitOpsPath && (
                   <OpenInGitOpsChip onClick={() => onNavigateGitOpsPath(gitOpsResourcePath)} />
@@ -1217,6 +1228,7 @@ export function WorkloadView({
                 {onOpenLiveTraffic && <LiveTrafficChip onClick={onOpenLiveTraffic} />}
               </div>
             )}
+            {ownKargoStages && <KargoAuthorizedStageLine stages={ownKargoStages} onOpen={onOpenKargoStage} className="mt-2" />}
           </div>
 
           {/* Actions bar */}
@@ -1408,6 +1420,7 @@ export function WorkloadView({
             {namespace && namespace !== '_' && namespaceNote}
           </>
         )
+        const kargoLine = ownKargoStages && <KargoAuthorizedStageLine stages={ownKargoStages} onOpen={onOpenKargoStage} className="mt-1" />
         const extraChips = [
           headerImage && (
             <Tooltip key="image" content={headerImage} delay={300} wrapperClassName="min-w-0 max-w-md">
@@ -1419,6 +1432,7 @@ export function WorkloadView({
           showGitOpsChip && (
             <ManagedByChip key="gitops" manager={manager} owner={gitopsOwner} status={gitOpsOwnerStatus} verified={gitOpsOwnerVerified} pending={gitOpsOwnerPending} source={gitOpsOwnerSource} listing={listing} onOpen={onOpenGitOpsResource} variant="block" />
           ),
+          kargoStageChips && <KargoStageChips key="kargo" stages={kargoStageChips} onOpen={onOpenKargoStage} variant="block" />,
           helmOwner && (
             <HelmManagedByChip key="helm" manager={manager} owner={helmOwner} source={helmOwnerSource} onOpen={onOpenHelmRelease} variant="block" />
           ),
@@ -1443,6 +1457,7 @@ export function WorkloadView({
               {extraChips.length > 0 && (
                 <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-theme-text-secondary">{extraChips}</div>
               )}
+              {kargoLine}
             </>
           )
         }
@@ -1467,6 +1482,7 @@ export function WorkloadView({
               {coreBadges}
               {extraChips}
             </div>
+            {kargoLine}
           </>
         )
       })()}

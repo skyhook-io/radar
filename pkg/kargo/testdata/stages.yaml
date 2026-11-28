@@ -1,0 +1,472 @@
+# Real objects from a Kargo v1.12.7 pipeline (project kargo-demo), trimmed.
+apiVersion: v1
+items:
+- apiVersion: kargo.akuity.io/v1alpha1
+  kind: Stage
+  metadata:
+    annotations:
+      kargo.akuity.io/argocd-context: '[{"name":"kargo-demo-prod","namespace":"argocd"}]'
+    creationTimestamp: '2026-11-25T13:07:33Z'
+    name: prod
+    namespace: kargo-demo
+  spec:
+    promotionTemplate:
+      spec:
+        steps:
+        - as: promo-process
+          task:
+            name: demo-promo-process
+    requestedFreight:
+    - origin:
+        kind: Warehouse
+        name: kargo-demo
+      sources:
+        stages:
+        - uat
+  status:
+    conditions:
+    - lastTransitionTime: '2026-11-25T13:07:34Z'
+      message: Freight has been verified
+      observedGeneration: 3
+      reason: Verified
+      status: 'True'
+      type: Ready
+    - lastTransitionTime: '2026-11-25T13:07:34Z'
+      message: Stage is healthy (performed 1 health checks)
+      observedGeneration: 3
+      reason: Healthy
+      status: 'True'
+      type: Healthy
+    - lastTransitionTime: '2026-11-25T13:07:34Z'
+      message: Freight has been verified
+      observedGeneration: 3
+      reason: Verified
+      status: 'True'
+      type: Verified
+    freightHistory:
+    - id: 7bbc8df2bedd6928df2f79b98f9e8cd449ac072a
+      items:
+        Warehouse/kargo-demo:
+          images:
+          - digest: sha256:7cdd7d67af427e78edfa77db29cc13a9ada62cc0c89beaf05f8d3c5d3f9ac3da
+            repoURL: public.ecr.aws/nginx/nginx
+            tag: 1.31.9
+          name: c9e2bddf7415b036e09b96946d8ecf3a9a2257e5
+          origin:
+            kind: Warehouse
+            name: kargo-demo
+      verificationHistory:
+      - finishTime: '2026-11-25T13:08:45Z'
+        id: e74b29b1-c316-4ee6-8cc7-19ca708766eb
+        phase: Successful
+        startTime: '2026-11-25T13:08:45Z'
+    freightSummary: c9e2bddf7415b036e09b96946d8ecf3a9a2257e5
+    health:
+      output:
+      - applicationStatuses:
+        - Name: kargo-demo-prod
+          Namespace: argocd
+          health:
+            status: Healthy
+          sync:
+            revision: d700e31f468a7197885b87a9b3fe8604010bd409
+            status: Synced
+      status: Healthy
+    lastPromotion:
+      finishedAt: '2026-11-25T13:08:45Z'
+      freight:
+        images:
+        - digest: sha256:7cdd7d67af427e78edfa77db29cc13a9ada62cc0c89beaf05f8d3c5d3f9ac3da
+          repoURL: public.ecr.aws/nginx/nginx
+          tag: 1.31.9
+        name: c9e2bddf7415b036e09b96946d8ecf3a9a2257e5
+        origin:
+          kind: Warehouse
+          name: kargo-demo
+      name: prod.01m89d58tnm1cymat6bvc5jwgw.c9e2bdd
+      status:
+        currentStep: 6
+        finishedAt: '2026-11-25T13:08:45Z'
+        freight:
+          images:
+          - digest: sha256:7cdd7d67af427e78edfa77db29cc13a9ada62cc0c89beaf05f8d3c5d3f9ac3da
+            repoURL: public.ecr.aws/nginx/nginx
+            tag: 1.31.9
+          name: c9e2bddf7415b036e09b96946d8ecf3a9a2257e5
+          origin:
+            kind: Warehouse
+            name: kargo-demo
+        healthChecks:
+        - config:
+            apps:
+            - desiredRevisions:
+              - d700e31f468a7197885b87a9b3fe8604010bd409
+              name: kargo-demo-prod
+              namespace: argocd
+          uses: argocd-update
+        phase: Succeeded
+        startedAt: '2026-11-25T13:08:44Z'
+        stepExecutionMetadata:
+        - alias: promo-process::step-1
+          finishedAt: '2026-11-25T13:08:45Z'
+          startedAt: '2026-11-25T13:08:44Z'
+          status: Succeeded
+        - alias: promo-process::step-2
+          finishedAt: '2026-11-25T13:08:45Z'
+          startedAt: '2026-11-25T13:08:45Z'
+          status: Succeeded
+        - alias: promo-process::update
+          finishedAt: '2026-11-25T13:08:45Z'
+          startedAt: '2026-11-25T13:08:45Z'
+          status: Succeeded
+        - alias: promo-process::step-4
+          finishedAt: '2026-11-25T13:08:45Z'
+          startedAt: '2026-11-25T13:08:45Z'
+          status: Succeeded
+        - alias: promo-process::commit
+          finishedAt: '2026-11-25T13:08:45Z'
+          startedAt: '2026-11-25T13:08:45Z'
+          status: Succeeded
+        - alias: promo-process::step-6
+          finishedAt: '2026-11-25T13:08:45Z'
+          startedAt: '2026-11-25T13:08:45Z'
+          status: Succeeded
+        - alias: promo-process::step-7
+          finishedAt: '2026-11-25T13:08:45Z'
+          startedAt: '2026-11-25T13:08:45Z'
+          status: Succeeded
+    observedGeneration: 3
+- apiVersion: kargo.akuity.io/v1alpha1
+  kind: Stage
+  metadata:
+    annotations:
+      kargo.akuity.io/argocd-context: '[{"name":"kargo-demo-test","namespace":"argocd"}]'
+    creationTimestamp: '2026-11-25T13:07:33Z'
+    name: test
+    namespace: kargo-demo
+  spec:
+    promotionTemplate:
+      spec:
+        steps:
+        - as: promo-process
+          task:
+            name: demo-promo-process
+    requestedFreight:
+    - origin:
+        kind: Warehouse
+        name: kargo-demo
+      sources:
+        direct: true
+    verification:
+      analysisTemplates:
+      - name: smoke
+  status:
+    conditions:
+    - lastTransitionTime: '2026-11-25T13:07:34Z'
+      message: 'step "promo-process::step-6" met error threshold of 1: error running
+        step "promo-process::step-6": error pushing commits to remote: error pushing
+        branch: error executing cmd [/usr/bin/git push origin HEAD:stage/test]: fatal:
+        could not read Username for ''http://gitea.gitea.svc.cluster.local:3000'':
+        No such device or address
+
+        '
+      observedGeneration: 2
+      reason: LastPromotionErrored
+      status: 'False'
+      type: Ready
+    - lastTransitionTime: '2026-11-25T13:07:34Z'
+      message: Cannot assess health because last Promotion did not succeed
+      observedGeneration: 2
+      reason: LastPromotionErrored
+      status: Unknown
+      type: Healthy
+    - lastTransitionTime: '2026-11-25T13:07:34Z'
+      message: Freight has been verified
+      observedGeneration: 2
+      reason: Verified
+      status: 'True'
+      type: Verified
+    freightHistory:
+    - id: 7c6082af37571cf271f35aca5d5245afca02d72f
+      items:
+        Warehouse/kargo-demo:
+          images:
+          - digest: sha256:9ce62af8c757d8e49d85804dc72092119b1ff80a3133e78dd968842b9f9dda07
+            repoURL: public.ecr.aws/nginx/nginx
+            tag: 1.31.10
+          name: b56f6e30e82989f403c760e5d534403854ce59ef
+          origin:
+            kind: Warehouse
+            name: kargo-demo
+      verificationHistory:
+      - analysisRun:
+          name: test.01m89d5fqebp5h7ydjpnvm8vrn.7c6082a
+          namespace: kargo-demo
+          phase: Successful
+        finishTime: '2026-11-25T13:09:00Z'
+        id: 792b0508-d5e8-40b8-8c7a-492a2681d20b
+        phase: Successful
+        startTime: '2026-11-25T13:08:51Z'
+    - id: 7bbc8df2bedd6928df2f79b98f9e8cd449ac072a
+      items:
+        Warehouse/kargo-demo:
+          images:
+          - digest: sha256:7cdd7d67af427e78edfa77db29cc13a9ada62cc0c89beaf05f8d3c5d3f9ac3da
+            repoURL: public.ecr.aws/nginx/nginx
+            tag: 1.31.9
+          name: c9e2bddf7415b036e09b96946d8ecf3a9a2257e5
+          origin:
+            kind: Warehouse
+            name: kargo-demo
+      verificationHistory:
+      - analysisRun:
+          name: test.01m89d4dcaaj9n6gxf2mmxbz2e.7bbc8df
+          namespace: kargo-demo
+          phase: Successful
+        finishTime: '2026-11-25T13:08:28Z'
+        id: e730d16b-0266-4cde-acce-16d6dbf578d0
+        phase: Successful
+        startTime: '2026-11-25T13:08:15Z'
+    freightSummary: b56f6e30e82989f403c760e5d534403854ce59ef
+    health:
+      issues:
+      - Cannot assess health because last Promotion did not succeed
+      status: Unknown
+    lastPromotion:
+      finishedAt: '2026-11-25T13:09:27Z'
+      freight:
+        images:
+        - digest: sha256:9ce62af8c757d8e49d85804dc72092119b1ff80a3133e78dd968842b9f9dda07
+          repoURL: public.ecr.aws/nginx/nginx
+          tag: 1.31.10
+        name: b56f6e30e82989f403c760e5d534403854ce59ef
+        origin:
+          kind: Warehouse
+          name: kargo-demo
+      name: test.01m89d6j01phpbye0vx2ftjhrh.b56f6e3
+      status:
+        currentStep: 6
+        finishedAt: '2026-11-25T13:09:27Z'
+        freight:
+          images:
+          - digest: sha256:9ce62af8c757d8e49d85804dc72092119b1ff80a3133e78dd968842b9f9dda07
+            repoURL: public.ecr.aws/nginx/nginx
+            tag: 1.31.10
+          name: b56f6e30e82989f403c760e5d534403854ce59ef
+          origin:
+            kind: Warehouse
+            name: kargo-demo
+        message: 'step "promo-process::step-6" met error threshold of 1: error running
+          step "promo-process::step-6": error pushing commits to remote: error pushing
+          branch: error executing cmd [/usr/bin/git push origin HEAD:stage/test]:
+          fatal: could not read Username for ''http://gitea.gitea.svc.cluster.local:3000'':
+          No such device or address
+
+          '
+        phase: Errored
+        startedAt: '2026-11-25T13:09:26Z'
+        stepExecutionMetadata:
+        - alias: promo-process::step-1
+          finishedAt: '2026-11-25T13:09:27Z'
+          startedAt: '2026-11-25T13:09:26Z'
+          status: Succeeded
+        - alias: promo-process::step-2
+          finishedAt: '2026-11-25T13:09:27Z'
+          startedAt: '2026-11-25T13:09:27Z'
+          status: Succeeded
+        - alias: promo-process::update
+          finishedAt: '2026-11-25T13:09:27Z'
+          startedAt: '2026-11-25T13:09:27Z'
+          status: Succeeded
+        - alias: promo-process::step-4
+          finishedAt: '2026-11-25T13:09:27Z'
+          startedAt: '2026-11-25T13:09:27Z'
+          status: Succeeded
+        - alias: promo-process::commit
+          finishedAt: '2026-11-25T13:09:27Z'
+          startedAt: '2026-11-25T13:09:27Z'
+          status: Skipped
+        - alias: promo-process::step-6
+          errorCount: 1
+          finishedAt: '2026-11-25T13:09:27Z'
+          message: 'step "promo-process::step-6" met error threshold of 1: error running
+            step "promo-process::step-6": error pushing commits to remote: error pushing
+            branch: error executing cmd [/usr/bin/git push origin HEAD:stage/test]:
+            fatal: could not read Username for ''http://gitea.gitea.svc.cluster.local:3000'':
+            No such device or address
+
+            '
+          startedAt: '2026-11-25T13:09:27Z'
+          status: Errored
+        - alias: promo-process::step-7
+          status: Skipped
+    observedGeneration: 2
+- apiVersion: kargo.akuity.io/v1alpha1
+  kind: Stage
+  metadata:
+    annotations:
+      kargo.akuity.io/argocd-context: '[{"name":"kargo-demo-uat","namespace":"argocd"}]'
+    creationTimestamp: '2026-11-25T13:07:33Z'
+    name: uat
+    namespace: kargo-demo
+  spec:
+    promotionTemplate:
+      spec:
+        steps:
+        - as: promo-process
+          task:
+            name: demo-promo-process
+    requestedFreight:
+    - origin:
+        kind: Warehouse
+        name: kargo-demo
+      sources:
+        stages:
+        - test
+    verification:
+      analysisTemplates:
+      - name: smoke
+  status:
+    conditions:
+    - lastTransitionTime: '2026-11-25T13:07:34Z'
+      message: Metric "error-rate" assessed Failed due to failed (1) > failureLimit
+        (0)
+      observedGeneration: 4
+      reason: VerificationFailed
+      status: 'False'
+      type: Ready
+    - lastTransitionTime: '2026-11-25T13:07:34Z'
+      message: Stage is healthy (performed 1 health checks)
+      observedGeneration: 4
+      reason: Healthy
+      status: 'True'
+      type: Healthy
+    - lastTransitionTime: '2026-11-25T13:07:34Z'
+      message: Metric "error-rate" assessed Failed due to failed (1) > failureLimit
+        (0)
+      observedGeneration: 4
+      reason: VerificationFailed
+      status: 'False'
+      type: Verified
+    freightHistory:
+    - id: 7c6082af37571cf271f35aca5d5245afca02d72f
+      items:
+        Warehouse/kargo-demo:
+          images:
+          - digest: sha256:9ce62af8c757d8e49d85804dc72092119b1ff80a3133e78dd968842b9f9dda07
+            repoURL: public.ecr.aws/nginx/nginx
+            tag: 1.31.10
+          name: b56f6e30e82989f403c760e5d534403854ce59ef
+          origin:
+            kind: Warehouse
+            name: kargo-demo
+      verificationHistory:
+      - analysisRun:
+          name: uat.01m89d5xvxsp57zytxjpy9c6ws.7c6082a
+          namespace: kargo-demo
+          phase: Failed
+        finishTime: '2026-11-25T13:09:18Z'
+        id: 28438234-9efc-4606-926f-722b27728f99
+        message: Metric "error-rate" assessed Failed due to failed (1) > failureLimit
+          (0)
+        phase: Failed
+        startTime: '2026-11-25T13:09:05Z'
+    - id: 7bbc8df2bedd6928df2f79b98f9e8cd449ac072a
+      items:
+        Warehouse/kargo-demo:
+          images:
+          - digest: sha256:7cdd7d67af427e78edfa77db29cc13a9ada62cc0c89beaf05f8d3c5d3f9ac3da
+            repoURL: public.ecr.aws/nginx/nginx
+            tag: 1.31.9
+          name: c9e2bddf7415b036e09b96946d8ecf3a9a2257e5
+          origin:
+            kind: Warehouse
+            name: kargo-demo
+      verificationHistory:
+      - analysisRun:
+          name: uat.01m89d4w2zxg4g3w2webyaa6wa.7bbc8df
+          namespace: kargo-demo
+          phase: Successful
+        finishTime: '2026-11-25T13:08:39Z'
+        id: 279ce2e5-8ba0-4fc4-a3a0-d12814617fa2
+        phase: Successful
+        startTime: '2026-11-25T13:08:30Z'
+    freightSummary: b56f6e30e82989f403c760e5d534403854ce59ef
+    health:
+      output:
+      - applicationStatuses:
+        - Name: kargo-demo-uat
+          Namespace: argocd
+          health:
+            status: Healthy
+          sync:
+            revision: 438a08307acf2e0946ecc0239c86f2a1bbdfece6
+            status: Synced
+      status: Healthy
+    lastPromotion:
+      finishedAt: '2026-11-25T13:09:05Z'
+      freight:
+        images:
+        - digest: sha256:9ce62af8c757d8e49d85804dc72092119b1ff80a3133e78dd968842b9f9dda07
+          repoURL: public.ecr.aws/nginx/nginx
+          tag: 1.31.10
+        name: b56f6e30e82989f403c760e5d534403854ce59ef
+        origin:
+          kind: Warehouse
+          name: kargo-demo
+      name: uat.01m89d5wygkj42skjy4ar9hg60.b56f6e3
+      status:
+        currentStep: 6
+        finishedAt: '2026-11-25T13:09:05Z'
+        freight:
+          images:
+          - digest: sha256:9ce62af8c757d8e49d85804dc72092119b1ff80a3133e78dd968842b9f9dda07
+            repoURL: public.ecr.aws/nginx/nginx
+            tag: 1.31.10
+          name: b56f6e30e82989f403c760e5d534403854ce59ef
+          origin:
+            kind: Warehouse
+            name: kargo-demo
+        healthChecks:
+        - config:
+            apps:
+            - desiredRevisions:
+              - 438a08307acf2e0946ecc0239c86f2a1bbdfece6
+              name: kargo-demo-uat
+              namespace: argocd
+          uses: argocd-update
+        phase: Succeeded
+        startedAt: '2026-11-25T13:09:04Z'
+        stepExecutionMetadata:
+        - alias: promo-process::step-1
+          finishedAt: '2026-11-25T13:09:04Z'
+          startedAt: '2026-11-25T13:09:04Z'
+          status: Succeeded
+        - alias: promo-process::step-2
+          finishedAt: '2026-11-25T13:09:04Z'
+          startedAt: '2026-11-25T13:09:04Z'
+          status: Succeeded
+        - alias: promo-process::update
+          finishedAt: '2026-11-25T13:09:04Z'
+          startedAt: '2026-11-25T13:09:04Z'
+          status: Succeeded
+        - alias: promo-process::step-4
+          finishedAt: '2026-11-25T13:09:04Z'
+          startedAt: '2026-11-25T13:09:04Z'
+          status: Succeeded
+        - alias: promo-process::commit
+          finishedAt: '2026-11-25T13:09:04Z'
+          startedAt: '2026-11-25T13:09:04Z'
+          status: Succeeded
+        - alias: promo-process::step-6
+          finishedAt: '2026-11-25T13:09:05Z'
+          startedAt: '2026-11-25T13:09:04Z'
+          status: Succeeded
+        - alias: promo-process::step-7
+          finishedAt: '2026-11-25T13:09:05Z'
+          startedAt: '2026-11-25T13:09:05Z'
+          status: Succeeded
+    observedGeneration: 3
+kind: List
+metadata:
+  resourceVersion: ''

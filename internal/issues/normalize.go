@@ -260,6 +260,8 @@ func classifyIssue(i *Issue) {
 		Reason:               i.Reason,
 		Message:              i.Message,
 		LastTerminatedReason: i.LastTerminatedReason,
+		OwnerGroup:           i.Owner.Group,
+		OwnerKind:            i.Owner.Kind,
 	})
 	i.CategoryGroup = issuesapi.GroupOf(i.Category)
 }

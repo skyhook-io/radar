@@ -10,6 +10,7 @@ export { SetImageDialog, SET_IMAGE_WRITES, setImageWrites, setImageSelectionKey,
 export { GitOpsWriteWarning, type GitOpsWriteWarningProps } from './GitOpsWriteWarning'
 export { CreateResourceDialog, type CreateResourceDialogProps, type ApplyResult } from './CreateResourceDialog'
 export { HelmManagedByChip, ManagedByChip, type HelmOwnerRef } from './ManagedByChip'
+export { KargoAuthorizedStageLine, KargoStageChips } from './KargoStage'
 export { DetailShell, type DetailShellProps, type DetailShellTab } from './DetailShell'
 export { classifyDiffLine, hasDiffBodyChange, DiffLine } from './UnifiedDiff'
 

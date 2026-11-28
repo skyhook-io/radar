@@ -56,6 +56,7 @@ describe('application resource hosts', () => {
       'VeleroBSLRenderer', 'VeleroBackupRenderer', 'VeleroRestoreRenderer', 'CNPGClusterRenderer',
       'CNPGDatabaseRenderer', 'CNPGPublicationRenderer', 'CNPGSubscriptionRenderer', 'CNPGImageCatalogRenderer',
       'FluxHelmReleaseRenderer', 'OpenTelemetryCollectorRenderer', 'ValidatingAdmissionPolicyRenderer', 'ValidatingAdmissionPolicyBindingRenderer', 'MutatingAdmissionPolicyRenderer', 'MutatingAdmissionPolicyBindingRenderer', 'SecretProviderClassRenderer', 'UpgradePlanRenderer', 'SealedSecretRenderer', 'K3sHelmChartRenderer', 'TraefikIngressRouteRenderer', 'TraefikMiddlewareRenderer',
+      'KargoStageRenderer', 'KargoFreightRenderer', 'KargoPromotionRenderer', 'KargoWarehouseRenderer',
     ].sort())
     const inherited = [{ id: 'local', label: 'Local', render: () => null }]
     expect(resourceDetailSlots({ kind: 'Pod', group: '', namespace: 'db', name: 'pg-1' }, inherited).extraTabs).toEqual(inherited)

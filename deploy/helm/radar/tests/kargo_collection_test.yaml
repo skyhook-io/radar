@@ -1,0 +1,84 @@
+suite: Kargo collection reads the Kargo kinds Radar shows
+templates:
+  - clusterrole.yaml
+tests:
+  - it: grants read access to the Kargo kinds by default
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["kargo.akuity.io"]
+            resources: ["clusterpromotiontasks", "freights", "projects", "promotionrequests", "promotions", "promotiontasks", "stages", "targets", "warehouses"]
+            verbs: ["get", "list", "watch"]
+  - it: never grants the whole kargo.akuity.io group
+    set:
+      rbac.secrets: true
+    asserts:
+      - notContains:
+          path: rules
+          content:
+            apiGroups: ["kargo.akuity.io"]
+            resources: ["*"]
+            verbs: ["get", "list", "watch"]
+  - it: withholds ProjectConfigs and ClusterConfigs when Secrets are not granted
+    asserts:
+      - notContains:
+          path: rules
+          content:
+            apiGroups: ["kargo.akuity.io"]
+            resources: ["projectconfigs", "clusterconfigs"]
+            verbs: ["get", "list", "watch"]
+  - it: grants ProjectConfigs and ClusterConfigs with Secrets
+    set:
+      rbac.secrets: true
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["kargo.akuity.io"]
+            resources: ["projectconfigs", "clusterconfigs"]
+            verbs: ["get", "list", "watch"]
+  - it: grants ProjectConfigs and ClusterConfigs when auth is on, where Secrets are always granted
+    set:
+      auth.mode: proxy
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["kargo.akuity.io"]
+            resources: ["projectconfigs", "clusterconfigs"]
+            verbs: ["get", "list", "watch"]
+  - it: keeps the grant when the key is missing, as after a --reuse-values upgrade from an older release
+    set:
+      rbac.secrets: true
+      rbac.crdGroups.kargo: null
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["kargo.akuity.io"]
+            resources: ["clusterpromotiontasks", "freights", "projects", "promotionrequests", "promotions", "promotiontasks", "stages", "targets", "warehouses"]
+            verbs: ["get", "list", "watch"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["kargo.akuity.io"]
+            resources: ["projectconfigs", "clusterconfigs"]
+            verbs: ["get", "list", "watch"]
+  - it: removes every Kargo grant when disabled
+    set:
+      rbac.secrets: true
+      rbac.crdGroups.kargo: false
+    asserts:
+      - notContains:
+          path: rules
+          content:
+            apiGroups: ["kargo.akuity.io"]
+            resources: ["clusterpromotiontasks", "freights", "projects", "promotionrequests", "promotions", "promotiontasks", "stages", "targets", "warehouses"]
+            verbs: ["get", "list", "watch"]
+      - notContains:
+          path: rules
+          content:
+            apiGroups: ["kargo.akuity.io"]
+            resources: ["projectconfigs", "clusterconfigs"]
+            verbs: ["get", "list", "watch"]

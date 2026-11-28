@@ -10,6 +10,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -328,6 +329,27 @@ func (p *CacheProvider) PodsOnNode(nodeName string) []Ref {
 	}
 	sortRefs(refs)
 	return refs
+}
+
+// JobController names the controller of a Job, such as the Argo Rollouts
+// AnalysisRun that created it for a Job metric.
+func (p *CacheProvider) JobController(namespace, name string) (Ref, bool) {
+	if p == nil || p.cache == nil || p.cache.Jobs() == nil {
+		return Ref{}, false
+	}
+	job, err := p.cache.Jobs().Jobs(namespace).Get(name)
+	if err != nil {
+		return Ref{}, false
+	}
+	owner := metav1.GetControllerOf(job)
+	if owner == nil {
+		return Ref{}, false
+	}
+	gv, err := schema.ParseGroupVersion(owner.APIVersion)
+	if err != nil {
+		return Ref{}, false
+	}
+	return Ref{Group: gv.Group, Kind: owner.Kind, Namespace: namespace, Name: owner.Name}, true
 }
 
 // PodsMountingPVC returns the pods that mount the named PersistentVolumeClaim

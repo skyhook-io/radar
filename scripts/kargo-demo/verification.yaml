@@ -1,0 +1,19 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: smoke
+  namespace: kargo-demo
+spec:
+  metrics:
+  - name: smoke
+    provider:
+      job:
+        spec:
+          backoffLimit: 0
+          template:
+            spec:
+              restartPolicy: Never
+              containers:
+              - name: smoke
+                image: busybox:1.36
+                command: ["sh", "-c", "echo smoke ok; sleep 5"]

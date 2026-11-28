@@ -30,7 +30,7 @@ func Kinds() []resourceid.GroupKind {
 		IstioGateways, IstioServiceHosts(""), ArgoWorkflowTemplates,
 		TraefikBackends, TraefikRouteConfig, TraefikSecrets, ContourBackends,
 		ContourSecrets, PodPlacement, Reflections, Storage, VolumeSnapshots, RestoredVolumeSnapshots, MachineNodes,
-		AnalysisRuns, SealedSecrets,
+		AnalysisRuns, SealedSecrets, KargoPipeline, KargoArgoCDApps,
 	} {
 		add(f.Targets...)
 		for _, s := range f.Sources {

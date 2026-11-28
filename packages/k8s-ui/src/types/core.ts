@@ -253,6 +253,7 @@ export interface FeatureCapabilities {
   sealedSecretsCert?: boolean // GET /api/sealedsecrets/cert
   workflowStop?: boolean // POST /api/workflows/{namespace}/{name}/stop
   workflowTemplateSubmit?: boolean // POST /api/workflowtemplates/{namespace}/{name}/submit
+  kargoWorkspace?: boolean // GET /api/kargo/workspace, /api/kargo/projects/{project}, /api/kargo/freight-aliases
 }
 
 // DeploymentMode is the closed set of topologies Radar can run in.

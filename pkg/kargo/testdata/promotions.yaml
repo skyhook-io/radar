@@ -1,0 +1,1098 @@
+# Real objects from a Kargo v1.12.7 pipeline (project kargo-demo), trimmed.
+apiVersion: v1
+items:
+- apiVersion: kargo.akuity.io/v1alpha1
+  kind: Promotion
+  metadata:
+    annotations:
+      kargo.akuity.io/create-actor: admin
+      kargo.akuity.io/stage: prod
+    creationTimestamp: '2026-11-25T13:08:43Z'
+    generateName: promo-
+    labels:
+      kargo.akuity.io/stage: prod
+    name: prod.01m89d581n87fzkj3we6wtv6mx.c9e2bdd
+    namespace: kargo-demo
+  spec:
+    freight: c9e2bddf7415b036e09b96946d8ecf3a9a2257e5
+    stage: prod
+    steps:
+    - as: release-gate
+      config:
+        message: change freeze in effect for prod
+      uses: fail
+    - as: promo-process::step-1
+      config:
+        checkout:
+        - branch: main
+          path: ./src
+        - branch: stage/${{ ctx.stage }}
+          create: true
+          path: ./out
+        repoURL: ${{ vars.gitopsRepo }}
+      uses: git-clone
+      vars:
+      - name: gitopsRepo
+        value: http://gitea.gitea.svc.cluster.local:3000/kargo/kargo-demo.git
+      - name: imageRepo
+        value: public.ecr.aws/nginx/nginx
+    - as: promo-process::step-2
+      config:
+        path: ./out
+      uses: git-clear
+      vars:
+      - name: gitopsRepo
+        value: http://gitea.gitea.svc.cluster.local:3000/kargo/kargo-demo.git
+      - name: imageRepo
+        value: public.ecr.aws/nginx/nginx
+    - as: promo-process::update
+      config:
+        images:
+        - image: ${{ vars.imageRepo }}
+          tag: ${{ imageFrom(vars.imageRepo).Tag }}
+        path: ./src/base
+      uses: kustomize-set-image
+      vars:
+      - name: gitopsRepo
+        value: http://gitea.gitea.svc.cluster.local:3000/kargo/kargo-demo.git
+      - name: imageRepo
+        value: public.ecr.aws/nginx/nginx
+    - as: promo-process::step-4
+      config:
+        outPath: ./out
+        path: ./src/stages/${{ ctx.stage }}
+      uses: kustomize-build
+      vars:
+      - name: gitopsRepo
+        value: http://gitea.gitea.svc.cluster.local:3000/kargo/kargo-demo.git
+      - name: imageRepo
+        value: public.ecr.aws/nginx/nginx
+    - as: promo-process::commit
+      config:
+        message: ${{ task.outputs.update.commitMessage }}
+        path: ./out
+      uses: git-commit
+      vars:
+      - name: gitopsRepo
+        value: http://gitea.gitea.svc.cluster.local:3000/kargo/kargo-demo.git
+      - name: imageRepo
+        value: public.ecr.aws/nginx/nginx
+    - as: promo-process::step-6
+      config:
+        path: ./out
+      uses: git-push
+      vars:
+      - name: gitopsRepo
+        value: http://gitea.gitea.svc.cluster.local:3000/kargo/kargo-demo.git
+      - name: imageRepo
+        value: public.ecr.aws/nginx/nginx
+    - as: promo-process::step-7
+      config:
+        apps:
+        - name: kargo-demo-${{ ctx.stage }}
+          sources:
+          - desiredRevision: ${{ task.outputs.commit.commit }}
+            repoURL: ${{ vars.gitopsRepo }}
+      uses: argocd-update
+      vars:
+      - name: gitopsRepo
+        value: http://gitea.gitea.svc.cluster.local:3000/kargo/kargo-demo.git
+      - name: imageRepo
+        value: public.ecr.aws/nginx/nginx
+  status:
+    currentStep: 7
+    finishedAt: '2026-11-25T13:08:43Z'
+    freight:
+      images:
+      - digest: sha256:7cdd7d67af427e78edfa77db29cc13a9ada62cc0c89beaf05f8d3c5d3f9ac3da
+        repoURL: public.ecr.aws/nginx/nginx
+        tag: 1.31.9
+      name: c9e2bddf7415b036e09b96946d8ecf3a9a2257e5
+      origin:
+        kind: Warehouse
+        name: kargo-demo
+    freightCollection:
+      id: 7bbc8df2bedd6928df2f79b98f9e8cd449ac072a
+      items:
+        Warehouse/kargo-demo:
+          images:
+          - digest: sha256:7cdd7d67af427e78edfa77db29cc13a9ada62cc0c89beaf05f8d3c5d3f9ac3da
+            repoURL: public.ecr.aws/nginx/nginx
+            tag: 1.31.9
+          name: c9e2bddf7415b036e09b96946d8ecf3a9a2257e5
+          origin:
+            kind: Warehouse
+            name: kargo-demo
+    message: 'step "release-gate": failed: change freeze in effect for prod'
+    phase: Failed
+    startedAt: '2026-11-25T13:08:43Z'
+    stepExecutionMetadata:
+    - alias: release-gate
+      finishedAt: '2026-11-25T13:08:43Z'
+      message: 'step "release-gate": failed: change freeze in effect for prod'
+      startedAt: '2026-11-25T13:08:43Z'
+      status: Failed
+    - alias: promo-process::step-1
+      status: Skipped
+    - alias: promo-process::step-2
+      status: Skipped
+    - alias: promo-process::update
+      status: Skipped
+    - alias: promo-process::step-4
+      status: Skipped
+    - alias: promo-process::commit
+      status: Skipped
+    - alias: promo-process::step-6
+      status: Skipped
+    - alias: promo-process::step-7
+      status: Skipped
+- apiVersion: kargo.akuity.io/v1alpha1
+  kind: Promotion
+  metadata:
+    annotations:
+      kargo.akuity.io/create-actor: admin
+      kargo.akuity.io/stage: prod
+    creationTimestamp: '2026-11-25T13:08:43Z'
+    generateName: promo-
+    labels:
+      kargo.akuity.io/stage: prod
+    name: prod.01m89d58tnm1cymat6bvc5jwgw.c9e2bdd
+    namespace: kargo-demo
+  spec:
+    freight: c9e2bddf7415b036e09b96946d8ecf3a9a2257e5
+    stage: prod
+    steps:
+    - as: promo-process::step-1
+      config:
+        checkout:
+        - branch: main
+          path: ./src
+        - branch: stage/${{ ctx.stage }}
+          create: true
+          path: ./out
+        repoURL: ${{ vars.gitopsRepo }}
+      uses: git-clone
+      vars:
+      - name: gitopsRepo
+        value: http://gitea.gitea.svc.cluster.local:3000/kargo/kargo-demo.git
+      - name: imageRepo
+        value: public.ecr.aws/nginx/nginx
+    - as: promo-process::step-2
+      config:
+        path: ./out
+      uses: git-clear
+      vars:
+      - name: gitopsRepo
+        value: http://gitea.gitea.svc.cluster.local:3000/kargo/kargo-demo.git
+      - name: imageRepo
+        value: public.ecr.aws/nginx/nginx
+    - as: promo-process::update
+      config:
+        images:
+        - image: ${{ vars.imageRepo }}
+          tag: ${{ imageFrom(vars.imageRepo).Tag }}
+        path: ./src/base
+      uses: kustomize-set-image
+      vars:
+      - name: gitopsRepo
+        value: http://gitea.gitea.svc.cluster.local:3000/kargo/kargo-demo.git
+      - name: imageRepo
+        value: public.ecr.aws/nginx/nginx
+    - as: promo-process::step-4
+      config:
+        outPath: ./out
+        path: ./src/stages/${{ ctx.stage }}
+      uses: kustomize-build
+      vars:
+      - name: gitopsRepo
+        value: http://gitea.gitea.svc.cluster.local:3000/kargo/kargo-demo.git
+      - name: imageRepo
+        value: public.ecr.aws/nginx/nginx
+    - as: promo-process::commit
+      config:
+        message: ${{ task.outputs.update.commitMessage }}
+        path: ./out
+      uses: git-commit
+      vars:
+      - name: gitopsRepo
+        value: http://gitea.gitea.svc.cluster.local:3000/kargo/kargo-demo.git
+      - name: imageRepo
+        value: public.ecr.aws/nginx/nginx
+    - as: promo-process::step-6
+      config:
+        path: ./out
+      uses: git-push
+      vars:
+      - name: gitopsRepo
+        value: http://gitea.gitea.svc.cluster.local:3000/kargo/kargo-demo.git
+      - name: imageRepo
+        value: public.ecr.aws/nginx/nginx
+    - as: promo-process::step-7
+      config:
+        apps:
+        - name: kargo-demo-${{ ctx.stage }}
+          sources:
+          - desiredRevision: ${{ task.outputs.commit.commit }}
+            repoURL: ${{ vars.gitopsRepo }}
+      uses: argocd-update
+      vars:
+      - name: gitopsRepo
+        value: http://gitea.gitea.svc.cluster.local:3000/kargo/kargo-demo.git
+      - name: imageRepo
+        value: public.ecr.aws/nginx/nginx
+  status:
+    currentStep: 6
+    finishedAt: '2026-11-25T13:08:45Z'
+    freight:
+      images:
+      - digest: sha256:7cdd7d67af427e78edfa77db29cc13a9ada62cc0c89beaf05f8d3c5d3f9ac3da
+        repoURL: public.ecr.aws/nginx/nginx
+        tag: 1.31.9
+      name: c9e2bddf7415b036e09b96946d8ecf3a9a2257e5
+      origin:
+        kind: Warehouse
+        name: kargo-demo
+    freightCollection:
+      id: 7bbc8df2bedd6928df2f79b98f9e8cd449ac072a
+      items:
+        Warehouse/kargo-demo:
+          images:
+          - digest: sha256:7cdd7d67af427e78edfa77db29cc13a9ada62cc0c89beaf05f8d3c5d3f9ac3da
+            repoURL: public.ecr.aws/nginx/nginx
+            tag: 1.31.9
+          name: c9e2bddf7415b036e09b96946d8ecf3a9a2257e5
+          origin:
+            kind: Warehouse
+            name: kargo-demo
+    healthChecks:
+    - config:
+        apps:
+        - desiredRevisions:
+          - d700e31f468a7197885b87a9b3fe8604010bd409
+          name: kargo-demo-prod
+          namespace: argocd
+      uses: argocd-update
+    phase: Succeeded
+    startedAt: '2026-11-25T13:08:44Z'
+    stepExecutionMetadata:
+    - alias: promo-process::step-1
+      finishedAt: '2026-11-25T13:08:45Z'
+      startedAt: '2026-11-25T13:08:44Z'
+      status: Succeeded
+    - alias: promo-process::step-2
+      finishedAt: '2026-11-25T13:08:45Z'
+      startedAt: '2026-11-25T13:08:45Z'
+      status: Succeeded
+    - alias: promo-process::update
+      finishedAt: '2026-11-25T13:08:45Z'
+      startedAt: '2026-11-25T13:08:45Z'
+      status: Succeeded
+    - alias: promo-process::step-4
+      finishedAt: '2026-11-25T13:08:45Z'
+      startedAt: '2026-11-25T13:08:45Z'
+      status: Succeeded
+    - alias: promo-process::commit
+      finishedAt: '2026-11-25T13:08:45Z'
+      startedAt: '2026-11-25T13:08:45Z'
+      status: Succeeded
+    - alias: promo-process::step-6
+      finishedAt: '2026-11-25T13:08:45Z'
+      startedAt: '2026-11-25T13:08:45Z'
+      status: Succeeded
+    - alias: promo-process::step-7
+      finishedAt: '2026-11-25T13:08:45Z'
+      startedAt: '2026-11-25T13:08:45Z'
+      status: Succeeded
+- apiVersion: kargo.akuity.io/v1alpha1
+  kind: Promotion
+  metadata:
+    annotations:
+      kargo.akuity.io/create-actor: admin
+      kargo.akuity.io/stage: test
+    creationTimestamp: '2026-11-25T13:08:14Z'
+    generateName: promo-
+    labels:
+      kargo.akuity.io/stage: test
+    name: test.01m89d4c4hekjycm58gpam49jx.c9e2bdd
+    namespace: kargo-demo
+  spec:
+    freight: c9e2bddf7415b036e09b96946d8ecf3a9a2257e5
+    stage: test
+    steps:
+    - as: promo-process::step-1
+      config:
+        checkout:
+        - branch: main
+          path: ./src
+        - branch: stage/${{ ctx.stage }}
+          create: true
+          path: ./out
+        repoURL: ${{ vars.gitopsRepo }}
+      uses: git-clone
+      vars:
+      - name: gitopsRepo
+        value: http://gitea.gitea.svc.cluster.local:3000/kargo/kargo-demo.git
+      - name: imageRepo
+        value: public.ecr.aws/nginx/nginx
+    - as: promo-process::step-2
+      config:
+        path: ./out
+      uses: git-clear
+      vars:
+      - name: gitopsRepo
+        value: http://gitea.gitea.svc.cluster.local:3000/kargo/kargo-demo.git
+      - name: imageRepo
+        value: public.ecr.aws/nginx/nginx
+    - as: promo-process::update
+      config:
+        images:
+        - image: ${{ vars.imageRepo }}
+          tag: ${{ imageFrom(vars.imageRepo).Tag }}
+        path: ./src/base
+      uses: kustomize-set-image
+      vars:
+      - name: gitopsRepo
+        value: http://gitea.gitea.svc.cluster.local:3000/kargo/kargo-demo.git
+      - name: imageRepo
+        value: public.ecr.aws/nginx/nginx
+    - as: promo-process::step-4
+      config:
+        outPath: ./out
+        path: ./src/stages/${{ ctx.stage }}
+      uses: kustomize-build
+      vars:
+      - name: gitopsRepo
+        value: http://gitea.gitea.svc.cluster.local:3000/kargo/kargo-demo.git
+      - name: imageRepo
+        value: public.ecr.aws/nginx/nginx
+    - as: promo-process::commit
+      config:
+        message: ${{ task.outputs.update.commitMessage }}
+        path: ./out
+      uses: git-commit
+      vars:
+      - name: gitopsRepo
+        value: http://gitea.gitea.svc.cluster.local:3000/kargo/kargo-demo.git
+      - name: imageRepo
+        value: public.ecr.aws/nginx/nginx
+    - as: promo-process::step-6
+      config:
+        path: ./out
+      uses: git-push
+      vars:
+      - name: gitopsRepo
+        value: http://gitea.gitea.svc.cluster.local:3000/kargo/kargo-demo.git
+      - name: imageRepo
+        value: public.ecr.aws/nginx/nginx
+    - as: promo-process::step-7
+      config:
+        apps:
+        - name: kargo-demo-${{ ctx.stage }}
+          sources:
+          - desiredRevision: ${{ task.outputs.commit.commit }}
+            repoURL: ${{ vars.gitopsRepo }}
+      uses: argocd-update
+      vars:
+      - name: gitopsRepo
+        value: http://gitea.gitea.svc.cluster.local:3000/kargo/kargo-demo.git
+      - name: imageRepo
+        value: public.ecr.aws/nginx/nginx
+  status:
+    currentStep: 6
+    finishedAt: '2026-11-25T13:08:15Z'
+    freight:
+      images:
+      - digest: sha256:7cdd7d67af427e78edfa77db29cc13a9ada62cc0c89beaf05f8d3c5d3f9ac3da
+        repoURL: public.ecr.aws/nginx/nginx
+        tag: 1.31.9
+      name: c9e2bddf7415b036e09b96946d8ecf3a9a2257e5
+      origin:
+        kind: Warehouse
+        name: kargo-demo
+    freightCollection:
+      id: 7bbc8df2bedd6928df2f79b98f9e8cd449ac072a
+      items:
+        Warehouse/kargo-demo:
+          images:
+          - digest: sha256:7cdd7d67af427e78edfa77db29cc13a9ada62cc0c89beaf05f8d3c5d3f9ac3da
+            repoURL: public.ecr.aws/nginx/nginx
+            tag: 1.31.9
+          name: c9e2bddf7415b036e09b96946d8ecf3a9a2257e5
+          origin:
+            kind: Warehouse
+            name: kargo-demo
+    healthChecks:
+    - config:
+        apps:
+        - desiredRevisions:
+          - 76a37bd4ec9e81defe93cf71edcb94f392d84441
+          name: kargo-demo-test
+          namespace: argocd
+      uses: argocd-update
+    phase: Succeeded
+    startedAt: '2026-11-25T13:08:14Z'
+    stepExecutionMetadata:
+    - alias: promo-process::step-1
+      finishedAt: '2026-11-25T13:08:15Z'
+      startedAt: '2026-11-25T13:08:14Z'
+      status: Succeeded
+    - alias: promo-process::step-2
+      finishedAt: '2026-11-25T13:08:15Z'
+      startedAt: '2026-11-25T13:08:15Z'
+      status: Succeeded
+    - alias: promo-process::update
+      finishedAt: '2026-11-25T13:08:15Z'
+      startedAt: '2026-11-25T13:08:15Z'
+      status: Succeeded
+    - alias: promo-process::step-4
+      finishedAt: '2026-11-25T13:08:15Z'
+      startedAt: '2026-11-25T13:08:15Z'
+      status: Succeeded
+    - alias: promo-process::commit
+      finishedAt: '2026-11-25T13:08:15Z'
+      startedAt: '2026-11-25T13:08:15Z'
+      status: Succeeded
+    - alias: promo-process::step-6
+      finishedAt: '2026-11-25T13:08:15Z'
+      startedAt: '2026-11-25T13:08:15Z'
+      status: Succeeded
+    - alias: promo-process::step-7
+      finishedAt: '2026-11-25T13:08:15Z'
+      startedAt: '2026-11-25T13:08:15Z'
+      status: Succeeded
+- apiVersion: kargo.akuity.io/v1alpha1
+  kind: Promotion
+  metadata:
+    annotations:
+      kargo.akuity.io/create-actor: admin
+      kargo.akuity.io/stage: test
+    creationTimestamp: '2026-11-25T13:08:49Z'
+    generateName: promo-
+    labels:
+      kargo.akuity.io/stage: test
+    name: test.01m89d5efdhmj5k7yaqc9qyctq.b56f6e3
+    namespace: kargo-demo
+  spec:
+    freight: b56f6e30e82989f403c760e5d534403854ce59ef
+    stage: test
+    steps:
+    - as: promo-process::step-1
+      config:
+        checkout:
+        - branch: main
+          path: ./src
+        - branch: stage/${{ ctx.stage }}
+          create: true
+          path: ./out
+        repoURL: ${{ vars.gitopsRepo }}
+      uses: git-clone
+      vars:
+      - name: gitopsRepo
+        value: http://gitea.gitea.svc.cluster.local:3000/kargo/kargo-demo.git
+      - name: imageRepo
+        value: public.ecr.aws/nginx/nginx
+    - as: promo-process::step-2
+      config:
+        path: ./out
+      uses: git-clear
+      vars:
+      - name: gitopsRepo
+        value: http://gitea.gitea.svc.cluster.local:3000/kargo/kargo-demo.git
+      - name: imageRepo
+        value: public.ecr.aws/nginx/nginx
+    - as: promo-process::update
+      config:
+        images:
+        - image: ${{ vars.imageRepo }}
+          tag: ${{ imageFrom(vars.imageRepo).Tag }}
+        path: ./src/base
+      uses: kustomize-set-image
+      vars:
+      - name: gitopsRepo
+        value: http://gitea.gitea.svc.cluster.local:3000/kargo/kargo-demo.git
+      - name: imageRepo
+        value: public.ecr.aws/nginx/nginx
+    - as: promo-process::step-4
+      config:
+        outPath: ./out
+        path: ./src/stages/${{ ctx.stage }}
+      uses: kustomize-build
+      vars:
+      - name: gitopsRepo
+        value: http://gitea.gitea.svc.cluster.local:3000/kargo/kargo-demo.git
+      - name: imageRepo
+        value: public.ecr.aws/nginx/nginx
+    - as: promo-process::commit
+      config:
+        message: ${{ task.outputs.update.commitMessage }}
+        path: ./out
+      uses: git-commit
+      vars:
+      - name: gitopsRepo
+        value: http://gitea.gitea.svc.cluster.local:3000/kargo/kargo-demo.git
+      - name: imageRepo
+        value: public.ecr.aws/nginx/nginx
+    - as: promo-process::step-6
+      config:
+        path: ./out
+      uses: git-push
+      vars:
+      - name: gitopsRepo
+        value: http://gitea.gitea.svc.cluster.local:3000/kargo/kargo-demo.git
+      - name: imageRepo
+        value: public.ecr.aws/nginx/nginx
+    - as: promo-process::step-7
+      config:
+        apps:
+        - name: kargo-demo-${{ ctx.stage }}
+          sources:
+          - desiredRevision: ${{ task.outputs.commit.commit }}
+            repoURL: ${{ vars.gitopsRepo }}
+      uses: argocd-update
+      vars:
+      - name: gitopsRepo
+        value: http://gitea.gitea.svc.cluster.local:3000/kargo/kargo-demo.git
+      - name: imageRepo
+        value: public.ecr.aws/nginx/nginx
+  status:
+    currentStep: 6
+    finishedAt: '2026-11-25T13:08:50Z'
+    freight:
+      images:
+      - digest: sha256:9ce62af8c757d8e49d85804dc72092119b1ff80a3133e78dd968842b9f9dda07
+        repoURL: public.ecr.aws/nginx/nginx
+        tag: 1.31.10
+      name: b56f6e30e82989f403c760e5d534403854ce59ef
+      origin:
+        kind: Warehouse
+        name: kargo-demo
+    freightCollection:
+      id: 7c6082af37571cf271f35aca5d5245afca02d72f
+      items:
+        Warehouse/kargo-demo:
+          images:
+          - digest: sha256:9ce62af8c757d8e49d85804dc72092119b1ff80a3133e78dd968842b9f9dda07
+            repoURL: public.ecr.aws/nginx/nginx
+            tag: 1.31.10
+          name: b56f6e30e82989f403c760e5d534403854ce59ef
+          origin:
+            kind: Warehouse
+            name: kargo-demo
+    healthChecks:
+    - config:
+        apps:
+        - desiredRevisions:
+          - f7626b924214fcb36c6a88b401472999940e1965
+          name: kargo-demo-test
+          namespace: argocd
+      uses: argocd-update
+    phase: Succeeded
+    startedAt: '2026-11-25T13:08:49Z'
+    stepExecutionMetadata:
+    - alias: promo-process::step-1
+      finishedAt: '2026-11-25T13:08:49Z'
+      startedAt: '2026-11-25T13:08:49Z'
+      status: Succeeded
+    - alias: promo-process::step-2
+      finishedAt: '2026-11-25T13:08:49Z'
+      startedAt: '2026-11-25T13:08:49Z'
+      status: Succeeded
+    - alias: promo-process::update
+      finishedAt: '2026-11-25T13:08:49Z'
+      startedAt: '2026-11-25T13:08:49Z'
+      status: Succeeded
+    - alias: promo-process::step-4
+      finishedAt: '2026-11-25T13:08:49Z'
+      startedAt: '2026-11-25T13:08:49Z'
+      status: Succeeded
+    - alias: promo-process::commit
+      finishedAt: '2026-11-25T13:08:49Z'
+      startedAt: '2026-11-25T13:08:49Z'
+      status: Succeeded
+    - alias: promo-process::step-6
+      finishedAt: '2026-11-25T13:08:50Z'
+      startedAt: '2026-11-25T13:08:49Z'
+      status: Succeeded
+    - alias: promo-process::step-7
+      finishedAt: '2026-11-25T13:08:50Z'
+      startedAt: '2026-11-25T13:08:50Z'
+      status: Succeeded
+- apiVersion: kargo.akuity.io/v1alpha1
+  kind: Promotion
+  metadata:
+    annotations:
+      kargo.akuity.io/create-actor: admin
+      kargo.akuity.io/stage: test
+    creationTimestamp: '2026-11-25T13:09:26Z'
+    generateName: promo-
+    labels:
+      kargo.akuity.io/stage: test
+    name: test.01m89d6j01phpbye0vx2ftjhrh.b56f6e3
+    namespace: kargo-demo
+  spec:
+    freight: b56f6e30e82989f403c760e5d534403854ce59ef
+    stage: test
+    steps:
+    - as: promo-process::step-1
+      config:
+        checkout:
+        - branch: main
+          path: ./src
+        - branch: stage/${{ ctx.stage }}
+          create: true
+          path: ./out
+        repoURL: ${{ vars.gitopsRepo }}
+      uses: git-clone
+      vars:
+      - name: gitopsRepo
+        value: http://gitea.gitea.svc.cluster.local:3000/kargo/kargo-demo.git
+      - name: imageRepo
+        value: public.ecr.aws/nginx/nginx
+    - as: promo-process::step-2
+      config:
+        path: ./out
+      uses: git-clear
+      vars:
+      - name: gitopsRepo
+        value: http://gitea.gitea.svc.cluster.local:3000/kargo/kargo-demo.git
+      - name: imageRepo
+        value: public.ecr.aws/nginx/nginx
+    - as: promo-process::update
+      config:
+        images:
+        - image: ${{ vars.imageRepo }}
+          tag: ${{ imageFrom(vars.imageRepo).Tag }}
+        path: ./src/base
+      uses: kustomize-set-image
+      vars:
+      - name: gitopsRepo
+        value: http://gitea.gitea.svc.cluster.local:3000/kargo/kargo-demo.git
+      - name: imageRepo
+        value: public.ecr.aws/nginx/nginx
+    - as: promo-process::step-4
+      config:
+        outPath: ./out
+        path: ./src/stages/${{ ctx.stage }}
+      uses: kustomize-build
+      vars:
+      - name: gitopsRepo
+        value: http://gitea.gitea.svc.cluster.local:3000/kargo/kargo-demo.git
+      - name: imageRepo
+        value: public.ecr.aws/nginx/nginx
+    - as: promo-process::commit
+      config:
+        message: ${{ task.outputs.update.commitMessage }}
+        path: ./out
+      uses: git-commit
+      vars:
+      - name: gitopsRepo
+        value: http://gitea.gitea.svc.cluster.local:3000/kargo/kargo-demo.git
+      - name: imageRepo
+        value: public.ecr.aws/nginx/nginx
+    - as: promo-process::step-6
+      config:
+        path: ./out
+      uses: git-push
+      vars:
+      - name: gitopsRepo
+        value: http://gitea.gitea.svc.cluster.local:3000/kargo/kargo-demo.git
+      - name: imageRepo
+        value: public.ecr.aws/nginx/nginx
+    - as: promo-process::step-7
+      config:
+        apps:
+        - name: kargo-demo-${{ ctx.stage }}
+          sources:
+          - desiredRevision: ${{ task.outputs.commit.commit }}
+            repoURL: ${{ vars.gitopsRepo }}
+      uses: argocd-update
+      vars:
+      - name: gitopsRepo
+        value: http://gitea.gitea.svc.cluster.local:3000/kargo/kargo-demo.git
+      - name: imageRepo
+        value: public.ecr.aws/nginx/nginx
+  status:
+    currentStep: 6
+    finishedAt: '2026-11-25T13:09:27Z'
+    freight:
+      images:
+      - digest: sha256:9ce62af8c757d8e49d85804dc72092119b1ff80a3133e78dd968842b9f9dda07
+        repoURL: public.ecr.aws/nginx/nginx
+        tag: 1.31.10
+      name: b56f6e30e82989f403c760e5d534403854ce59ef
+      origin:
+        kind: Warehouse
+        name: kargo-demo
+    freightCollection:
+      id: 7c6082af37571cf271f35aca5d5245afca02d72f
+      items:
+        Warehouse/kargo-demo:
+          images:
+          - digest: sha256:9ce62af8c757d8e49d85804dc72092119b1ff80a3133e78dd968842b9f9dda07
+            repoURL: public.ecr.aws/nginx/nginx
+            tag: 1.31.10
+          name: b56f6e30e82989f403c760e5d534403854ce59ef
+          origin:
+            kind: Warehouse
+            name: kargo-demo
+    message: 'step "promo-process::step-6" met error threshold of 1: error running
+      step "promo-process::step-6": error pushing commits to remote: error pushing
+      branch: error executing cmd [/usr/bin/git push origin HEAD:stage/test]: fatal:
+      could not read Username for ''http://gitea.gitea.svc.cluster.local:3000'': No
+      such device or address
+
+      '
+    phase: Errored
+    startedAt: '2026-11-25T13:09:26Z'
+    stepExecutionMetadata:
+    - alias: promo-process::step-1
+      finishedAt: '2026-11-25T13:09:27Z'
+      startedAt: '2026-11-25T13:09:26Z'
+      status: Succeeded
+    - alias: promo-process::step-2
+      finishedAt: '2026-11-25T13:09:27Z'
+      startedAt: '2026-11-25T13:09:27Z'
+      status: Succeeded
+    - alias: promo-process::update
+      finishedAt: '2026-11-25T13:09:27Z'
+      startedAt: '2026-11-25T13:09:27Z'
+      status: Succeeded
+    - alias: promo-process::step-4
+      finishedAt: '2026-11-25T13:09:27Z'
+      startedAt: '2026-11-25T13:09:27Z'
+      status: Succeeded
+    - alias: promo-process::commit
+      finishedAt: '2026-11-25T13:09:27Z'
+      startedAt: '2026-11-25T13:09:27Z'
+      status: Skipped
+    - alias: promo-process::step-6
+      errorCount: 1
+      finishedAt: '2026-11-25T13:09:27Z'
+      message: 'step "promo-process::step-6" met error threshold of 1: error running
+        step "promo-process::step-6": error pushing commits to remote: error pushing
+        branch: error executing cmd [/usr/bin/git push origin HEAD:stage/test]: fatal:
+        could not read Username for ''http://gitea.gitea.svc.cluster.local:3000'':
+        No such device or address
+
+        '
+      startedAt: '2026-11-25T13:09:27Z'
+      status: Errored
+    - alias: promo-process::step-7
+      status: Skipped
+- apiVersion: kargo.akuity.io/v1alpha1
+  kind: Promotion
+  metadata:
+    annotations:
+      kargo.akuity.io/create-actor: admin
+      kargo.akuity.io/stage: uat
+    creationTimestamp: '2026-11-25T13:08:28Z'
+    generateName: promo-
+    labels:
+      kargo.akuity.io/stage: uat
+    name: uat.01m89d4srbrf85xe4nwvvsvem2.c9e2bdd
+    namespace: kargo-demo
+  spec:
+    freight: c9e2bddf7415b036e09b96946d8ecf3a9a2257e5
+    stage: uat
+    steps:
+    - as: promo-process::step-1
+      config:
+        checkout:
+        - branch: main
+          path: ./src
+        - branch: stage/${{ ctx.stage }}
+          create: true
+          path: ./out
+        repoURL: ${{ vars.gitopsRepo }}
+      uses: git-clone
+      vars:
+      - name: gitopsRepo
+        value: http://gitea.gitea.svc.cluster.local:3000/kargo/kargo-demo.git
+      - name: imageRepo
+        value: public.ecr.aws/nginx/nginx
+    - as: promo-process::step-2
+      config:
+        path: ./out
+      uses: git-clear
+      vars:
+      - name: gitopsRepo
+        value: http://gitea.gitea.svc.cluster.local:3000/kargo/kargo-demo.git
+      - name: imageRepo
+        value: public.ecr.aws/nginx/nginx
+    - as: promo-process::update
+      config:
+        images:
+        - image: ${{ vars.imageRepo }}
+          tag: ${{ imageFrom(vars.imageRepo).Tag }}
+        path: ./src/base
+      uses: kustomize-set-image
+      vars:
+      - name: gitopsRepo
+        value: http://gitea.gitea.svc.cluster.local:3000/kargo/kargo-demo.git
+      - name: imageRepo
+        value: public.ecr.aws/nginx/nginx
+    - as: promo-process::step-4
+      config:
+        outPath: ./out
+        path: ./src/stages/${{ ctx.stage }}
+      uses: kustomize-build
+      vars:
+      - name: gitopsRepo
+        value: http://gitea.gitea.svc.cluster.local:3000/kargo/kargo-demo.git
+      - name: imageRepo
+        value: public.ecr.aws/nginx/nginx
+    - as: promo-process::commit
+      config:
+        message: ${{ task.outputs.update.commitMessage }}
+        path: ./out
+      uses: git-commit
+      vars:
+      - name: gitopsRepo
+        value: http://gitea.gitea.svc.cluster.local:3000/kargo/kargo-demo.git
+      - name: imageRepo
+        value: public.ecr.aws/nginx/nginx
+    - as: promo-process::step-6
+      config:
+        path: ./out
+      uses: git-push
+      vars:
+      - name: gitopsRepo
+        value: http://gitea.gitea.svc.cluster.local:3000/kargo/kargo-demo.git
+      - name: imageRepo
+        value: public.ecr.aws/nginx/nginx
+    - as: promo-process::step-7
+      config:
+        apps:
+        - name: kargo-demo-${{ ctx.stage }}
+          sources:
+          - desiredRevision: ${{ task.outputs.commit.commit }}
+            repoURL: ${{ vars.gitopsRepo }}
+      uses: argocd-update
+      vars:
+      - name: gitopsRepo
+        value: http://gitea.gitea.svc.cluster.local:3000/kargo/kargo-demo.git
+      - name: imageRepo
+        value: public.ecr.aws/nginx/nginx
+  status:
+    currentStep: 6
+    finishedAt: '2026-11-25T13:08:29Z'
+    freight:
+      images:
+      - digest: sha256:7cdd7d67af427e78edfa77db29cc13a9ada62cc0c89beaf05f8d3c5d3f9ac3da
+        repoURL: public.ecr.aws/nginx/nginx
+        tag: 1.31.9
+      name: c9e2bddf7415b036e09b96946d8ecf3a9a2257e5
+      origin:
+        kind: Warehouse
+        name: kargo-demo
+    freightCollection:
+      id: 7bbc8df2bedd6928df2f79b98f9e8cd449ac072a
+      items:
+        Warehouse/kargo-demo:
+          images:
+          - digest: sha256:7cdd7d67af427e78edfa77db29cc13a9ada62cc0c89beaf05f8d3c5d3f9ac3da
+            repoURL: public.ecr.aws/nginx/nginx
+            tag: 1.31.9
+          name: c9e2bddf7415b036e09b96946d8ecf3a9a2257e5
+          origin:
+            kind: Warehouse
+            name: kargo-demo
+    healthChecks:
+    - config:
+        apps:
+        - desiredRevisions:
+          - 7458fbf5a0805b52671ae3b8747eb2c45a4e4900
+          name: kargo-demo-uat
+          namespace: argocd
+      uses: argocd-update
+    phase: Succeeded
+    startedAt: '2026-11-25T13:08:28Z'
+    stepExecutionMetadata:
+    - alias: promo-process::step-1
+      finishedAt: '2026-11-25T13:08:29Z'
+      startedAt: '2026-11-25T13:08:28Z'
+      status: Succeeded
+    - alias: promo-process::step-2
+      finishedAt: '2026-11-25T13:08:29Z'
+      startedAt: '2026-11-25T13:08:29Z'
+      status: Succeeded
+    - alias: promo-process::update
+      finishedAt: '2026-11-25T13:08:29Z'
+      startedAt: '2026-11-25T13:08:29Z'
+      status: Succeeded
+    - alias: promo-process::step-4
+      finishedAt: '2026-11-25T13:08:29Z'
+      startedAt: '2026-11-25T13:08:29Z'
+      status: Succeeded
+    - alias: promo-process::commit
+      finishedAt: '2026-11-25T13:08:29Z'
+      startedAt: '2026-11-25T13:08:29Z'
+      status: Succeeded
+    - alias: promo-process::step-6
+      finishedAt: '2026-11-25T13:08:29Z'
+      startedAt: '2026-11-25T13:08:29Z'
+      status: Succeeded
+    - alias: promo-process::step-7
+      finishedAt: '2026-11-25T13:08:29Z'
+      startedAt: '2026-11-25T13:08:29Z'
+      status: Succeeded
+- apiVersion: kargo.akuity.io/v1alpha1
+  kind: Promotion
+  metadata:
+    annotations:
+      kargo.akuity.io/create-actor: admin
+      kargo.akuity.io/stage: uat
+    creationTimestamp: '2026-11-25T13:09:04Z'
+    generateName: promo-
+    labels:
+      kargo.akuity.io/stage: uat
+    name: uat.01m89d5wygkj42skjy4ar9hg60.b56f6e3
+    namespace: kargo-demo
+  spec:
+    freight: b56f6e30e82989f403c760e5d534403854ce59ef
+    stage: uat
+    steps:
+    - as: promo-process::step-1
+      config:
+        checkout:
+        - branch: main
+          path: ./src
+        - branch: stage/${{ ctx.stage }}
+          create: true
+          path: ./out
+        repoURL: ${{ vars.gitopsRepo }}
+      uses: git-clone
+      vars:
+      - name: gitopsRepo
+        value: http://gitea.gitea.svc.cluster.local:3000/kargo/kargo-demo.git
+      - name: imageRepo
+        value: public.ecr.aws/nginx/nginx
+    - as: promo-process::step-2
+      config:
+        path: ./out
+      uses: git-clear
+      vars:
+      - name: gitopsRepo
+        value: http://gitea.gitea.svc.cluster.local:3000/kargo/kargo-demo.git
+      - name: imageRepo
+        value: public.ecr.aws/nginx/nginx
+    - as: promo-process::update
+      config:
+        images:
+        - image: ${{ vars.imageRepo }}
+          tag: ${{ imageFrom(vars.imageRepo).Tag }}
+        path: ./src/base
+      uses: kustomize-set-image
+      vars:
+      - name: gitopsRepo
+        value: http://gitea.gitea.svc.cluster.local:3000/kargo/kargo-demo.git
+      - name: imageRepo
+        value: public.ecr.aws/nginx/nginx
+    - as: promo-process::step-4
+      config:
+        outPath: ./out
+        path: ./src/stages/${{ ctx.stage }}
+      uses: kustomize-build
+      vars:
+      - name: gitopsRepo
+        value: http://gitea.gitea.svc.cluster.local:3000/kargo/kargo-demo.git
+      - name: imageRepo
+        value: public.ecr.aws/nginx/nginx
+    - as: promo-process::commit
+      config:
+        message: ${{ task.outputs.update.commitMessage }}
+        path: ./out
+      uses: git-commit
+      vars:
+      - name: gitopsRepo
+        value: http://gitea.gitea.svc.cluster.local:3000/kargo/kargo-demo.git
+      - name: imageRepo
+        value: public.ecr.aws/nginx/nginx
+    - as: promo-process::step-6
+      config:
+        path: ./out
+      uses: git-push
+      vars:
+      - name: gitopsRepo
+        value: http://gitea.gitea.svc.cluster.local:3000/kargo/kargo-demo.git
+      - name: imageRepo
+        value: public.ecr.aws/nginx/nginx
+    - as: promo-process::step-7
+      config:
+        apps:
+        - name: kargo-demo-${{ ctx.stage }}
+          sources:
+          - desiredRevision: ${{ task.outputs.commit.commit }}
+            repoURL: ${{ vars.gitopsRepo }}
+      uses: argocd-update
+      vars:
+      - name: gitopsRepo
+        value: http://gitea.gitea.svc.cluster.local:3000/kargo/kargo-demo.git
+      - name: imageRepo
+        value: public.ecr.aws/nginx/nginx
+  status:
+    currentStep: 6
+    finishedAt: '2026-11-25T13:09:05Z'
+    freight:
+      images:
+      - digest: sha256:9ce62af8c757d8e49d85804dc72092119b1ff80a3133e78dd968842b9f9dda07
+        repoURL: public.ecr.aws/nginx/nginx
+        tag: 1.31.10
+      name: b56f6e30e82989f403c760e5d534403854ce59ef
+      origin:
+        kind: Warehouse
+        name: kargo-demo
+    freightCollection:
+      id: 7c6082af37571cf271f35aca5d5245afca02d72f
+      items:
+        Warehouse/kargo-demo:
+          images:
+          - digest: sha256:9ce62af8c757d8e49d85804dc72092119b1ff80a3133e78dd968842b9f9dda07
+            repoURL: public.ecr.aws/nginx/nginx
+            tag: 1.31.10
+          name: b56f6e30e82989f403c760e5d534403854ce59ef
+          origin:
+            kind: Warehouse
+            name: kargo-demo
+    healthChecks:
+    - config:
+        apps:
+        - desiredRevisions:
+          - 438a08307acf2e0946ecc0239c86f2a1bbdfece6
+          name: kargo-demo-uat
+          namespace: argocd
+      uses: argocd-update
+    phase: Succeeded
+    startedAt: '2026-11-25T13:09:04Z'
+    stepExecutionMetadata:
+    - alias: promo-process::step-1
+      finishedAt: '2026-11-25T13:09:04Z'
+      startedAt: '2026-11-25T13:09:04Z'
+      status: Succeeded
+    - alias: promo-process::step-2
+      finishedAt: '2026-11-25T13:09:04Z'
+      startedAt: '2026-11-25T13:09:04Z'
+      status: Succeeded
+    - alias: promo-process::update
+      finishedAt: '2026-11-25T13:09:04Z'
+      startedAt: '2026-11-25T13:09:04Z'
+      status: Succeeded
+    - alias: promo-process::step-4
+      finishedAt: '2026-11-25T13:09:04Z'
+      startedAt: '2026-11-25T13:09:04Z'
+      status: Succeeded
+    - alias: promo-process::commit
+      finishedAt: '2026-11-25T13:09:04Z'
+      startedAt: '2026-11-25T13:09:04Z'
+      status: Succeeded
+    - alias: promo-process::step-6
+      finishedAt: '2026-11-25T13:09:05Z'
+      startedAt: '2026-11-25T13:09:04Z'
+      status: Succeeded
+    - alias: promo-process::step-7
+      finishedAt: '2026-11-25T13:09:05Z'
+      startedAt: '2026-11-25T13:09:05Z'
+      status: Succeeded
+kind: List
+metadata:
+  resourceVersion: ''

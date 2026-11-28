@@ -107,6 +107,12 @@ rules:
     resources: ["bgppeers"]
     verbs: ["get", "list", "watch"]
   {{- end }}
+  {{- if include "radar.kargoRbac" . | eq "true" }}
+  # status.webhookReceivers holds receiver URLs that work as shared secrets.
+  - apiGroups: ["kargo.akuity.io"]
+    resources: ["projectconfigs", "clusterconfigs"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
   {{- end }}
 
   # Workload resources (read-only)
@@ -421,6 +427,12 @@ rules:
   {{- if .Values.rbac.crdGroups.istio }}
   - apiGroups: ["networking.istio.io", "security.istio.io"]
     resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if include "radar.kargoRbac" . | eq "true" }}
+  # ProjectConfigs and ClusterConfigs are granted with Secrets, above.
+  - apiGroups: ["kargo.akuity.io"]
+    resources: ["clusterpromotiontasks", "freights", "projects", "promotionrequests", "promotions", "promotiontasks", "stages", "targets", "warehouses"]
     verbs: ["get", "list", "watch"]
   {{- end }}
   {{- if .Values.rbac.crdGroups.karpenter }}

@@ -17,6 +17,10 @@ type classifyInput struct {
 	Reason               string
 	Message              string
 	LastTerminatedReason string
+	// OwnerGroup and OwnerKind are the top controller owner the row groups
+	// under, when it has one.
+	OwnerGroup string
+	OwnerKind  string
 }
 
 // Classify maps a detection signal to a user-facing issue category. Pure and
@@ -292,6 +296,12 @@ func classifyProblem(in classifyInput) issuesapi.Category {
 		case "Error", "Failed":
 			if in.LastTerminatedReason == "OOMKilled" {
 				return issuesapi.CategoryOOMKilled
+			}
+			// An Argo Rollouts Job metric runs its Job once and reads a failed
+			// Job as a failed measurement, so the pod's exit is the analysis
+			// result, not a crash.
+			if in.OwnerGroup == "argoproj.io" && in.OwnerKind == "AnalysisRun" {
+				return issuesapi.CategoryJobFailed
 			}
 			// a terminated/failed pod that isn't image-pull/OOM/scheduling —
 			// closest runtime bucket is a crash.

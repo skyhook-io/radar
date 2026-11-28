@@ -7,6 +7,7 @@ import { apiVersionToGroup } from '../utils/navigation'
 import type { SelectedResource } from '../types'
 import { cnpgResourceHost } from '../components/cnpg/host'
 import { veleroResourceHost } from '../components/velero/host'
+import { kargoResourceHost } from '../components/kargo/host'
 import { crdResourceHost } from '../components/resources/crd/host'
 import {
   composeDetailSlots, composeResourceHosts, hostsForResource, hostSupport, resourceHostForSlot,
@@ -76,6 +77,7 @@ export const resourceHosts: readonly ResourceHost[] = [
   { id: 'rollouts', renderers: { RolloutRenderer } },
   { id: 'kyverno', renderers: { KyvernoPolicyCoverage, KyvernoPolicyQueued } },
   veleroResourceHost,
+  kargoResourceHost,
   { id: 'longhorn', renderers: { LonghornVolumeRenderer } },
   { id: 'flux', renderers: { FluxHelmReleaseRenderer } },
   { id: 'secrets-store-csi', renderers: { SecretProviderClassRenderer } },
@@ -128,7 +130,8 @@ export function useResourceHostFeatures(): HostFeatures {
   // Hook order is fixed here; selected adapters mount components that own their data hooks.
   const { support: cnpgWorkspace } = useRadarFeature('cnpgWorkspace')
   const { support: veleroWorkspace } = useRadarFeature('veleroWorkspace')
-  return useMemo(() => ({ cnpgWorkspace, veleroWorkspace }), [cnpgWorkspace, veleroWorkspace])
+  const { support: kargoWorkspace } = useRadarFeature('kargoWorkspace')
+  return useMemo(() => ({ cnpgWorkspace, veleroWorkspace, kargoWorkspace }), [cnpgWorkspace, veleroWorkspace, kargoWorkspace])
 }
 
 

@@ -111,6 +111,7 @@ func TestIntegrationReadBaselineCatalogCoverage(t *testing.T) {
 		"controlplane.cluster.x-k8s.io/kubeadmcontrolplanetemplates",
 		"kubernetes.crossplane.io/providerconfigs", "helm.crossplane.io/providerconfigs", "helm.crossplane.io/releases",
 		"aquasecurity.github.io/exposedsecretreports",
+		"kargo.akuity.io/projectconfigs", "kargo.akuity.io/clusterconfigs",
 	} {
 		if entries[key].Decision != "withhold" {
 			t.Errorf("sensitive or pending-review tuple %s must be withheld", key)

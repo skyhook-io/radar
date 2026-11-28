@@ -329,7 +329,12 @@ import {
   CalicoIPPoolRenderer,
   CalicoNetworkPolicyRenderer,
   CalicoTierRenderer,
+  KargoStageRenderer,
+  KargoFreightRenderer,
+  KargoPromotionRenderer,
+  KargoWarehouseRenderer,
 } from '../resources/renderers'
+import { KARGO_GROUP, getKargoStatus } from '../resources/resource-utils-kargo'
 import type { ComposedRefStatus } from '../resources/renderers/CompositeRenderer'
 import {
   getCrossplaneStatus,
@@ -457,6 +462,13 @@ export interface RendererOverrides {
   VeleroRestoreRenderer?: React.ComponentType<{ data: any; onNavigate?: (ref: ResourceRef) => void }>
   /** Host-injected: adds the schedule's reading and recent runs from the Velero workspace endpoint. */
   VeleroScheduleRenderer?: React.ComponentType<{ data: any; onNavigate?: (ref: ResourceRef) => void }>
+  // Kargo: each renderer reads its own object; a host wraps it to add what
+  // needs another object (Freight aliases and since, verification runs, a
+  // Warehouse's Freight). k8s-ui never fetches them.
+  KargoStageRenderer?: React.ComponentType<{ data: any; onNavigate?: (ref: ResourceRef) => void }>
+  KargoFreightRenderer?: React.ComponentType<{ data: any; onNavigate?: (ref: ResourceRef) => void }>
+  KargoPromotionRenderer?: React.ComponentType<{ data: any; onNavigate?: (ref: ResourceRef) => void }>
+  KargoWarehouseRenderer?: React.ComponentType<{ data: any; onNavigate?: (ref: ResourceRef) => void }>
   // Kyverno policy coverage: the host fetches /api/policy/policies/... and
   // renders the section, which the policy renderers accept as a slot. One
   // override serves all six policy renderers — they differ in what the policy
@@ -641,7 +653,11 @@ const KNOWN_KINDS = new Set([
   'providers', 'providerconfigs',
   'compositeresourcedefinitions', 'compositions', 'compositionrevisions',
   'functions', 'configurations',
+  // Kargo. Group-gated below: Stage, Promotion and Warehouse are common kind names.
+  'stages', 'freights', 'promotions', 'warehouses',
 ])
+
+const KARGO_PLURALS = new Set(['stages', 'freights', 'promotions', 'warehouses'])
 
 // Cluster topology owns resources across the core, bootstrap, control-plane,
 // and infrastructure contracts. Keep this explicit: a suffix/substring match
@@ -827,6 +843,8 @@ export function ResourceRendererDispatch({
   const isTraefikResource = isApiGroup(data?.apiVersion, 'traefik.io') || isApiGroup(data?.apiVersion, 'traefik.containo.us')
   const isFluxOperatorKind = FLUX_OPERATOR_PLURALS.includes(kind)
   const isFluxOperatorResource = isFluxOperatorKind && isApiGroup(data?.apiVersion, FLUX_OPERATOR_GROUP)
+  const isKargoKind = KARGO_PLURALS.has(kind)
+  const isKargoResource = isKargoKind && isApiGroup(data?.apiVersion, KARGO_GROUP)
   const isGroupGatedKind =
     kind === 'customresourcedefinitions' ||
     kind === 'kafkaconnectors' || kind === 'kafkas' || kind === 'kafkanodepools' ||
@@ -851,6 +869,7 @@ export function ResourceRendererDispatch({
     || kind === 'certificatesigningrequests'
     || kind === 'externalartifacts' || kind === 'artifactgenerators'
     || kind === 'nodes' || kind === 'volumes'
+    || isKargoKind
     || isFluxOperatorKind
   const isCNPGApiVersion = isApiGroup(data?.apiVersion, CNPG_GROUP)
   const groupGatedMatched =
@@ -912,6 +931,7 @@ export function ResourceRendererDispatch({
     || (kind === 'artifactgenerators' && isApiGroup(data?.apiVersion, 'source.extensions.fluxcd.io'))
     || (kind === 'nodes' && isCoreNode(data))
     || (kind === 'volumes' && isApiGroup(data?.apiVersion, LONGHORN_GROUP))
+    || isKargoResource
     || isFluxOperatorResource
   const groupGatedFallthrough = isGroupGatedKind && !groupGatedMatched
 
@@ -965,6 +985,10 @@ export function ResourceRendererDispatch({
   const VeleroBackupComp = rendererOverrides?.VeleroBackupRenderer ?? VeleroBackupRenderer
   const VeleroRestoreComp = rendererOverrides?.VeleroRestoreRenderer ?? VeleroRestoreRenderer
   const VeleroScheduleComp = rendererOverrides?.VeleroScheduleRenderer ?? VeleroScheduleRenderer
+  const KargoStageComp = rendererOverrides?.KargoStageRenderer ?? KargoStageRenderer
+  const KargoFreightComp = rendererOverrides?.KargoFreightRenderer ?? KargoFreightRenderer
+  const KargoPromotionComp = rendererOverrides?.KargoPromotionRenderer ?? KargoPromotionRenderer
+  const KargoWarehouseComp = rendererOverrides?.KargoWarehouseRenderer ?? KargoWarehouseRenderer
   const KyvernoCoverageComp = rendererOverrides?.KyvernoPolicyCoverage
   const kyvernoCoverage = KyvernoCoverageComp ? (
     <KyvernoCoverageComp data={data} onNavigate={onNavigate} />
@@ -1142,6 +1166,10 @@ export function ResourceRendererDispatch({
         {kind === 'backupstoragelocations' && isVeleroResource(data) && <VeleroBSLComp data={data} onNavigate={onNavigate} />}
         {kind === 'backuprepositories' && isVeleroResource(data) && <VeleroBackupRepositoryRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'volumesnapshotlocations' && isVeleroResource(data) && <VeleroVSLRenderer data={data} />}
+        {isKargoResource && kind === 'stages' && <KargoStageComp data={data} onNavigate={onNavigate} />}
+        {isKargoResource && kind === 'freights' && <KargoFreightComp data={data} onNavigate={onNavigate} />}
+        {isKargoResource && kind === 'promotions' && <KargoPromotionComp data={data} onNavigate={onNavigate} />}
+        {isKargoResource && kind === 'warehouses' && <KargoWarehouseComp data={data} onNavigate={onNavigate} />}
         {kind === 'externalsecrets' && <ExternalSecretRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'clusterexternalsecrets' && <ClusterExternalSecretRenderer data={data} onNavigate={onNavigate} />}
         {(kind === 'secretstores' || kind === 'clustersecretstores') && <SecretStoreRenderer data={data} />}
@@ -1525,6 +1553,8 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
   if (k === 'globalcontextentries') return getKyvernoGlobalContextStatus(data)
   if (k === 'updaterequests') return getKyvernoRequestState(data)
   if (k === 'ephemeralreports' || k === 'clusterephemeralreports') return getKyvernoReportStatus(data)
+  // Freight is a record of versions with no status of its own; getKargoStatus returns null for it.
+  if (KARGO_PLURALS.has(k) && isApiGroup(data.apiVersion, KARGO_GROUP)) return getKargoStatus(data)
   if (k === 'restores' && isVeleroResource(data)) return getRestoreStatus(data)
   if (k === 'schedules' && isVeleroResource(data)) return getScheduleStatus(data)
   if (k === 'backupstoragelocations' && isVeleroResource(data)) return getBSLStatus(data)

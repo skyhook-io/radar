@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { renderToString } from 'react-dom/server'
-import { AnalysisRunRenderer } from './AnalysisRunRenderer'
+import { AnalysisRunRenderer, getAnalysisRunKargoStage } from './AnalysisRunRenderer'
 import { getAnalysisRunStatus, summarizeAnalysisMetrics } from '../resource-utils'
 
 // SSR splits interpolated text with <!-- --> markers; strip so assertions read as prose.
@@ -80,6 +80,37 @@ describe('AnalysisRunRenderer verdict banner', () => {
       expect(html).not.toContain('the rollout will be aborted')
       expect(html).not.toContain('Analysis could not run')
     }
+  })
+})
+
+describe('AnalysisRunRenderer for a Kargo verification', () => {
+  const kargoRun = (phase: string, metadata: Record<string, unknown>) => ({
+    metadata: { name: 'uat.01m8fe7sen59dej60m59knkjfw.7c6082a', namespace: 'kargo-demo', ownerReferences: [{ kind: 'Freight', name: 'b56f6e3' }], ...metadata },
+    status: { phase, message: 'Metric "error-rate" assessed Failed due to failed (1) > failureLimit (0)' },
+  })
+
+  it('names the Kargo stage instead of a rollout, and links to it', () => {
+    const opened: unknown[] = []
+    const run = kargoRun('Failed', { labels: { 'kargo.akuity.io/stage': 'uat' } })
+    const html = render(<AnalysisRunRenderer data={run} onNavigate={(ref) => opened.push(ref)} />)
+    expect(html).toContain('Verification failed for Kargo stage uat')
+    expect(html).toContain('Open stage')
+    expect(html).not.toContain('rollout')
+    expect(getAnalysisRunKargoStage(run)).toBe('uat')
+  })
+
+  it('reads the full stage name from the annotation when the label was shortened', () => {
+    const run = kargoRun('Error', {
+      labels: { 'kargo.akuity.io/stage': 'shortened-abc123' },
+      annotations: { 'kargo.akuity.io/stage': 'a-very-long-stage-name' },
+    })
+    expect(render(<AnalysisRunRenderer data={run} />)).toContain('run for Kargo stage a-very-long-stage-name')
+  })
+
+  it('does not promise a rollout abort for a run no Rollout owns', () => {
+    const html = render(<AnalysisRunRenderer data={{ metadata: { name: 'ar', namespace: 'ns' }, status: { phase: 'Failed' } }} />)
+    expect(html).toContain('Analysis failed')
+    expect(html).not.toContain('rollout')
   })
 })
 

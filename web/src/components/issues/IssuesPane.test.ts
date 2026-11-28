@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Issue } from "@skyhook-io/k8s-ui";
 import type { SubjectIssuesResponse } from "../../api/client";
 import { writeViewParams } from "../../utils/navigation";
-import { capacityHrefForIssue, issueSubjectFromParams, issueSubjectKindLabel, issueSubjectState } from "./IssuesPane";
+import { capacityHrefForIssue, kargoPipelineHrefForIssue, issueSubjectFromParams, issueSubjectKindLabel, issueSubjectState } from "./IssuesPane";
 
 function issue(partial: Partial<Issue>): Issue {
   return {
@@ -18,6 +18,18 @@ function issue(partial: Partial<Issue>): Issue {
     ...partial,
   } as Issue;
 }
+
+describe("kargoPipelineHrefForIssue", () => {
+  it("opens a Stage finding at its card and a Promotion finding at its project", () => {
+    expect(kargoPipelineHrefForIssue(issue({ group: "kargo.akuity.io", kind: "Stage", namespace: "kargo-demo", name: "uat" }))).toBe("/kargo?project=kargo-demo&stage=uat");
+    expect(kargoPipelineHrefForIssue(issue({ group: "kargo.akuity.io", kind: "Promotion", namespace: "kargo-demo", name: "test.01m8.b56f6e3" }))).toBe("/kargo?project=kargo-demo");
+  });
+
+  it("gives other issues no pipeline link, including another tool's Stage", () => {
+    expect(kargoPipelineHrefForIssue(issue({ kind: "Pod", namespace: "kargo-demo" }))).toBeNull();
+    expect(kargoPipelineHrefForIssue(issue({ group: "other.io", kind: "Stage", namespace: "ns", name: "s" }))).toBeNull();
+  });
+});
 
 describe("capacityHrefForIssue", () => {
   it("returns null when Karpenter is not detected", () => {

@@ -160,6 +160,11 @@ func referrerIndexSources() []runtime.Object {
 
 		u("snapshot.storage.k8s.io/v1", "VolumeSnapshot", "shop", "daily", `{"spec":{"volumeSnapshotClassName":"csi-snapclass","source":{"persistentVolumeClaimName":"data"}},"status":{"boundVolumeSnapshotContentName":"snapcontent-1"}}`),
 		u("snapshot.storage.k8s.io/v1", "VolumeSnapshotContent", "", "snapcontent-1", `{"spec":{"volumeSnapshotClassName":"csi-snapclass","volumeSnapshotRef":{"namespace":"shop","name":"daily","uid":"uid-1"}}}`),
+		func() runtime.Object {
+			stage := u("kargo.akuity.io/v1alpha1", "Stage", "shop", "uat", `{}`).(*unstructured.Unstructured)
+			stage.SetAnnotations(map[string]string{"kargo.akuity.io/argocd-context": `[{"name":"shop-uat","namespace":"argocd"}]`})
+			return stage
+		}(),
 	}
 }
 

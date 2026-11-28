@@ -17,6 +17,7 @@ import { useMediaQuery } from '../../hooks/useMediaQuery'
 import { useVeleroSidebarWorkspace } from '../velero/useVeleroSidebarWorkspace'
 import { WorkspaceFrame } from '../workspace/WorkspaceFrame'
 import { useMergedSidebarWorkspaces } from '../workspace/sidebar'
+import { useKargoSidebarWorkspace } from '../kargo/useKargoSidebarWorkspace'
 import { useWorkspaceDrawer } from '../workspace/useWorkspaceDrawer'
 
 interface CNPGViewProps {
@@ -48,7 +49,8 @@ export function CNPGView({ namespaces, selectedResource, onOpenResource, onClose
     active: { screen: route.screen, child: route.detail ? { label: route.detail.name, title: `${route.detail.plural} ${route.detail.namespace}/${route.detail.name}` } : undefined },
   })
   const veleroSidebar = useVeleroSidebarWorkspace({ apiResources })
-  const sidebarWorkspace = useMergedSidebarWorkspaces(cnpgSidebar, veleroSidebar)
+  const kargoSidebar = useKargoSidebarWorkspace({ apiResources })
+  const sidebarWorkspace = useMergedSidebarWorkspaces(cnpgSidebar, veleroSidebar, kargoSidebar)
   const { query, fleet } = useCNPGFleet(namespaces)
   const { drawerTarget, inspect, searchParams } = useWorkspaceDrawer({ selectedResource, onOpenResource, onCloseResource })
 

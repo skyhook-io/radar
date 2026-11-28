@@ -16,6 +16,9 @@ import { useCNPGSidebarWorkspace } from '../cnpg/useCNPGSidebarWorkspace'
 import { useVeleroSidebarWorkspace } from '../velero/useVeleroSidebarWorkspace'
 import { isVeleroBackupKind } from '../velero/routes'
 import { useMergedSidebarWorkspaces } from '../workspace/sidebar'
+import { useKargoSidebarWorkspace } from '../kargo/useKargoSidebarWorkspace'
+import { useKargoFreightAliases } from '../../api/kargo'
+import { KARGO_GROUP } from '../kargo/routes'
 import { renderResourceKindList, resourceKindListMode, useResourceHostFeatures } from '../../integrations/resourceHosts'
 import { useOpenLogs, useOpenWorkloadLogs } from '../dock'
 import {
@@ -138,7 +141,14 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   }, [issuesData])
   const cnpgSidebarWorkspace = useCNPGSidebarWorkspace({ apiResources, namespaces, withMetrics: selectedKind?.group === 'postgresql.cnpg.io' })
   const veleroSidebarWorkspace = useVeleroSidebarWorkspace({ apiResources })
-  const sidebarCategoryWorkspaces = useMergedSidebarWorkspaces(cnpgSidebarWorkspace, veleroSidebarWorkspace)
+  const kargoSidebarWorkspace = useKargoSidebarWorkspace({ apiResources })
+  const sidebarCategoryWorkspaces = useMergedSidebarWorkspaces(cnpgSidebarWorkspace, veleroSidebarWorkspace, kargoSidebarWorkspace)
+  // The Stage and Promotion lists show each Freight's alias beside its
+  // versions. Aliases come from Freight the caller may read; without them the
+  // cells show versions only.
+  const viewingKargoFreightLists = selectedKind?.group === KARGO_GROUP && (selectedKind.name === 'stages' || selectedKind.name === 'promotions')
+  const kargoAliasesSupported = useRadarFeature('kargoWorkspace').support === 'supported'
+  const { data: kargoAliases } = useKargoFreightAliases(namespaces, { enabled: viewingKargoFreightLists && kargoAliasesSupported })
   const workloadWrites = namespaces.length === 0
     ? capabilities?.workloadWrites
     : namespaces.length === 1
@@ -438,6 +448,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       topNodeMetrics={topNodeMetrics}
       certExpiry={certExpiry}
       storeProviders={storeProviders}
+      kargoFreightAliases={viewingKargoFreightLists ? kargoAliases?.aliases : undefined}
       certExpiryError={certExpiryError}
       operationalIssues={operationalIssues}
       operationalIssuesIncomplete={Boolean(issuesData && (issuesData.total_matched ?? issuesData.total ?? issuesData.issues.length) > issuesData.issues.length)}

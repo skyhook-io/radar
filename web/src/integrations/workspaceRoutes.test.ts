@@ -25,6 +25,12 @@ describe('workspace route ownership', () => {
     expect(velero.pageTitle('/velero')).toBe('Velero overview')
     expect(velero.pageTitle('/velero/unknown')).toBe('Velero overview')
     expect(workspaceForView('velero')).toBe(velero)
+    const kargo = workspaceForPath('/kargo')!
+    expect(kargo.id).toBe('kargo')
+    expect(kargo.navView).toBe('resources')
+    expect(kargo.namespaceScope).toBe('cluster')
+    expect(kargo.namespaceFilterTooltip).toBeTruthy()
+    expect(workspaceForPath('/kargo-other')).toBeUndefined()
   })
 
   it('only owns whole route prefixes inside either OSS or an embedded router basename', () => {
@@ -45,6 +51,8 @@ describe('workspace route ownership', () => {
     expect(workspaceContextSwitchSearch('/cnpg', search).toString()).toBe('')
     expect(workspaceContextSwitchSearch('/capacity/pools/default', search).toString()).toBe('')
     expect(workspaceContextSwitchSearch('/velero', search).toString()).toBe('')
+    // A project name belongs to the cluster it was picked in.
+    expect(workspaceContextSwitchSearch('/kargo', new URLSearchParams('project=kargo-demo&drawer=x')).toString()).toBe('')
     expect(workspaceContextSwitchSearch('/resources/pods', search).toString()).toBe('')
     expect(search.get('tab')).toBe('storage')
   })

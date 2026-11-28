@@ -67,6 +67,7 @@ export const RADAR_FEATURES = {
   // Radars from v1.21.0 report these Checks in the workspace without advertising the flag.
   cnpgPostureChecks: { label: 'CloudNativePG backup and availability counts', minimumVersion: 'v1.21.0', flag: 'cnpgPostureChecks' },
   veleroWorkspace: { label: 'Velero views', flag: 'veleroWorkspace', flagShippedWithEndpoint: true },
+  kargoWorkspace: { label: 'Kargo promotion views', flag: 'kargoWorkspace', flagShippedWithEndpoint: true },
   veleroBackupNow: { label: 'Back up now', flag: 'veleroBackupNow', flagShippedWithEndpoint: true },
   veleroSchedulePause: { label: 'Pause and resume Velero schedules', flag: 'veleroSchedulePause', flagShippedWithEndpoint: true },
   veleroRunVolumes: { label: 'Velero run volumes', flag: 'veleroRunVolumes', flagShippedWithEndpoint: true },

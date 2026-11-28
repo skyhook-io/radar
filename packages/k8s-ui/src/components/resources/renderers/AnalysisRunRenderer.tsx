@@ -2,6 +2,7 @@ import { Activity, BarChart3, Server } from 'lucide-react'
 import { Section, PropertyList, Property, AlertBanner } from '../../ui/drawer-components'
 import { Badge, type BadgeSeverity } from '../../ui/Badge'
 import { TimeValue } from '../../ui/ScheduleValue'
+import { KargoLink } from './KargoShared'
 
 interface AnalysisRunRendererProps {
   data: any
@@ -21,6 +22,28 @@ function phaseSeverity(phase: string): BadgeSeverity {
   return PHASE_SEVERITY[phase] ?? 'neutral'
 }
 
+// Kargo names the Stage whose verification created the run in this label, or
+// in the annotation of the same key when the name is too long for a label.
+const KARGO_STAGE_KEY = 'kargo.akuity.io/stage'
+
+/** The Kargo Stage whose verification this AnalysisRun is, if Kargo created it. */
+export function getAnalysisRunKargoStage(data: any): string | undefined {
+  return data?.metadata?.annotations?.[KARGO_STAGE_KEY] || data?.metadata?.labels?.[KARGO_STAGE_KEY] || undefined
+}
+
+function verdictTitle(phase: string, kargoStage: string | undefined, ownedByRollout: boolean): string {
+  if (kargoStage) {
+    if (phase === 'Error') return `Verification couldn't run for Kargo stage ${kargoStage}`
+    if (phase === 'Inconclusive') return `Verification was inconclusive for Kargo stage ${kargoStage}`
+    return `Verification failed for Kargo stage ${kargoStage}`
+  }
+  if (phase === 'Error') return 'Analysis could not run'
+  if (phase === 'Inconclusive') {
+    return ownedByRollout ? 'Analysis was inconclusive - the rollout is paused for a human decision' : 'Analysis was inconclusive'
+  }
+  return ownedByRollout ? 'Analysis failed - the rollout will be aborted' : 'Analysis failed'
+}
+
 // The Rollout's own pause reason is only "InconclusiveAnalysisRun" — the metric
 // that actually decided it lives here, in metricResults[].
 export function AnalysisRunRenderer({ data, onNavigate }: AnalysisRunRendererProps) {
@@ -31,6 +54,11 @@ export function AnalysisRunRenderer({ data, onNavigate }: AnalysisRunRendererPro
   const metricResults: any[] = status.metricResults || []
   const labels = data.metadata?.labels || {}
   const ownerRollout = (data.metadata?.ownerReferences || []).find((ref: any) => ref.kind === 'Rollout')
+  const kargoStage = getAnalysisRunKargoStage(data)
+  const namespace = data.metadata?.namespace ?? ''
+  const stageLink = kargoStage && onNavigate
+    ? <KargoLink kind="Stage" name={kargoStage} namespace={namespace} label="Open stage" onNavigate={onNavigate} />
+    : undefined
 
   const failing = metricResults.filter((m) => m.phase === 'Failed' || m.phase === 'Error')
   const inconclusive = metricResults.filter((m) => m.phase === 'Inconclusive')
@@ -42,16 +70,18 @@ export function AnalysisRunRenderer({ data, onNavigate }: AnalysisRunRendererPro
       {(phase === 'Failed' || phase === 'Error') && (
         <AlertBanner
           variant="error"
-          title={phase === 'Error' ? 'Analysis could not run' : 'Analysis failed — the rollout will be aborted'}
+          title={verdictTitle(phase, kargoStage, !!ownerRollout)}
           message={verdictMessage || 'One or more metrics breached their failure condition.'}
+          action={stageLink}
         />
       )}
 
       {phase === 'Inconclusive' && (
         <AlertBanner
           variant="warning"
-          title="Analysis was inconclusive — the rollout is paused for a human decision"
+          title={verdictTitle(phase, kargoStage, !!ownerRollout)}
           message={verdictMessage || 'No metric failed outright, but none met its success condition either.'}
+          action={stageLink}
         />
       )}
 
@@ -63,6 +93,12 @@ export function AnalysisRunRenderer({ data, onNavigate }: AnalysisRunRendererPro
           <Property label="Started" value={status.startedAt ? <TimeValue timestamp={status.startedAt} /> : undefined} />
           <Property label="Completed" value={status.completedAt ? <TimeValue timestamp={status.completedAt} /> : undefined} />
           <Property label="Message" value={status.message} />
+          {kargoStage && (
+            <Property
+              label="Kargo stage"
+              value={<KargoLink kind="Stage" name={kargoStage} namespace={namespace} onNavigate={onNavigate} />}
+            />
+          )}
           {ownerRollout && (
             <Property
               label="Rollout"

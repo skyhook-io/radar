@@ -34,6 +34,9 @@ func TestWideReverseFamiliesDeclareIndexOrScanReason(t *testing.T) {
 		{Group: "keda.sh", Kind: "TriggerAuthentication"}: true,
 		{Group: "cert-manager.io", Kind: "Issuer"}:        true,
 		{Group: "serving.knative.dev", Kind: "Revision"}:  true,
+		{Group: "kargo.akuity.io", Kind: "Stage"}:         true,
+		{Group: "kargo.akuity.io", Kind: "Freight"}:       true,
+		{Group: "kargo.akuity.io", Kind: "Warehouse"}:     true,
 	}
 	for _, b := range resourceid.Builtins {
 		if b.Namespaced {

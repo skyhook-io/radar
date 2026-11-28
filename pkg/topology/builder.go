@@ -6826,7 +6826,9 @@ func extractGenericStatus(resource *unstructured.Unstructured) HealthStatus {
 			return StatusHealthy
 		case "pending", "progressing":
 			return StatusDegraded
-		case "failed", "error":
+		// Errored is Kargo's technical failure. Aborted is a person's
+		// cancellation and stays unknown, not unhealthy.
+		case "failed", "error", "errored":
 			return StatusUnhealthy
 		}
 	}

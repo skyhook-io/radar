@@ -93,6 +93,7 @@ var sourceResources = map[string]string{
 	"Certificate": "certificates", "CertificateRequest": "certificaterequests", "Order": "orders", "Challenge": "challenges",
 	"Cluster": "clusters", "ScaledObject": "scaledobjects", "ScaledJob": "scaledjobs", "NodePool": "nodepools", "NodeClaim": "nodeclaims", "Machine": "machines",
 	"VolumeSnapshot": "volumesnapshots", "VolumeSnapshotContent": "volumesnapshotcontents",
+	"Stage": "stages",
 }
 
 func istioHostCandidates(obj runtime.Object, visit func(Declaration)) error {

@@ -66,6 +66,7 @@ can see its namespace, apart from the few kinds Radar checks exactly, as
 | Trivy ExposedSecretReport | Secret-detection excerpts; examples are masked, but no blanket masking guarantee is assumed. Other curated report kinds remain readable. |
 | Legacy `traefik.containo.us/serverstransporttcps` | Exact legacy-group schema remains unverified. The reviewed `traefik.io/serverstransporttcps` tuple remains readable. |
 | Kubernetes CertificateSigningRequest | Requests record the requester's username, UID, groups and authenticator extra data. Radar's service account reads them for the resource browser; a Cloud user needs their own `get/list` grant on `certificates.k8s.io/certificatesigningrequests`. |
+| Kargo ProjectConfig and ClusterConfig | `status.webhookReceivers[].path` and `.url` are hard-to-guess endpoints that serve as the shared secret for several receiver types, so reading them lets a caller trigger the receiver. |
 
 These exclusions are not a secret-free guarantee for the remaining grants.
 Argo CD Applications can retain local-sync manifests containing Secrets;

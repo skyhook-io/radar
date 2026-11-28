@@ -5,6 +5,7 @@ import { getVolumeSnapshotColumnValue, getVolumeSnapshotSortValue } from './reso
 import { getMetalLBColumnValue, getMetalLBSortValue } from './resource-utils-metallb'
 import { getOpenTelemetryColumnValue } from './resource-utils-opentelemetry'
 import { getFlaggerColumnValue } from './resource-utils-flagger'
+import { KARGO_GROUP, getKargoColumnValue } from './resource-utils-kargo'
 import { K3S_HELM_GROUP, getK3sHelmChartColumnValue } from './resource-utils-k3s'
 import { getAgentRuntimeSortValue } from './resource-utils-agent-runtimes'
 import { UPGRADE_PLAN_GROUP, getUpgradePlanColumnValue } from './resource-utils-upgrade-plan'
@@ -229,6 +230,7 @@ import { KYVERNO_MODERN_PLURALS, isModernKyvernoPolicy } from './resource-utils-
 import { isAnyKyvernoPolicyException } from './resource-utils-kyverno-exceptions'
 import { ExternalSecretCell, ClusterExternalSecretCell, SecretStoreCell, ClusterSecretStoreCell } from './renderers/eso-cells'
 import { BackupCell, RestoreCell, ScheduleCell, BackupStorageLocationCell, VolumeSnapshotLocationCell, BackupRepositoryCell } from './renderers/velero-cells'
+import { KargoPromotionCell, KargoStageCell, type KargoFreightAliases } from './renderers/kargo-cells'
 import { isVeleroResource } from './resource-utils-velero'
 import { CNPGClusterCell, CNPGBackupCell, CNPGScheduledBackupCell, CNPGPoolerCell, CNPGObjectStoreCell, CNPGDeclarativeCell, CNPGImageCatalogCell } from './renderers/cnpg-cells'
 import { isApiGroup, CNPG_GROUP } from './resource-utils-cnpg'
@@ -424,6 +426,7 @@ const BUILTIN_SORTABLE_COLUMN_KEYS = new Set([
   'name', 'namespace', 'age', 'status', 'ready', 'restarts', 'type', 'version',
   'desired', 'available', 'upToDate', 'lastSeen', 'count', 'reason', 'object',
   'cpu', 'memory', 'containers',
+  'kargoFreight', 'kargoHealth', 'kargoLastPromotion', 'kargoStage',
 ])
 
 // The header row is padded (TABLE_DENSITY.cellClass) around a `truncate` label, under table-layout:fixed with
@@ -733,6 +736,26 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'sampler', label: 'Sampler', width: 'w-40 shrink-0' },
     { key: 'samplerArgument', label: 'Sampler Argument', width: 'w-32 shrink-0' },
     { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
+  ],
+  // Kargo (kargo.akuity.io). Keyed group-qualified: Stage and Promotion are
+  // common kind names. Replaces Kargo's printer columns, whose Current Freight
+  // is a SHA-1 Freight name; Shard is left out.
+  kargostages: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Project', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-36' },
+    { key: 'kargoFreight', label: 'Freight', width: 'w-64', tooltip: 'What the Stage holds now: one line per Warehouse, alias first when known, then its versions.' },
+    { key: 'kargoHealth', label: 'Health', width: 'w-28' },
+    { key: 'kargoLastPromotion', label: 'Last Promotion', width: 'w-40' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  kargopromotions: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Project', width: 'w-36' },
+    { key: 'status', label: 'Phase', width: 'w-28' },
+    { key: 'kargoStage', label: 'Stage', width: 'w-36' },
+    { key: 'kargoFreight', label: 'Freight', width: 'w-64', tooltip: 'The Freight this promotion moves: alias first when known, then its versions.' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   canaries: [
     { key: 'name', label: 'Name', width: 'min-w-40' },
@@ -3027,6 +3050,10 @@ const GROUP_QUALIFIED_COLUMN_KEYS: Record<string, Record<string, string>> = {
   ingresses: { 'networking.internal.knative.dev': 'knativeingresses' },
   certificates: { 'networking.internal.knative.dev': 'knativecertificates' },
   restores: { 'velero.io': 'velerorestores' },
+  stage: { 'kargo.akuity.io': 'kargostages' },
+  stages: { 'kargo.akuity.io': 'kargostages' },
+  promotion: { 'kargo.akuity.io': 'kargopromotions' },
+  promotions: { 'kargo.akuity.io': 'kargopromotions' },
   schedules: { 'velero.io': 'veleroschedules' },
   // CNPG's declarative objects. Knative owns the unqualified `subscriptions`
   // set, and `databases` / `publications` are shipped by several database
@@ -3375,6 +3402,8 @@ const CURATED_COLUMN_GROUPS: Record<string, readonly string[]> = {
   backups: ['velero.io'],
   backupstoragelocations: ['velero.io'],
   velerorestores: ['velero.io'],
+  kargostages: ['kargo.akuity.io'],
+  kargopromotions: ['kargo.akuity.io'],
   veleroschedules: ['velero.io'],
   volumesnapshotlocations: ['velero.io'],
   clusterpolicyreports: ['wgpolicyk8s.io'],
@@ -3765,6 +3794,8 @@ interface ResourcesViewData {
   /** Cluster Audit findings keyed by "namespace/name". Raw compatibility
    *  counts render danger as High and warning as Medium. */
   auditBadges?: Record<string, { danger: number; warning: number; messages?: AuditBadgeMessage[] }>
+  /** Kargo Freight aliases keyed "namespace/freightName", supplied by a host that can read Freight. */
+  kargoFreightAliases?: KargoFreightAliases
   onOpenLogs?: (params: { namespace: string; podName: string; containers: string[]; containerName?: string; initContainers?: string[] }) => void
   onOpenWorkloadLogs?: (params: { namespace: string; workloadKind: string; workloadName: string }) => void
 }
@@ -3834,6 +3865,8 @@ interface ResourcesViewProps {
   /** Cluster Audit findings keyed by "namespace/name". Raw compatibility
    *  counts render danger as High and warning as Medium. */
   auditBadges?: Record<string, { danger: number; warning: number; messages?: AuditBadgeMessage[] }>
+  /** Kargo Freight aliases keyed "namespace/freightName". Without them, Kargo Freight cells show versions only. */
+  kargoFreightAliases?: KargoFreightAliases
   // Pinned kinds
   pinned?: Array<{ name: string; kind: string; group: string }>
   togglePin?: (kind: { name: string; kind: string; group: string }) => void
@@ -4138,6 +4171,7 @@ export function ResourcesView({
   certExpiryError,
   storeProviders,
   auditBadges,
+  kargoFreightAliases,
   operationalIssues,
   operationalIssuesIncomplete,
   pinned = [],
@@ -5860,6 +5894,8 @@ export function ResourcesView({
     if (otelValue !== undefined) return otelValue
     const flaggerValue = getFlaggerColumnValue(resource, column)
     if (flaggerValue !== undefined) return flaggerValue
+    const kargoValue = getKargoColumnValue(resource, column)
+    if (kargoValue !== undefined) return kargoValue
     const k3sValue = getK3sHelmChartColumnValue(resource, column)
     if (k3sValue !== undefined) return k3sValue
     const agentRuntimeValue = getAgentRuntimeSortValue(resource, column)
@@ -6850,11 +6886,12 @@ export function ResourcesView({
     certExpiry,
     certExpiryError,
     auditBadges,
+    kargoFreightAliases,
     operationalIssues,
     operationalIssuesIncomplete,
     onOpenLogs,
     onOpenWorkloadLogs,
-  }), [onNavigate, certExpiry, certExpiryError, auditBadges, operationalIssues, operationalIssuesIncomplete, onOpenLogs, onOpenWorkloadLogs])
+  }), [onNavigate, certExpiry, certExpiryError, auditBadges, kargoFreightAliases, operationalIssues, operationalIssuesIncomplete, onOpenLogs, onOpenWorkloadLogs])
 
   const renderSidebar = (className?: string, inDrawer = false) => (
     <ResourcesSidebar
@@ -8221,7 +8258,7 @@ interface CellContentProps {
 }
 
 function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, storeProviders, extraColumn, nameHref, findingMatch }: CellContentProps) {
-  const { auditBadges } = useContext(ResourcesViewDataContext)
+  const { auditBadges, kargoFreightAliases } = useContext(ResourcesViewDataContext)
   // Parent-injected extra columns short-circuit the built-in switch.
   // Used by hosts that inject leading columns (e.g. a multi-cluster Cluster column).
   if (extraColumn) {
@@ -8363,6 +8400,10 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
   if (isApiGroup(resource.apiVersion, 'flagger.app') && ['canaries', 'metrictemplates'].includes(kindLower)) {
     if (column === 'status') return <GenericCell resource={resource} column={column} />
     return <span className="text-sm text-theme-text-secondary break-all">{getFlaggerColumnValue(resource, column) || '-'}</span>
+  }
+  if (isApiGroup(resource.apiVersion, KARGO_GROUP)) {
+    if (kindLower === 'kargostages') return <KargoStageCell resource={resource} column={column} aliases={kargoFreightAliases} />
+    if (kindLower === 'kargopromotions') return <KargoPromotionCell resource={resource} column={column} aliases={kargoFreightAliases} />
   }
   if (isApiGroup(resource.apiVersion, K3S_HELM_GROUP) && kindLower === 'helmcharts') {
     if (column === 'status') return <GenericCell resource={resource} column={column} />

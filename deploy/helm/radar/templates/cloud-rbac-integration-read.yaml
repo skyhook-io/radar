@@ -23,7 +23,11 @@
 {{- end -}}
 {{- $rules := list -}}
 {{- range $entry := $baseline.entries -}}
-{{- if and (eq $entry.decision "grant") (eq $entry.scope $scope) (or $root.Values.rbac.crdGroups.all (index $root.Values.rbac.crdGroups $entry.collection)) -}}
+{{- $collectionOn := index $root.Values.rbac.crdGroups $entry.collection -}}
+{{- if eq $entry.collection "kargo" -}}
+{{- $collectionOn = include "radar.kargoRbac" $root | eq "true" -}}
+{{- end -}}
+{{- if and (eq $entry.decision "grant") (eq $entry.scope $scope) (or $root.Values.rbac.crdGroups.all $collectionOn) -}}
 {{- $rules = append $rules (dict "apiGroups" (list $entry.group) "resources" $entry.resources "verbs" (list "get" "list" "watch")) -}}
 {{- end -}}
 {{- end -}}

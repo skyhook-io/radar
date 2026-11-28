@@ -708,6 +708,9 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/cnpg/poolers/{namespace}/{name}/capabilities", s.handleCNPGPoolerCapabilities)
 			r.Get("/cnpg/poolers/{namespace}/{name}/pgbouncer-state", s.handleCNPGPgBouncerState)
 			r.Post("/cnpg/poolers/{namespace}/{name}/actions/{action}", s.bindWrite(s.handleCNPGPoolerAction))
+			r.Get("/kargo/workspace", s.handleKargoWorkspace)
+			r.Get("/kargo/projects/{project}", s.handleKargoProject)
+			r.Get("/kargo/freight-aliases", s.handleKargoFreightAliases)
 			r.Get("/velero/workspace", s.handleVeleroWorkspace)
 			r.Get("/velero/schedules/{namespace}/{name}/activity", s.handleVeleroScheduleActivity)
 			r.Get("/velero/backupstoragelocations/{namespace}/{name}/backups", s.handleVeleroStoredBackups)
@@ -1639,6 +1642,7 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 
 		OpenObserveCollectorPresence: true,
 		OpenObserveLocalSetup:        true,
+		KargoWorkspace:               true,
 	}
 }
 

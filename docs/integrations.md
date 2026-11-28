@@ -1051,6 +1051,46 @@ The template read and the create both run as the caller: `get workflowtemplates`
 
 ---
 
+## Kargo
+
+[Kargo](https://kargo.io) promotes versions (Freight) through a project's stages. Radar reads it, built against Kargo v1.12, and never promotes, approves or aborts: those stay in Kargo. Sources, certainty, access and the "Open in Radar" link for Kargo's UI: [kargo.md](kargo.md).
+
+### What Radar Shows
+
+**Pipelines** (`/kargo`, under **Promotions** in the Resources sidebar's Integrations): one project at a time, stages as columns in promotion order. Each stage shows the version it holds per Warehouse (alias and image tags, commits or chart versions), how long it has held it, health, verification, the last promotion's result with the failing step, why the newest version isn't there yet (or "unknown" with what is missing), and the Argo CD Applications it drives. The project's Kargo findings from Issues show above the pipeline; Warehouses and recent Freight below it.
+
+**Stage drawer:** the version it holds and since when, health and verification with Kargo's message, the last and any running promotion, where its Freight comes from (Warehouses or upstream stages, with soak time and availability), and its Argo CD Applications with health and sync.
+
+**Freight drawer:** the alias and versions first, then the Warehouse it came from, the stages it is in, verified in and approved for (Kargo v1.12 Freight status), and its verification runs.
+
+**Promotion drawer:** phase (Failed and Errored red, Aborted neutral), the target stage and the Freight with its alias and versions, and each step with its status; the failing step's message leads.
+
+**Warehouse drawer:** subscriptions (repository and version constraint), the Freight it produced, newest first, and any discovery error.
+
+**Resource Browser:** the Stage list shows each stage's Freight as alias and version, health and last promotion; the Promotion list shows the Freight alias. Without Freight access the cells show versions only.
+
+**Related Resources:** Promotion to its Stage and Freight, Freight to its Warehouse, Stage to its upstream stages and Warehouses, and Stage to the Argo CD Applications its last promotion updated (from the Stage's `kargo.akuity.io/argocd-context` annotation; an Application's `kargo.akuity.io/authorized-stage` annotation is permission, not evidence, and isn't followed).
+
+### Issues
+
+| Detection | Trigger | Severity |
+|-----------|---------|----------|
+| `KargoPromotionFailed` ("Kargo promotion failed") | A stage's last promotion (`Stage.status.lastPromotion`) is Failed or Errored. Filed on the Promotion, with the first failing step that isn't `continueOnError`, else the promotion's message | critical |
+| `KargoVerificationFailed` ("Kargo verification failed") | The latest verification of the Freight a stage holds failed or couldn't run. Filed on the Stage, naming the AnalysisRun when there is one | critical |
+
+Both findings stay in the project namespace and also show when Issues or Home is filtered to a namespace one of the stage's Argo CD Applications deploys to (its `spec.destination.namespace`), as one row. Either way they need the right to list Stages in the project namespace. Each row has **Open in pipeline**.
+
+The rows an AnalysisRun that Kargo started for a verification files (the run, its pods and its Jobs) say "Verification check for Kargo stage <stage>" and link to the stage, when the stage's verification finding is in the same list. The AnalysisRun drawer says "Verification failed for Kargo stage <stage>" (from the run's `kargo.akuity.io/stage` label or annotation) and only says the rollout will be aborted when a Rollout owns the run.
+
+Older failed promotions are history, not Issues. An Aborted promotion is a person's cancellation and is never an Issue. An Errored phase on any Kargo kind reads as unhealthy. A promotion that has been running too long is not detected.
+
+### Supported CRDs
+
+| Kind | API Group |
+|------|-----------|
+| Stage, Freight, Promotion, Warehouse | `kargo.akuity.io` |
+| Project, ProjectConfig, ClusterConfig, PromotionTask, ClusterPromotionTask | `kargo.akuity.io` (generic views) |
+
 ## Istio
 
 [Istio](https://istio.io/) is the most widely adopted service mesh, providing traffic management, security (mTLS), and observability for microservices.
