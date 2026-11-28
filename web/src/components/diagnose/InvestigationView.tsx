@@ -1507,15 +1507,22 @@ export function InvestigationView({
     (domId: string, evidence: boolean) => {
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
-          const marker = document.getElementById(domId);
+          const container = evidence
+            ? evidenceScrollRef.current
+            : scrollRef.current;
+          const marker =
+            (evidence && container
+              ? Array.from(
+                  container.querySelectorAll<HTMLElement>(
+                    `[id="${domId.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"]`,
+                  ),
+                ).find((candidate) => !candidate.closest("[inert]"))
+              : undefined) ?? document.getElementById(domId);
           const target = evidence
             ? ((marker?.closest(
                 "[data-evidence-card], [data-evidence-source-container]",
               ) as HTMLElement | null) ?? marker)
             : marker;
-          const container = evidence
-            ? evidenceScrollRef.current
-            : scrollRef.current;
           if (target && container) {
             const containerRect = container.getBoundingClientRect();
             const targetRect = target.getBoundingClientRect();

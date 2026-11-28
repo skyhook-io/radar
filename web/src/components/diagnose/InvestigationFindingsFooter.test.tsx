@@ -309,3 +309,105 @@ it("can land on a proposal even when saved evidence is permanently unavailable",
   expect(footer.evidenceLink(evidenceRef)).toBeUndefined();
   expect(footer.askQuestion).toBeUndefined();
 });
+
+it("expands Captured results and focuses an unplaced main read in a story-shaped investigation", async () => {
+  const findings = render();
+  const proposalRef = "ev_sampleinvestigationaaaaaaa_proposalgetresourcereadaaa";
+  const proposalRead: DiagnoseStreamEvent = {
+    type: "step",
+    step: {
+      id: "proposal-read",
+      tool: "get_resource",
+      status: "done",
+      isError: false,
+      radarEvidence: true,
+      evidenceRef: proposalRef,
+      result: JSON.stringify({
+        apiVersion: "apps/v1",
+        kind: "Deployment",
+        metadata: {
+          name: run.name,
+          namespace: run.namespace,
+          resourceVersion: "42",
+        },
+        status: { readyReplicas: 1, replicas: 2 },
+      }),
+    },
+  };
+  replay([...events.slice(0, -1), proposalRead, events[events.length - 1]]);
+
+  const resultsToggle = findings.querySelector<HTMLButtonElement>(
+    'button[aria-controls="investigation-captured-results"]',
+  )!;
+  const resultsPanel = findings.querySelector<HTMLElement>(
+    "#investigation-captured-results",
+  )!;
+  const targetCard = resultsPanel.querySelector<HTMLElement>(
+    '[data-evidence-source="turn-0-step-proposal-read"]',
+  )!;
+  expect(resultsToggle.getAttribute("aria-expanded")).toBe("false");
+  expect(targetCard).toBeTruthy();
+  expect(targetCard.closest("[inert]")).not.toBeNull();
+
+  const open = footer.evidenceLink(proposalRef);
+  expect(open).toEqual(expect.any(Function));
+  act(() => open!());
+
+  await vi.waitFor(() => {
+    expect(resultsToggle.getAttribute("aria-expanded")).toBe("true");
+    expect(targetCard.closest("[inert]")).toBeNull();
+    expect(document.activeElement).toBe(targetCard);
+    expect(document.activeElement?.hasAttribute("data-evidence-card")).toBe(
+      true,
+    );
+  });
+  expect(resultsPanel.contains(document.activeElement)).toBe(true);
+});
+
+it("preserves visible story cards and focuses the non-inert Captured results card when a story duplicate is inert", async () => {
+  const findings = render();
+  replay();
+  const placedRef = "ev_sampleinvestigationaaaaaaa_applicationdiagnosebundlea";
+  const resultsToggle = findings.querySelector<HTMLButtonElement>(
+    'button[aria-controls="investigation-captured-results"]',
+  )!;
+  const resultsPanel = findings.querySelector<HTMLElement>(
+    "#investigation-captured-results",
+  )!;
+  const story = findings.querySelector<HTMLElement>("[data-story]")!;
+  const storyToggle = findings.querySelector<HTMLButtonElement>(
+    "[data-story] > button[aria-expanded]",
+  )!;
+
+  act(() => storyToggle.click());
+  expect(story.getAttribute("data-story-open")).toBe("true");
+  expect(resultsToggle.getAttribute("aria-expanded")).toBe("false");
+
+  const open = footer.evidenceLink(placedRef);
+  expect(open).toEqual(expect.any(Function));
+  act(() => open!());
+
+  await vi.waitFor(() => {
+    expect(story.contains(document.activeElement)).toBe(true);
+    expect(document.activeElement?.id.startsWith("story-")).toBe(true);
+    expect(document.activeElement?.closest("[inert]")).toBeNull();
+  });
+  const storyCard = document.activeElement as HTMLElement;
+  expect(resultsToggle.getAttribute("aria-expanded")).toBe("false");
+
+  act(() => storyToggle.click());
+  expect(story.getAttribute("data-story-open")).toBe("false");
+  expect(story.contains(storyCard)).toBe(true);
+  expect(storyCard.closest("[inert]")).not.toBeNull();
+
+  act(() => footer.evidenceLink(placedRef)!());
+  await vi.waitFor(() => {
+    expect(resultsToggle.getAttribute("aria-expanded")).toBe("true");
+    expect(resultsPanel.contains(document.activeElement)).toBe(true);
+    expect(document.activeElement).not.toBe(storyCard);
+    expect(document.activeElement?.hasAttribute("data-evidence-card")).toBe(
+      true,
+    );
+    expect(document.activeElement?.closest("[inert]")).toBeNull();
+  });
+});

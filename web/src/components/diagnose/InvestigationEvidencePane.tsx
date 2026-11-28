@@ -205,6 +205,13 @@ export function InvestigationEvidencePane({
     },
     [onGroupOpenChange, collectionByGroup, storyMode, resultsOpen],
   );
+  const revealPrimaryGroupId = revealRequest
+    ? projection.sources.find((item) => item.id === revealRequest.sourceId)
+        ?.primaryGroupId
+    : undefined;
+  const revealInMain =
+    revealPrimaryGroupId !== undefined &&
+    collectionByGroup.get(revealPrimaryGroupId) === "main";
   const revealCollection = revealRequest
     ? investigationEvidenceRevealCollection(
         projection,
@@ -237,7 +244,15 @@ export function InvestigationEvidencePane({
       setEarlierOpen(true);
       return;
     }
-    if (storyMode && revealCollection && !resultsOpen) {
+    const placedStoryCard =
+      storyMode && revealInMain && revealPrimaryGroupId
+        ? document.getElementById(`story-${revealPrimaryGroupId}`)
+        : null;
+    const needsCapturedResults =
+      Boolean(revealCollection) ||
+      (revealInMain &&
+        (!placedStoryCard || Boolean(placedStoryCard.closest("[inert]"))));
+    if (storyMode && needsCapturedResults && !resultsOpen) {
       openingForRevealRequestRef.current = requestId;
       setResultsOpen(true);
       return;
@@ -272,6 +287,8 @@ export function InvestigationEvidencePane({
   }, [
     revealRequest,
     revealCollection,
+    revealInMain,
+    revealPrimaryGroupId,
     onRevealReady,
     earlierOpen,
     coverageOpen,
