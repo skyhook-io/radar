@@ -1,0 +1,22 @@
+suite: Rook collection reads only CephClusters and CephBlockPools
+templates:
+  - clusterrole.yaml
+tests:
+  - it: grants read access to CephClusters and CephBlockPools by default
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["ceph.rook.io"]
+            resources: ["cephclusters", "cephblockpools"]
+            verbs: ["get", "list", "watch"]
+  - it: removes the grant when disabled
+    set:
+      rbac.crdGroups.rook: false
+    asserts:
+      - notContains:
+          path: rules
+          content:
+            apiGroups: ["ceph.rook.io"]
+            resources: ["cephclusters", "cephblockpools"]
+            verbs: ["get", "list", "watch"]

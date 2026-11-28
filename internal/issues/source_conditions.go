@@ -17,6 +17,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/longhorn"
+	"github.com/skyhook-io/radar/pkg/rook"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -192,6 +193,14 @@ func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool
 			}
 			if gvr.Group == VolumeSnapshotGroup && kind == "VolumeSnapshot" {
 				out = append(out, VolumeSnapshotIssues(gvr, u)...)
+				continue
+			}
+			if gvr.Group == rook.Group && kind == "CephCluster" {
+				out = append(out, RookCephClusterIssues(gvr, u, time.Now())...)
+				continue
+			}
+			if gvr.Group == rook.Group && kind == "CephBlockPool" {
+				out = append(out, RookCephBlockPoolIssues(gvr, u)...)
 				continue
 			}
 			if ownedSubjects[resourceKey(gvr.Group, kind, u.GetNamespace(), u.GetName())] {

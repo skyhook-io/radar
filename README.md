@@ -506,6 +506,7 @@ The Helm chart grants read access to common built-in Kubernetes kinds; Secrets, 
 | **Longhorn** | [Volume](docs/integrations.md#longhorn): replica health from its Engine, rebuild progress, faulted and degraded Issues |
 | **External Secrets** | ExternalSecret, ClusterExternalSecret, SecretStore, ClusterSecretStore |
 | **CSI Volume Snapshots** | [VolumeSnapshot, VolumeSnapshotContent and VolumeSnapshotClass](docs/integrations.md#csi-volume-snapshots): readiness, errors, restore size, source, binding and deletion policy |
+| **Rook Ceph** | [CephCluster and CephBlockPool](docs/integrations.md#rook-ceph): Ceph health checks and freshness, failed reconciles, capacity and pool data protection, with Issues |
 | **Secrets Store CSI Driver** | [SecretProviderClass and Pod mounts](docs/integrations.md#secrets-store-csi-driver): mount state, object versions and synced Secrets in the Pod drawer |
 | **[Vault](docs/integrations.md#local-runtime-evidence-rabbitmq-nats-and-vault)** | Initialization, seal and standby state - **local collection** |
 | **CloudNativePG** | Cluster, Backup, ScheduledBackup, Pooler, Database, Publication, Subscription, ImageCatalog, ClusterImageCatalog, ObjectStore — plus [dedicated views](docs/cnpg.md) for fleet, protection and declaration triage |

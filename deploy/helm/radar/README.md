@@ -838,6 +838,7 @@ retain their finite grants.
 | `prometheus` | `monitoring.coreos.com` |
 | `reflector` | `reflector.v1.k8s.emberstack.com` |
 | `reloader` | `reloader.stakater.com` |
+| `rook` | `ceph.rook.io` (`cephclusters`, `cephblockpools` only) |
 | `sealedSecrets` | `bitnami.com` |
 | `secretsStoreCsi` | `secrets-store.csi.x-k8s.io` (`secretproviderclasses`, `secretproviderclasspodstatuses` only) |
 | `strimzi` | `strimzi.io`, `kafka.strimzi.io`, `core.strimzi.io` (`strimzipodsets` only) |

@@ -209,6 +209,7 @@ export { StrimziConnectorRenderer } from './StrimziConnectorRenderer'
 export { StrimziKafkaRenderer, StrimziKafkaNodePoolRenderer } from './StrimziKafkaRenderer'
 export { VolumeSnapshotRenderer, VolumeSnapshotContentRenderer, VolumeSnapshotClassRenderer } from './VolumeSnapshotRenderers'
 export { MetalLBIPAddressPoolRenderer, MetalLBL2AdvertisementRenderer, MetalLBBGPAdvertisementRenderer, MetalLBBGPPeerRenderer, MetalLBConfigurationStateRenderer } from './MetalLBRenderers'
+export { CephClusterRenderer, CephBlockPoolRenderer } from './RookCephRenderers'
 
 export { CustomResourceDefinitionRenderer } from './CustomResourceDefinitionRenderer'
 

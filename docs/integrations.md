@@ -1344,6 +1344,67 @@ Not covered: display topology graph nodes, VolumeGroupSnapshots, and snapshot cr
 
 ---
 
+## Rook Ceph
+
+[Rook](https://rook.io/) runs Ceph on Kubernetes. Radar reads its `CephCluster` and `CephBlockPool` objects (`ceph.rook.io/v1`), read-only, from the Kubernetes API alone: no Ceph dashboard, toolbox commands or metrics. Fields are those Rook's controllers write as of v1.21; one a version doesn't write reads as unknown.
+
+### What Radar Shows
+
+**CephCluster drawer:**
+- **Ceph health** as Rook last read it from `ceph status` (`status.ceph`): the reported health, when Rook checked it (`lastChecked`), when it last changed and from what (`lastChanged`, `previousHealth`), and every health check with its code, severity and message, HEALTH_ERR first.
+- **Cluster:** Rook's phase and message, the Ceph version Rook detected and the image in the spec, FSID, external mode, configured monitor and manager counts, data dir host path and network provider. A note shows while Rook hasn't finished reconciling the latest spec (`observedGeneration` behind `generation`).
+- **Storage:** raw capacity used, total and available with when Rook last updated it, OSDs by object store (`status.storage.osd.storeType`), device classes and the node and device selection settings.
+- A banner when Rook's last reconcile failed, quoting the error, and when the health is stale or health checks are disabled.
+
+**CephBlockPool drawer:** status and Rook's message, the pool name in Ceph and its ID, data protection (replica size, or erasure-coded data and coding chunks, with safe-replica, per-failure-domain and hybrid-storage settings), failure domain (`spec.failureDomain`, or the default Rook records in `status.info`), device class, CRUSH root, compression, target size ratio, quotas, mirroring (mode, snapshot schedules and the health Rook reports in `status.mirroringStatus.summary`) and parameters. A banner when Rook failed to configure the pool, or when deletion is blocked (`DeletionIsBlocked` / `PoolDeletionIsBlocked`), with Rook's reason.
+
+Configuration is kept apart from observed health. A replica size or failure domain says how Ceph should place data, not that the data has those copies now; placement-group health is in the CephCluster's Ceph health. Both drawers say so.
+
+**CephCluster status:**
+
+| Status | Source |
+|---|---|
+| HEALTH_ERR (red) | Current `status.ceph.health` |
+| Reconcile failed (amber) | The condition named by `status.phase` is False (Rook writes `Progressing` False with the error in `status.message` and keeps retrying). Ceph itself can still be healthy |
+| HEALTH_WARN (amber), HEALTH_OK (green) | Current `status.ceph.health` |
+| Health checks disabled | `spec.healthCheck.daemonHealth.status.disabled`: Rook stops refreshing the health, so what is left is not current |
+| Health stale | Rook has not refreshed `lastChecked` in three health-check intervals (`spec.healthCheck.daemonHealth.status.interval`, default 60s), and never less than ten minutes, or the report has no check time. When `ceph status` fails Rook writes a fresh HEALTH_ERR instead, so a stale report usually means the operator is not running |
+| Rook phase (`Progressing`, `Ready`, `Connected`, …) | No health reported yet, for example while the cluster is created |
+| Not reported | No status |
+| Terminating | `metadata.deletionTimestamp` is set |
+
+HEALTH_ERR outranks a failed reconcile, which outranks HEALTH_WARN and HEALTH_OK. A stale, disabled or missing report never reads as healthy. The operator's `ROOK_CEPH_STATUS_CHECK_INTERVAL` overrides the spec interval but is not visible to Radar, so a longer interval set only there can read as stale.
+
+**CephBlockPool status:** Rook's `status.phase`: Ready (Rook configured the pool), Progressing, Failure, or Not reported without a status; Deletion blocked or Terminating while it is deleted.
+
+**Tables:** CephClusters show status, current health check codes, raw capacity used, phase, message, Ceph version, configured monitors, external mode and when Rook last checked the health. Capacity sorts by the share used. CephBlockPools show status, data protection, failure domain, device class and mirroring mode. These curated columns replace Rook's printer columns; the data dir host path and FSID move to the drawer.
+
+### Issues
+
+| Condition | Severity | Reason |
+|---|---|---|
+| CephCluster with current `status.ceph.health: HEALTH_ERR` | critical | `CephHealthError` |
+| CephCluster with current `status.ceph.health: HEALTH_WARN` | warning | `CephHealthWarning` |
+| CephCluster whose last reconcile failed | warning | `CephClusterReconcileFailed` |
+| CephBlockPool with `status.phase: Failure` | warning | `CephBlockPoolFailure` |
+
+All fall under "Controller reports a problem". The health Issue quotes up to five health checks and counts the rest; its onset is `status.ceph.lastChanged`, when Rook saw the health change, and unknown for a cluster that has reported the same health since its first check. HEALTH_WARN stays a warning: Ceph raises it for routine states such as a rebalance as well as for real risk. A stale or disabled report raises nothing; the drawer shows it as such. Rook rewrites the failed-reconcile condition on every retry and records no time with a pool's phase, so their onset is unknown. A cluster can carry the health and reconcile Issues at once. MCP list summaries carry the same status, plus the Rook phase, Ceph version, external mode and current raw capacity for clusters, and data protection and failure domain for pools.
+
+### Supported CRDs
+
+| CRD | Group | Topology | Detail View | AI Summary |
+|-----|-------|----------|-------------|------------|
+| CephCluster | `ceph.rook.io/v1` | — | Yes | Yes |
+| CephBlockPool | `ceph.rook.io/v1` | — | Yes | Yes |
+
+Collection is on by default in the Helm chart (`rbac.crdGroups.rook`) and reads only these two kinds. Radar Cloud's default integration-read role grants both: they hold health, capacity and configuration, and credentials stay in the Secrets the spec names. Namespace-scoped callers usually can't read them, since they live in the Rook namespace. See [the default read policy](cloud-rbac-baseline.md).
+
+The status rules are checked against Rook v1.21's status writers with fixtures shared by the backend and the UI (`pkg/rook/testdata/status.json`); those fixtures are shaped from the controller code, not captured from a running cluster.
+
+Not covered: storage relationships (CSI StorageClass parameters naming a pool or cluster), other Rook kinds (CephFilesystem, CephObjectStore, CephNFS, RADOS namespaces, mirroring peers), and any Ceph or Rook actions.
+
+---
+
 ## Strimzi Kafka connectors
 
 Connector details separate desired settings from the operator-reported connector and task states, show worker addresses and optional automatic-restart history, and link to KafkaConnect. Failed tasks override an otherwise Ready badge; stale, paused or incomplete observations never establish health. The view reads the existing custom resource without contacting Kafka Connect or requiring application credentials.

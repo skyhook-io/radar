@@ -10,6 +10,13 @@ entries:
     decision: grant
     reason: "Volume, engine and replica state: sizes, nodes, replica modes, rebuild progress and backup times. No credentials (spec.fromBackup is a backup URL, not a secret). They live in the Longhorn namespace, so a namespace-scoped caller usually can't read them."
     source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "ceph.rook.io"
+    resources: ["cephclusters","cephblockpools"]
+    scope: Namespaced
+    collection: "rook"
+    decision: grant
+    reason: "Ceph health checks, capacity, versions, reconcile state, and storage and pool configuration. Credentials stay in Secrets the spec names (KMS token, mirroring peers, cephConfigFromSecret); the objects carry no key material. They live in the Rook namespace, so a namespace-scoped caller usually can't read them."
+    source: "https://github.com/rook/rook/blob/v1.21.3/pkg/apis/ceph.rook.io/v1/types.go"
   - group: ""
     resources: ["podtemplates"]
     scope: Namespaced

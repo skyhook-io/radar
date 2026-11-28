@@ -1,0 +1,76 @@
+{
+  "_note": "Status cases for CephCluster and CephBlockPool, read by pkg/rook and packages/k8s-ui at the same `now`. All are synthetic: shaped from what Rook v1.21's controllers write (cluster conditions in pkg/operator/ceph/controller/conditions.go, status.ceph in pkg/operator/ceph/cluster/cephstatus.go, pool phases in pkg/operator/ceph/pool), not captured from a cluster.",
+  "now": "2026-11-20T12:00:00Z",
+  "clusters": [
+    {"name": "healthy", "want": "HEALTH_OK", "object": {
+      "status": {"phase": "Ready", "state": "Created", "message": "Cluster created successfully",
+        "conditions": [{"type": "Ready", "status": "True", "reason": "ClusterCreated", "message": "Cluster created successfully"}],
+        "ceph": {"health": "HEALTH_OK", "lastChecked": "2026-11-20T11:59:30Z", "fsid": "4d0f3a52-1c1b-4c3e-9a57-0d5d6a2f1b11"}}}},
+    {"name": "warning", "want": "HEALTH_WARN", "object": {
+      "status": {"phase": "Ready", "conditions": [{"type": "Ready", "status": "True", "reason": "ClusterCreated"}],
+        "ceph": {"health": "HEALTH_WARN", "lastChecked": "2026-11-20T11:59:30Z", "lastChanged": "2026-11-20T11:40:00Z", "previousHealth": "HEALTH_OK",
+          "details": {"MON_DOWN": {"severity": "HEALTH_WARN", "message": "1/3 mons down, quorum a,b"}}}}}},
+    {"name": "error", "want": "HEALTH_ERR", "object": {
+      "status": {"phase": "Ready", "conditions": [{"type": "Ready", "status": "True", "reason": "ClusterCreated"}],
+        "ceph": {"health": "HEALTH_ERR", "lastChecked": "2026-11-20T11:59:30Z",
+          "details": {"OSD_FULL": {"severity": "HEALTH_ERR", "message": "1 full osd(s)"}, "POOL_FULL": {"severity": "HEALTH_WARN", "message": "1 pool(s) full"}}}}}},
+    {"name": "status-check-failed", "want": "HEALTH_ERR", "object": {
+      "status": {"phase": "Ready", "conditions": [{"type": "Ready", "status": "True", "reason": "ClusterCreated"}],
+        "ceph": {"health": "HEALTH_ERR", "lastChecked": "2026-11-20T11:59:30Z",
+          "details": {"error": {"severity": "Urgent", "message": "failed to get status. . timed out: exit status 1"}}}}}},
+    {"name": "reconcile-failed-health-ok", "want": "Reconcile failed", "object": {
+      "status": {"phase": "Progressing", "state": "Error", "message": "failed to create cluster: failed to start ceph monitors",
+        "conditions": [
+          {"type": "Ready", "status": "True", "reason": "ClusterCreated", "message": "Cluster created successfully"},
+          {"type": "Progressing", "status": "False", "reason": "ClusterProgressing", "message": "failed to create cluster: failed to start ceph monitors"}],
+        "ceph": {"health": "HEALTH_OK", "lastChecked": "2026-11-20T11:59:30Z"}}}},
+    {"name": "reconcile-failed-health-error", "want": "HEALTH_ERR", "object": {
+      "status": {"phase": "Progressing", "state": "Error", "message": "failed to configure local ceph cluster",
+        "conditions": [{"type": "Progressing", "status": "False", "reason": "ClusterProgressing", "message": "failed to configure local ceph cluster"}],
+        "ceph": {"health": "HEALTH_ERR", "lastChecked": "2026-11-20T11:59:30Z"}}}},
+    {"name": "reconciling-health-ok", "want": "HEALTH_OK", "object": {
+      "status": {"phase": "Progressing", "message": "Configuring Ceph OSDs",
+        "conditions": [{"type": "Ready", "status": "True", "reason": "ClusterCreated"}, {"type": "Progressing", "status": "True", "reason": "ClusterProgressing", "message": "Configuring Ceph OSDs"}],
+        "ceph": {"health": "HEALTH_OK", "lastChecked": "2026-11-20T11:59:30Z"}}}},
+    {"name": "stale", "want": "Health stale", "object": {
+      "status": {"phase": "Ready", "ceph": {"health": "HEALTH_OK", "lastChecked": "2026-11-20T11:00:00Z"}}}},
+    {"name": "stale-error", "want": "Health stale", "object": {
+      "status": {"phase": "Ready", "ceph": {"health": "HEALTH_ERR", "lastChecked": "2026-11-20T11:00:00Z"}}}},
+    {"name": "long-interval-not-stale", "want": "HEALTH_OK", "object": {
+      "spec": {"healthCheck": {"daemonHealth": {"status": {"interval": "30m0s"}}}},
+      "status": {"phase": "Ready", "ceph": {"health": "HEALTH_OK", "lastChecked": "2026-11-20T11:00:00Z"}}}},
+    {"name": "no-check-time", "want": "Health stale", "object": {
+      "status": {"phase": "Ready", "ceph": {"health": "HEALTH_OK"}}}},
+    {"name": "checks-disabled", "want": "Health checks disabled", "object": {
+      "spec": {"healthCheck": {"daemonHealth": {"status": {"disabled": true}}}},
+      "status": {"phase": "Ready", "ceph": {"health": "HEALTH_OK", "lastChecked": "2026-11-20T11:59:30Z"}}}},
+    {"name": "creating", "want": "Progressing", "object": {
+      "status": {"phase": "Progressing", "state": "Creating", "message": "Configuring Ceph Mons",
+        "conditions": [{"type": "Progressing", "status": "True", "reason": "ClusterProgressing", "message": "Configuring Ceph Mons"}]}}},
+    {"name": "external-connected", "want": "Connected", "object": {
+      "spec": {"external": {"enable": true}},
+      "status": {"phase": "Connected", "conditions": [{"type": "Connected", "status": "True", "reason": "ClusterConnected"}]}}},
+    {"name": "no-status", "want": "Not reported", "object": {}},
+    {"name": "terminating", "want": "Terminating", "object": {
+      "metadata": {"deletionTimestamp": "2026-11-20T11:58:00Z"},
+      "status": {"phase": "Deleting", "ceph": {"health": "HEALTH_ERR", "lastChecked": "2026-11-20T11:59:30Z"}}}}
+  ],
+  "pools": [
+    {"name": "ready", "want": "Ready", "object": {
+      "spec": {"failureDomain": "host", "replicated": {"size": 3}},
+      "status": {"phase": "Ready", "message": "Block pool configured successfully", "poolID": 2, "info": {"type": "Replicated", "failureDomain": "host"}}}},
+    {"name": "progressing", "want": "Progressing", "object": {
+      "status": {"phase": "Progressing", "message": "Initializing block pool"}}},
+    {"name": "failure", "want": "Failure", "object": {
+      "status": {"phase": "Failure", "message": "Failed to create the block pool. See the operator log for details."}}},
+    {"name": "no-status", "want": "Not reported", "object": {}},
+    {"name": "terminating", "want": "Terminating", "object": {
+      "metadata": {"deletionTimestamp": "2026-11-20T11:58:00Z"},
+      "status": {"phase": "Ready"}}},
+    {"name": "deletion-blocked", "want": "Deletion blocked", "object": {
+      "metadata": {"deletionTimestamp": "2026-11-20T11:58:00Z"},
+      "status": {"phase": "Ready", "conditions": [
+        {"type": "PoolDeletionIsBlocked", "status": "True", "reason": "PoolNotEmpty", "message": "pool \"replicapool\" contains images and/or snapshots"},
+        {"type": "DeletionIsBlocked", "status": "False", "reason": "ObjectHasNoDependents", "message": "object deletion is not blocked because it has no dependents"}]}}}
+  ]
+}

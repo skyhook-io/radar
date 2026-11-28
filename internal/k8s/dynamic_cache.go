@@ -288,6 +288,8 @@ var supportedCRDFallbacks = []supportedCRDResource{
 	{Group: "snapshot.storage.k8s.io", Versions: []string{"v1"}, Resource: "volumesnapshots", Kind: "VolumeSnapshot", Namespaced: true},
 	{Group: "snapshot.storage.k8s.io", Versions: []string{"v1"}, Resource: "volumesnapshotcontents", Kind: "VolumeSnapshotContent", Namespaced: false},
 	{Group: "snapshot.storage.k8s.io", Versions: []string{"v1"}, Resource: "volumesnapshotclasses", Kind: "VolumeSnapshotClass", Namespaced: false},
+	{Group: "ceph.rook.io", Versions: []string{"v1"}, Resource: "cephclusters", Kind: "CephCluster", Namespaced: true},
+	{Group: "ceph.rook.io", Versions: []string{"v1"}, Resource: "cephblockpools", Kind: "CephBlockPool", Namespaced: true},
 	{Group: "metallb.io", Versions: []string{"v1beta1"}, Resource: "ipaddresspools", Kind: "IPAddressPool", Namespaced: true},
 	{Group: "metallb.io", Versions: []string{"v1beta1"}, Resource: "l2advertisements", Kind: "L2Advertisement", Namespaced: true},
 	{Group: "metallb.io", Versions: []string{"v1beta1"}, Resource: "bgpadvertisements", Kind: "BGPAdvertisement", Namespaced: true},

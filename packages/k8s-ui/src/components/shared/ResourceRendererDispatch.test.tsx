@@ -1312,6 +1312,24 @@ describe('MetalLB exact group', () => {
   })
 })
 
+describe('Rook Ceph exact group', () => {
+  const cluster = {apiVersion: 'ceph.rook.io/v1', kind: 'CephCluster', metadata: {name: 'rook-ceph', namespace: 'rook-ceph'}, spec: {mon: {count: 3}}, status: {phase: 'Progressing', message: 'failed to start ceph monitors', conditions: [{type: 'Progressing', status: 'False'}]}}
+  const pool = {apiVersion: 'ceph.rook.io/v1', kind: 'CephBlockPool', metadata: {name: 'replicapool', namespace: 'rook-ceph'}, spec: {failureDomain: 'host', replicated: {size: 3}}, status: {phase: 'Failure', message: 'Failed to create the block pool.'}}
+  it('renders curated drawers and Rook status', () => {
+    expect(getResourceStatus('cephclusters', cluster)?.text).toBe('Reconcile failed')
+    expect(renderKind('cephclusters', cluster, 'rook-ceph')).toContain('Ceph Health')
+    expect(getResourceStatus('cephblockpools', pool)?.text).toBe('Failure')
+    expect(renderKind('cephblockpools', pool, 'rook-ceph')).toContain('Data Protection')
+  })
+  it('leaves lookalike groups generic', () => {
+    for (const apiVersion of ['fake.ceph.rook.io/v1', 'ceph.example.com/v1']) {
+      expect(renderKind('cephclusters', {...cluster, apiVersion})).not.toContain('Ceph Health')
+      expect(renderKind('cephblockpools', {...pool, apiVersion})).not.toContain('Data Protection')
+      expect(getResourceStatus('cephclusters', {...cluster, apiVersion})?.text).not.toBe('Reconcile failed')
+    }
+  })
+})
+
 describe('CSI VolumeSnapshot exact group', () => {
   const snapshot = {apiVersion: 'snapshot.storage.k8s.io/v1', kind: 'VolumeSnapshot', metadata: {name: 'data-snap', namespace: 'demo'}, spec: {source: {persistentVolumeClaimName: 'data'}}, status: {error: {message: 'class not found'}}}
   const content = {apiVersion: 'snapshot.storage.k8s.io/v1', kind: 'VolumeSnapshotContent', metadata: {name: 'snapcontent-1'}, spec: {driver: 'hostpath.csi.k8s.io', deletionPolicy: 'Retain', source: {volumeHandle: 'v'}, volumeSnapshotRef: {name: 'data-snap', namespace: 'demo', uid: 'u'}}, status: {readyToUse: true}}
