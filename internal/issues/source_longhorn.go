@@ -1,6 +1,7 @@
 package issues
 
 import (
+	"strings"
 	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -36,6 +37,32 @@ func detectLonghornVolumeIssues(gvr schema.GroupVersionResource, kind string, it
 				"Fewer healthy replicas than requested. Longhorn rebuilds them when it can place a replica, which is routine after a node drain or restart; if it lasts, check whether a replica can be scheduled (node disks, scheduling settings).",
 				at, err == nil, "", u.GetCreationTimestamp().Time))
 		}
+	}
+	return out
+}
+
+// dedupeLonghornNodeOverCoreNode: Longhorn copies the Kubernetes node's
+// state into its own Node's Ready condition (reasons KubernetesNode*). The copy
+// is dropped only when the caller still sees an Issue on the core Node of the
+// same name, so it runs after access gating: a deleted core Node
+// (KubernetesNodeGone) or one the caller cannot read leaves it the only signal.
+// Longhorn's own reasons (its manager pod down, no mount propagation) are kept.
+func dedupeLonghornNodeOverCoreNode(in []Issue) []Issue {
+	coreNodes := map[string]bool{}
+	for _, i := range in {
+		if i.Group == "" && i.Kind == "Node" {
+			coreNodes[i.Name] = true
+		}
+	}
+	if len(coreNodes) == 0 {
+		return in
+	}
+	out := in[:0]
+	for _, i := range in {
+		if i.Group == longhorn.Group && i.Kind == "Node" && strings.HasPrefix(i.Reason, "Ready: KubernetesNode") && coreNodes[i.Name] {
+			continue
+		}
+		out = append(out, i)
 	}
 	return out
 }

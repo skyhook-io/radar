@@ -460,7 +460,9 @@ func affectedOf(refs []Ref) Affected {
 		case "PersistentVolumeClaim":
 			a.PVCs++
 		case "Node":
-			a.Nodes++
+			if r.Group == "" {
+				a.Nodes++
+			}
 		}
 	}
 	return a

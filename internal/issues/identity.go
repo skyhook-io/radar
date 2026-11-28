@@ -25,6 +25,10 @@ func enrichIdentity(i *Issue) {
 		subjRef = i.Owner
 	}
 	scope := subject.ScopeForKind(subjRef.Kind)
+	// ScopeForKind reads the Kind alone; Longhorn's longhorn.io Node is not a node.
+	if subjRef.Kind == "Node" && subjRef.Group != "" {
+		scope = subject.ScopeUnknown
+	}
 	i.GroupingScope = issuesapi.Scope(scope)
 	i.ID = subject.StableID(scope, resourceKey(subjRef.Group, subjRef.Kind, subjRef.Namespace, subjRef.Name), discriminator(i))
 }

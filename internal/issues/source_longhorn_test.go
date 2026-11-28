@@ -8,6 +8,8 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
+	"github.com/skyhook-io/radar/pkg/longhorn"
+
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 )
 
@@ -65,5 +67,64 @@ func TestLonghornVolumeIssues(t *testing.T) {
 	}
 	if got := Classify(classifyInput{Source: SourceCondition, Reason: d.Reason, Kind: "Volume", APIGroup: "longhorn.io"}); got != issuesapi.CategoryVolumeDegraded {
 		t.Errorf("degraded category = %s, want %s", got, issuesapi.CategoryVolumeDegraded)
+	}
+}
+
+// A Longhorn Node shares the Kind "Node" with the core Node; its condition
+// Issue must not read as a node problem anywhere the Kind alone is checked.
+func TestLonghornNodeIsNotACoreNode(t *testing.T) {
+	longhornNode := Issue{Source: SourceCondition, Kind: "Node", Group: "longhorn.io", Namespace: "longhorn-system", Name: "worker-1", Reason: "Ready: KubernetesNodeNotReady"}
+	classifyIssue(&longhornNode)
+	enrichIdentity(&longhornNode)
+	if longhornNode.Category != issuesapi.CategoryOperatorConditionFail {
+		t.Errorf("category = %s, want %s", longhornNode.Category, issuesapi.CategoryOperatorConditionFail)
+	}
+	if longhornNode.GroupingScope == issuesapi.ScopeNode {
+		t.Error("a Longhorn Node got the node grouping scope")
+	}
+	coreNode := Issue{Source: SourceProblem, Kind: "Node", Name: "worker-1", Reason: "NotReady"}
+	classifyIssue(&coreNode)
+	enrichIdentity(&coreNode)
+	if coreNode.Category != issuesapi.CategoryNodeNotReady || coreNode.GroupingScope != issuesapi.ScopeNode {
+		t.Errorf("core Node = %s/%s, want %s/%s", coreNode.Category, coreNode.GroupingScope, issuesapi.CategoryNodeNotReady, issuesapi.ScopeNode)
+	}
+	if got := affectedOf([]Ref{{Kind: "Node", Name: "worker-1"}, {Group: "longhorn.io", Kind: "Node", Namespace: "longhorn-system", Name: "worker-1"}}); got.Nodes != 1 {
+		t.Errorf("affected nodes = %d, want 1 (the core Node only)", got.Nodes)
+	}
+}
+
+// Longhorn mirrors the Kubernetes node into its own Node's Ready condition.
+// The copy is dropped only when the caller still sees the core Node's Issue:
+// a deleted core Node, or one the caller cannot read, leaves it the only signal.
+func TestDedupeLonghornNodeOverCoreNode(t *testing.T) {
+	longhornNode := func(name, reason string) Issue {
+		return Issue{Source: SourceCondition, Group: longhorn.Group, Kind: "Node", Namespace: "longhorn-system", Name: name, Reason: "Ready: " + reason}
+	}
+	coreNode := Issue{Source: SourceProblem, Kind: "Node", Name: "worker-1", Reason: "NotReady"}
+	names := func(in []Issue) []string {
+		var out []string
+		for _, i := range in {
+			out = append(out, i.Group+"/"+i.Name+"/"+i.Reason)
+		}
+		return out
+	}
+
+	for _, reason := range []string{"KubernetesNodeNotReady", "KubernetesNodePressure"} {
+		got := dedupeLonghornNodeOverCoreNode([]Issue{coreNode, longhornNode("worker-1", reason)})
+		if len(got) != 1 || got[0].Group != "" {
+			t.Errorf("%s with a visible core Node Issue: got %v, want the core Node only", reason, names(got))
+		}
+	}
+	for _, reason := range []string{"KubernetesNodeGone", "KubernetesNodeNotReady"} {
+		got := dedupeLonghornNodeOverCoreNode([]Issue{longhornNode("worker-1", reason)})
+		if len(got) != 1 {
+			t.Errorf("%s with no core Node Issue in view: got %v, want it kept", reason, names(got))
+		}
+	}
+	if got := dedupeLonghornNodeOverCoreNode([]Issue{coreNode, longhornNode("worker-2", "KubernetesNodeNotReady")}); len(got) != 2 {
+		t.Errorf("another node's core Issue must not hide it: got %v", names(got))
+	}
+	if got := dedupeLonghornNodeOverCoreNode([]Issue{coreNode, longhornNode("worker-1", "ManagerPodDown")}); len(got) != 2 {
+		t.Errorf("Longhorn's own reason must stay: got %v", names(got))
 	}
 }
