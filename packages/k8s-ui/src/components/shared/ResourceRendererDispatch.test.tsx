@@ -5,6 +5,7 @@ import { renderToString } from 'react-dom/server'
 import { ResourceRendererDispatch, diagnoseHealthHint, getResourceStatus, type RendererOverrides } from './ResourceRendererDispatch'
 import { getCellFilterValue } from '../resources/resource-utils'
 import type { ResourceRef } from '../../types'
+import * as kargoFixtures from '../resources/kargo-test-fixtures'
 
 function renderWithScalers(scalers: ResourceRef[]): string {
   const overrides: RendererOverrides = {
@@ -1536,3 +1537,60 @@ describe('Plan kind collision (upgrade.cattle.io vs other plans CRDs)', () => {
   })
 })
 
+
+// Stage, Promotion and Warehouse are common kind names (Tekton and CI tools ship
+// their own), so every Kargo branch is gated on the exact kargo.akuity.io group.
+describe('Kargo dispatch', () => {
+  it('renders the Kargo drawers and status for kargo.akuity.io', () => {
+    expect(renderKind('stages', kargoFixtures.uatStage, 'kargo-demo')).toContain('Verification of the current Freight failed')
+    expect(renderKind('promotions', kargoFixtures.erroredPromotion, 'kargo-demo')).toContain('Kargo could not run step 6')
+    expect(renderKind('freights', kargoFixtures.newFreight, 'kargo-demo')).toContain('illocutionary-skunk')
+    expect(renderKind('warehouses', kargoFixtures.warehouse, 'kargo-demo')).toContain('Picks ^1.29.0')
+    expect(getResourceStatus('stages', kargoFixtures.testStage)).toMatchObject({ text: 'Promotion errored', level: 'unhealthy' })
+    expect(getResourceStatus('promotions', kargoFixtures.erroredPromotion)).toMatchObject({ text: 'Errored', level: 'unhealthy' })
+    expect(getResourceStatus('warehouses', kargoFixtures.warehouse)).toMatchObject({ text: 'Ready', level: 'healthy' })
+    expect(getResourceStatus('freights', kargoFixtures.newFreight)).toBeNull()
+    expect(diagnoseHealthHint('stages', kargoFixtures.uatStage)).toBe('problem')
+  })
+
+  it.each(['stages', 'freights', 'promotions', 'warehouses'])('gives a foreign %s CRD the generic drawer and status', kind => {
+    const data = {
+      apiVersion: 'example.com/v1',
+      kind: 'Foreign',
+      metadata: { name: 'foreign', namespace: 'default' },
+      spec: { collisionProbe: COLLISION_PROBE },
+      status: { phase: 'Running' },
+    }
+    const html = renderKind(kind, data)
+    expect(html).toContain(COLLISION_PROBE)
+    expect(html).not.toContain('Current Freight')
+    expect(html).not.toContain('Subscriptions')
+    expect(html).not.toContain('As Kargo records them')
+    expect(getResourceStatus(kind, data)).toMatchObject({ text: 'Running' })
+  })
+
+  it('does not claim a group that merely contains kargo.akuity.io', () => {
+    const data = { ...kargoFixtures.uatStage, apiVersion: 'mirror.kargo.akuity.io/v1alpha1', spec: { ...kargoFixtures.uatStage.spec, collisionProbe: COLLISION_PROBE } }
+    const html = renderKind('stages', data)
+    expect(html).toContain(COLLISION_PROBE)
+    expect(html).not.toContain('Current Freight')
+  })
+})
+
+describe('generic phases', () => {
+  it('reads Errored as unhealthy and Aborted as a neutral cancellation', () => {
+    const errored = { apiVersion: 'example.com/v1', kind: 'Run', status: { phase: 'Errored', message: 'boom' } }
+    const aborted = { apiVersion: 'example.com/v1', kind: 'Run', status: { phase: 'Aborted' } }
+    expect(getGenericResourceStatus(errored)).toEqual({ text: 'Errored', tone: 'unhealthy', reason: 'boom' })
+    expect(getGenericResourceStatus(aborted)).toMatchObject({ text: 'Aborted', tone: 'neutral' })
+    expect(getResourceStatus('runs', errored)).toEqual({ text: 'Errored', color: HEALTH_BADGE_COLORS.unhealthy })
+    expect(getResourceStatus('runs', aborted)).toEqual({ text: 'Aborted', color: HEALTH_BADGE_COLORS.neutral })
+  })
+
+  // Argo Workflows reports Error and Failed; Argo Rollouts reports Degraded with
+  // status.abort. Neither depends on the two words added above.
+  it('leaves Argo Workflows and Rollouts phases as they were', () => {
+    expect(getGenericResourceStatus({ apiVersion: 'argoproj.io/v1alpha1', kind: 'Workflow', status: { phase: 'Error' } })).toMatchObject({ tone: 'unhealthy' })
+    expect(getGenericResourceStatus({ apiVersion: 'argoproj.io/v1alpha1', kind: 'Workflow', status: { phase: 'Succeeded' } })).toMatchObject({ tone: 'healthy' })
+  })
+})

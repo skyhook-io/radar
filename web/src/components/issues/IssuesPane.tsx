@@ -31,6 +31,7 @@ import { uncheckedSourceLines, uncheckedSubjectWhy } from "./uncheckedSources";
 import { UncheckedSourceHelp } from "./UncheckedSourceHelp";
 import { useClearLinkedIssue } from "../../utils/page-links";
 import { useIssueExpansion, useIssueRowNotes } from "./useIssueExpansion";
+import { KARGO_GROUP, kargoPipelinePath } from "../kargo/routes";
 
 // A capacity-relevant issue links to its Karpenter diagnosis. Karpenter is
 // always single-cluster (unlike Argo hub-and-spoke), so the issue and the
@@ -80,6 +81,18 @@ export function capacityHrefForIssue(
     }
     return "/capacity/demand";
   }
+  return null;
+}
+
+/**
+ * The Kargo pipeline page for a Kargo finding: a Stage's at that Stage's card,
+ * a Promotion's at its project, since the row doesn't name the Promotion's
+ * Stage. Null for any other issue.
+ */
+export function kargoPipelineHrefForIssue(issue: Issue): string | null {
+  if (issue.group !== KARGO_GROUP || !issue.namespace) return null;
+  if (issue.kind === "Stage") return kargoPipelinePath(issue.namespace, issue.name);
+  if (issue.kind === "Promotion") return kargoPipelinePath(issue.namespace);
   return null;
 }
 
@@ -469,8 +482,18 @@ export function IssuesPane({
           onVisibleIssuesChange={rowNotes.onVisibleIssuesChange}
           renderActions={({ issue }) => {
             const capacityHref = capacityHrefForIssue(issue, hasKarpenter);
+            const pipelineHref = kargoPipelineHrefForIssue(issue);
             return (
               <div className="flex items-center gap-2">
+                {pipelineHref && (
+                  <button
+                    type="button"
+                    onClick={() => navigate(pipelineHref)}
+                    className="rounded-md border border-theme-border px-2 py-1 text-xs font-medium text-accent-text transition-colors hover:bg-theme-hover"
+                  >
+                    Open in pipeline →
+                  </button>
+                )}
                 {capacityHref && (
                   <button
                     type="button"

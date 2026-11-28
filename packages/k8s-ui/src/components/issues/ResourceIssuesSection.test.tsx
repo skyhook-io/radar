@@ -172,3 +172,15 @@ it.each(['Cluster', 'Deployment'])('wraps compact scheduling causes aggregated u
   expect(regular).toContain('Unschedulable')
   expect(regular).not.toContain('both nodes have reached their Pod limit')
 })
+
+it('says which Kargo stage a verification check row belongs to, and links to the stage', () => {
+  const check: Issue = {
+    ...issue, id: 'job', category: 'job_failed', category_group: 'runtime', kind: 'Job', namespace: 'kargo-demo', name: '0ee8f3a3.error-rate.1',
+    reason: 'BackoffLimitExceeded', cause: undefined, diagnostic_context: undefined,
+    incident_parent: { id: 'stage', ref: { group: 'kargo.akuity.io', kind: 'Stage', namespace: 'kargo-demo', name: 'uat' }, confidence: 'high', fact_type: 'kargo_verification' },
+  }
+  const html = renderToString(<IssueRow issue={check} open onToggle={() => {}} resourceHref={ref => `/resources/${ref.kind}/${ref.namespace}/${ref.name}`} />).replace(/<!-- -->/g, '')
+  expect(html).toContain('Verification check for Kargo stage')
+  expect(html).not.toContain('Caused by')
+  expect(html).toContain('/resources/Stage/kargo-demo/uat')
+})

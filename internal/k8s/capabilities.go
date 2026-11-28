@@ -295,6 +295,10 @@ type FeatureCapabilities struct {
 	// GET/DELETE /api/integrations/openobserve, POST .../setup and DELETE
 	// .../cluster: local Radar's OpenObserve setup in Settings → Metrics.
 	OpenObserveLocalSetup bool `json:"openobserveLocalSetup"`
+
+	// GET /api/kargo/workspace, /api/kargo/projects/{project} and
+	// /api/kargo/freight-aliases
+	KargoWorkspace bool `json:"kargoWorkspace"`
 }
 
 // WorkloadWritePermissions records the permissions used by workload actions.

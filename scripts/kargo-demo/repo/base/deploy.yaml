@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kargo-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kargo-demo
+  template:
+    metadata:
+      labels:
+        app: kargo-demo
+    spec:
+      containers:
+      - name: nginx
+        image: public.ecr.aws/nginx/nginx:placeholder
+        volumeMounts:
+        - name: content
+          mountPath: /usr/share/nginx/html
+          readOnly: true
+      volumes:
+      - name: content
+        configMap:
+          name: kargo-demo-content

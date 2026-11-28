@@ -217,6 +217,7 @@ rbac:
     jobset: true            # jobset.x-k8s.io
     kaiScheduler: true      # scheduling.run.ai, kai.scheduler (KAI Scheduler queues and pod groups)
     kaito: true             # kaito.sh (Workspaces, RAGEngines)
+    kargo: true             # kargo.akuity.io (Kargo Projects, Warehouses, Freight, Stages, Promotions, PromotionTasks, Targets; ProjectConfigs and ClusterConfigs only when Secrets are granted, as their status holds webhook receiver URLs). A missing key counts as on
     karpenter: true         # karpenter.sh, karpenter.k8s.aws, karpenter.azure.com, karpenter.k8s.gcp, eks.amazonaws.com (EKS Auto Mode NodeClasses)
     keda: true              # keda.sh
     knative: true           # serving.knative.dev, eventing.knative.dev, sources/messaging/flows/networking.internal.knative.dev

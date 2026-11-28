@@ -100,6 +100,7 @@
             "gcpMonitoring": { "type": "boolean" },
             "grafana": { "type": "boolean" },
             "istio": { "type": "boolean" },
+            "kargo": { "type": "boolean" },
             "karpenter": { "type": "boolean" },
             "keda": { "type": "boolean" },
             "knative": { "type": "boolean" },

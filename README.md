@@ -480,6 +480,7 @@ The Helm chart grants read access to common built-in Kubernetes kinds; Secrets, 
 | **GitOps (ArgoCD)** | Application, ApplicationSet, AppProject |
 | **Argo Rollouts** | Rollout |
 | **Argo Workflows** | Workflow, WorkflowTemplate |
+| **[Kargo](docs/kargo.md)** | Stage, Freight, Promotion, Warehouse: a pipelines view per project with each stage's version, health, verification, last promotion and why the newest version isn't there yet; failed promotions and verifications in Issues; Stage to Argo CD Application links |
 | **[Reflector](docs/integrations.md#configmap-and-secret-reflection-reflector)** | ConfigMap/Secret reflection details, source and mirror relationships, recorded copy evidence |
 | **cert-manager** | Certificate, CertificateRequest, Order, Challenge, Issuer, ClusterIssuer |
 | **Gateway API** | Gateway, GatewayClass, HTTPRoute, GRPCRoute, TCPRoute, TLSRoute, UDPRoute |

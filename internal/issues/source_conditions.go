@@ -16,7 +16,9 @@ import (
 	"github.com/skyhook-io/radar/pkg/gitops"
 	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
+	"github.com/skyhook-io/radar/pkg/kargo"
 	"github.com/skyhook-io/radar/pkg/longhorn"
+	"github.com/skyhook-io/radar/pkg/resourceid"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -77,7 +79,9 @@ func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool
 		// entirely. Match in lowercase (same as applyFilters) so
 		// "Pod"/"pod" and CRD-typed "MyResource"/"myresource" both
 		// compare equal.
-		if len(wantKind) > 0 && !wantKind[strings.ToLower(kind)] && !(gvr.Group == VeleroGroup && veleroInputs[kind]) {
+		// A Kargo Promotion's finding is read off its Stage.
+		kargoPromotionInput := gvr.Group == kargo.Group && kind == kargo.KindStage && wantKind["promotion"]
+		if len(wantKind) > 0 && !wantKind[strings.ToLower(kind)] && !(gvr.Group == VeleroGroup && veleroInputs[kind]) && !kargoPromotionInput {
 			continue
 		}
 		clusterScoped, _, _ := classifyDynamicScope(p, gvr, kind)
@@ -127,6 +131,13 @@ func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool
 				continue
 			}
 			items = its
+		}
+		// A Stage's findings are also about the namespaces its Argo CD
+		// Applications deploy to.
+		if gvr.Group == kargo.Group && kind == kargo.KindStage && len(f.Namespaces) > 0 {
+			for _, u := range kargoStagesDeployingTo(p, gvr, f.Namespaces) {
+				out = append(out, KargoStageIssues(gvr, u)...)
+			}
 		}
 		// Checked after the list, which may have just started an informer
 		// for a namespace no one had read before.
@@ -197,6 +208,12 @@ func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool
 			if ownedSubjects[resourceKey(gvr.Group, kind, u.GetNamespace(), u.GetName())] {
 				continue
 			}
+			// A Stage's failed promotion and verification are its own findings;
+			// the generic walk still reads its other conditions.
+			kargoStage := gvr.Group == kargo.Group && kind == kargo.KindStage
+			if kargoStage {
+				out = append(out, KargoStageIssues(gvr, u)...)
+			}
 			if curated := detectCuratedConditionIssues(gvr, kind, u); len(curated) > 0 {
 				out = append(out, curated...)
 				continue
@@ -223,6 +240,9 @@ func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool
 						return condition.Status == "False" && condition.Reason == "Stopped"
 					})
 				}
+			}
+			if kargoStage {
+				condTypes = kargoGenericConditionTypes(u, condTypes)
 			}
 			condition, ok := findActionableCondition(u, condTypes...)
 			if !ok {
@@ -281,6 +301,9 @@ func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool
 				Count:             1,
 				IssueTiming:       timingR.IssueTiming,
 				IssueTimingBasis:  timingR.Basis,
+			}
+			if gvr.Group == kargo.Group && u.GetNamespace() != "" {
+				iss.RequiredReads = kargoEvidence(gvr, u.GetNamespace())
 			}
 			classifyIssue(&iss)
 			enrichIdentity(&iss)
@@ -702,6 +725,11 @@ func toString(v any) string {
 //     generation, not the live state.
 func isTransientCRDCondition(u *unstructured.Unstructured, reason string) bool {
 	if conditions.IsInProgressForIssues(reason) {
+		return true
+	}
+	// Kargo writes these on Ready while a promotion, health check,
+	// verification or discovery runs, and before a Stage has Freight.
+	if resourceid.GroupFromAPIVersion(u.GetAPIVersion()) == kargo.Group && kargo.WaitingReason(reason) {
 		return true
 	}
 	if u.GetKind() == "Rollout" && strings.HasPrefix(strings.ToLower(u.GetAPIVersion()), "argoproj.io/") {

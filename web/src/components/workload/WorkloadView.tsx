@@ -40,7 +40,10 @@ import {
   gitOpsWriteEvidencePaths,
   type SetImageSelection,
   type WorkloadImageTarget,
+  kargoAuthorizedStages,
+  type KargoStageRef,
 } from '@skyhook-io/k8s-ui'
+import { kargoPipelinePath } from '../kargo/routes'
 import type { ServicePortRenderProps } from '@skyhook-io/k8s-ui/components/resources/renderers/ServiceRenderer'
 import { isJobSetV1Alpha2 } from '@skyhook-io/k8s-ui/components/resources/resource-utils-jobset-lws'
 import { isCoreNode as isCoreNodeObject } from '@skyhook-io/k8s-ui/components/resources/resource-utils'
@@ -1020,6 +1023,11 @@ export function WorkloadView({
     (path: string) => navigateRouter(path),
     [navigateRouter],
   )
+  const managerKargoStages = useMemo(() => kargoAuthorizedStages(gitopsOwnerObject), [gitopsOwnerObject])
+  const handleOpenKargoStage = useCallback(
+    (stage: KargoStageRef) => navigateRouter(kargoPipelinePath(stage.project, stage.stage)),
+    [navigateRouter],
+  )
   // Offered for the kinds the traffic map draws as one node, and only once a
   // traffic source is known to be available on this cluster. A Job something
   // controls (a CronJob, a JobSet) is not one: the map groups its pods under
@@ -1561,6 +1569,8 @@ export function WorkloadView({
         helmOwnerSource={helmOwnerSource}
         onOpenHelmRelease={handleOpenHelmRelease}
         onNavigateGitOpsPath={handleNavigateGitOpsPath}
+        managerKargoStages={managerKargoStages}
+        onOpenKargoStage={handleOpenKargoStage}
         onOpenLiveTraffic={offerLiveTraffic ? openLiveTraffic : undefined}
       />
       <CreateResourceDialog

@@ -165,6 +165,8 @@ The families so far:
 | `ArgoPodWorkflows` | Pods → Argo Workflow through the workflow label, preserving the graph’s label-only management path | `management_families.go` |
 | `ArgoWorkflowCronWorkflows` | Argo Workflow → CronWorkflow, preferring the controller reference to the cron-workflow label fallback | `management_families.go` |
 | `SealedSecrets` | Bitnami SealedSecrets → the Secret of their own name they produce | `status_families.go` |
+| `KargoPipeline` | Kargo Promotions → the Stage they target and the Freight they promote; Freight → the Warehouse it came from; Stages → their upstream Stages and the Warehouses they take Freight from directly. Every reference stays in the project's namespace; Dependencies on the referring object, Dependents on the target | `kargo.go` |
+| `KargoArgoCDApps` | Kargo Stages → the Argo CD Applications their last promotion updated or waited on, from the Stage's `kargo.akuity.io/argocd-context` annotation, usually in another namespace; an Application's Stages come from the family's index. An Application's `kargo.akuity.io/authorized-stage` annotation says which Stages may update it, not which did, and is not followed | `kargo.go` |
 
 `CertificateRoutes` (`compositions.go`) joins a Certificate’s declared output Secret coordinates to Traefik routes and Contour proxies declaring the same Secret. Both endpoints are checked under the caller’s access; the logical Secret is never read or required to exist. The projection feeds Certificate `Consumers` and route `ConfigRefs`.
 

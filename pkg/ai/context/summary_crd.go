@@ -9,6 +9,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/conditions"
 	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/csr"
+	"github.com/skyhook-io/radar/pkg/kargo"
 	"github.com/skyhook-io/radar/pkg/karpenter"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 	"github.com/skyhook-io/radar/pkg/resourceid"
@@ -43,6 +44,8 @@ func summarizeUnstructuredKind(obj *unstructured.Unstructured, pause resourcecon
 		return summarizeFlaggerMetricTemplate(obj)
 	case group == TrivyGroup && obj.Object["report"] != nil:
 		return summarizeTrivyReport(obj)
+	case group == kargo.Group && (kind == kargo.KindStage || kind == kargo.KindFreight || kind == kargo.KindPromotion || kind == kargo.KindWarehouse):
+		return summarizeKargo(obj)
 	case group == "argoproj.io" && kind == "Application":
 		return summarizeArgoApp(obj)
 	case group == "argoproj.io" && kind == "Rollout":

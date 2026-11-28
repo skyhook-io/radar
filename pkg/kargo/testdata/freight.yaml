@@ -1,0 +1,63 @@
+# Real objects from a Kargo v1.12.7 pipeline (project kargo-demo), trimmed.
+apiVersion: v1
+items:
+- alias: illocutionary-skunk
+  apiVersion: kargo.akuity.io/v1alpha1
+  discoveredAt: '2026-11-25T13:08:04Z'
+  images:
+  - digest: sha256:9ce62af8c757d8e49d85804dc72092119b1ff80a3133e78dd968842b9f9dda07
+    repoURL: public.ecr.aws/nginx/nginx
+    tag: 1.31.10
+  kind: Freight
+  metadata:
+    creationTimestamp: '2026-11-25T13:08:04Z'
+    labels:
+      kargo.akuity.io/alias: illocutionary-skunk
+    name: b56f6e30e82989f403c760e5d534403854ce59ef
+    namespace: kargo-demo
+  origin:
+    kind: Warehouse
+    name: kargo-demo
+  status:
+    currentlyIn:
+      test:
+        since: '2026-11-25T13:08:50Z'
+      uat:
+        since: '2026-11-25T13:09:05Z'
+    verifiedIn:
+      test:
+        verifiedAt: '2026-11-25T13:09:00Z'
+- alias: fallacious-robin
+  apiVersion: kargo.akuity.io/v1alpha1
+  discoveredAt: '2026-11-25T13:08:06Z'
+  images:
+  - digest: sha256:7cdd7d67af427e78edfa77db29cc13a9ada62cc0c89beaf05f8d3c5d3f9ac3da
+    repoURL: public.ecr.aws/nginx/nginx
+    tag: 1.31.9
+  kind: Freight
+  metadata:
+    creationTimestamp: '2026-11-25T13:08:07Z'
+    generateName: manual-
+    labels:
+      kargo.akuity.io/alias: fallacious-robin
+    name: c9e2bddf7415b036e09b96946d8ecf3a9a2257e5
+    namespace: kargo-demo
+  origin:
+    kind: Warehouse
+    name: kargo-demo
+  status:
+    currentlyIn:
+      prod:
+        since: '2026-11-25T13:08:45Z'
+    verifiedIn:
+      prod:
+        verifiedAt: '2026-11-25T13:08:45Z'
+      test:
+        longestSoak: 35.469301832s
+        verifiedAt: '2026-11-25T13:08:28Z'
+      uat:
+        longestSoak: 36.561201046s
+        verifiedAt: '2026-11-25T13:08:39Z'
+kind: List
+metadata:
+  resourceVersion: ''

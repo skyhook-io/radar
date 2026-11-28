@@ -75,3 +75,5 @@ F73	Longhorn Volume ↔ PV (CSI handle)	longhornStorage	longhornStorage		A PV ha
 F74	Flux dependsOn	fluxDependsOn	fluxDependsOn		
 F75	CSI VolumeSnapshot ↔ Content / Class / source PVC	volumeSnapshots	volumeSnapshots		Observed bindings only: VolumeSnapshot uses status.boundVolumeSnapshotContentName (not spec.source.volumeSnapshotContentName) and VolumeSnapshotContent requires spec.volumeSnapshotRef.uid matched against the target snapshot's metadata.uid.
 F76	PVC restored from CSI VolumeSnapshot	restoredVolumeSnapshots	restoredVolumeSnapshots		Reads spec.dataSource and spec.dataSourceRef (including cross-namespace dataSourceRef), deduplicating when both name the same snapshot.
+F77	Kargo Promotion → Stage/Freight, Freight → Warehouse, Stage → upstream Stage/Warehouse	kargoPipeline	kargoPipeline		
+F78	Kargo Stage → Argo CD Application (argocd-context annotation)	kargoArgoCDApps	kargoArgoCDApps		

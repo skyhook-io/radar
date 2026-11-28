@@ -1,0 +1,12 @@
+apiVersion: kargo.akuity.io/v1alpha1
+kind: Freight
+metadata:
+  generateName: manual-
+  namespace: kargo-demo
+origin:
+  kind: Warehouse
+  name: kargo-demo
+images:
+- repoURL: public.ecr.aws/nginx/nginx
+  tag: "1.31.9"
+  digest: "sha256:7cdd7d67af427e78edfa77db29cc13a9ada62cc0c89beaf05f8d3c5d3f9ac3da"

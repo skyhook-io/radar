@@ -821,6 +821,7 @@ retain their finite grants.
 | `gcpMonitoring` | `monitoring.googleapis.com` |
 | `grafana` | `monitoring.grafana.com`, `tempo.grafana.com`, `loki.grafana.com`, `grafana.integreatly.org` |
 | `istio` | `networking.istio.io`, `security.istio.io` |
+| `kargo` | `kargo.akuity.io` (`projects`, `warehouses`, `freights`, `stages`, `promotions`, `promotionrequests`, `promotiontasks`, `clusterpromotiontasks`, `targets`; `projectconfigs` and `clusterconfigs` only when Secrets are granted, see below). A values tree without the key, as after `--reuse-values` from an older release, counts as on; only `false` turns it off. |
 | `karpenter` | `karpenter.sh`, `karpenter.k8s.aws`, `karpenter.azure.com`, `karpenter.k8s.gcp`, `eks.amazonaws.com` |
 | `keda` | `keda.sh` |
 | `knative` | `serving.knative.dev`, `eventing.knative.dev`, `sources.knative.dev`, `messaging.knative.dev`, `flows.knative.dev`, `networking.internal.knative.dev`, and `jobsinks` in `sinks.knative.dev` |
@@ -865,6 +866,11 @@ permissions are additive, and these exclusions are not deny rules.
 **MetalLB BGPPeers** (`bgppeers` in `metallb.io`) follow the same rule when
 `rbac.crdGroups.metallb` is on: `spec.password` can hold the BGP session
 password inline, so Radar reads BGPPeers only when the chart grants Secrets.
+
+**Kargo ProjectConfigs and ClusterConfigs** (`projectconfigs`, `clusterconfigs` in
+`kargo.akuity.io`) follow the same rule when `rbac.crdGroups.kargo` is on:
+`status.webhookReceivers` lists each webhook receiver's URL, which works as
+that receiver's shared secret.
 
 **Disable groups:** `--set rbac.crdGroups.calico=false`
 

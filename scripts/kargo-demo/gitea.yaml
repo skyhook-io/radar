@@ -1,0 +1,42 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: gitea
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gitea
+  namespace: gitea
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: gitea}
+  template:
+    metadata:
+      labels: {app: gitea}
+    spec:
+      containers:
+      - name: gitea
+        image: gitea/gitea:1.22.6-rootless
+        env:
+        - {name: GITEA__security__INSTALL_LOCK, value: "true"}
+        - {name: GITEA__server__ROOT_URL, value: "http://gitea.gitea.svc.cluster.local:3000/"}
+        - {name: GITEA__database__DB_TYPE, value: sqlite3}
+        - {name: GITEA__service__DISABLE_REGISTRATION, value: "true"}
+        - {name: GITEA__repository__DEFAULT_BRANCH, value: main}
+        ports:
+        - containerPort: 3000
+        readinessProbe:
+          httpGet: {path: /api/healthz, port: 3000}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gitea
+  namespace: gitea
+spec:
+  selector: {app: gitea}
+  ports:
+  - port: 3000
+    targetPort: 3000

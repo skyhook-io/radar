@@ -45,6 +45,9 @@ var crdGroupToChart = map[string]string{
 	// External Secrets Operator
 	"external-secrets.io": "external-secrets",
 
+	// Kargo
+	"kargo.akuity.io": "kargo",
+
 	// Velero
 	"velero.io": "velero",
 

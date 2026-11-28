@@ -840,6 +840,20 @@ stays hidden from a caller who may not read ResourceClaims.
 
 Pause is separate from recorded readiness, operational issues and audit findings. On generic CRD summary rows carrying `crossplanePause`, `ready` preserves the recorded condition status, and an independent Synced error remains in `issue` even if Ready is True. `context=none` omits enrichment but retains the summary row's `crossplanePause`. Detail keeps raw annotations/conditions; Compact keeps the exact pause annotation key. Radar's own Diagnose kickoff carries the same fact without treating pause alone as a problem. The MCP `diagnose` tool's supported kinds are unchanged; use `get_resource` for Crossplane resources. Summary rows for all terminating CRDs also retain `terminating` and `finalizers`, matching typed-resource summaries.
 
+## Kargo summary block
+
+`list_resources` summaries and `get_resource`'s summary carry an optional `kargo` block for Kargo (`kargo.akuity.io`) Stages, Freight, Promotions and Warehouses, because a Freight's name is a content hash and says nothing to a person:
+
+- `alias`: a Freight's generated name, such as `singing-octopus`.
+- `versions`: the images, commits and charts a Freight carries, a Stage holds or a Promotion promotes, as short labels (`nginx:1.31.9`, `app@3f2a9c1`, `podinfo 6.5.0`).
+- `origin`: the Warehouse a Freight came from (`Warehouse/<name>`).
+- `stage`, `freight`: a Promotion's target Stage and the Freight it promotes.
+- `sources`: where a Stage takes Freight from: upstream Stage names, or `Warehouse/<name>` for a direct source.
+- `argoCDApps`: the Argo CD Applications (`namespace/name`) a Stage's last promotion updated, from its `kargo.akuity.io/argocd-context` annotation.
+- `failedStep`: the step a failed or errored Promotion stopped at; the summary's `issue` carries the reason.
+
+A Stage's `status` is its state as Kargo's UI names it (Promoting, Verifying, Reconciling, Failed, Ready, Unknown); a Promotion's is its phase. An Aborted promotion is a person's cancellation and is never an `issue`. Fields Radar couldn't read are left out, never filled with a guess. Code: `pkg/ai/context/summary_kargo.go`.
+
 ## `diagnose` evidence limits
 
 Job, JobSet, RayJob and Kueue Workload diagnosis returns cached context,

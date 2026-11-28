@@ -125,7 +125,8 @@ export function bestScore(item: CommandItem, query: string): number {
 }
 
 export interface CommandItemCallbacks {
-  onNavigateView: (view: MainView) => void;
+  /** Kargo has no rail entry; the omnibar offers it only when Kargo is discovered. */
+  onNavigateView: (view: MainView | "kargo") => void;
   onNavigateKind: (kind: string, group: string) => void;
   onSwitchContext: (context: ContextInfo) => void;
   onSetNamespaces: (ns: string[]) => void;

@@ -11,6 +11,7 @@ import { UPGRADE_PLAN_GROUP, getUpgradePlanStatus } from './resource-utils-upgra
 import { isApiGroup } from './resource-utils-cnpg'
 import type { HealthLevel } from './resource-utils'
 import { getGatewayPolicyStatus } from './gateway-policy-status'
+import { getKargoStatus } from './resource-utils-kargo'
 
 /**
  * Derives a status for a resource with no dedicated renderer — a CRD Radar
@@ -47,8 +48,11 @@ const DEGRADED_PHASES = new Set([
   'Pending', 'Progressing', 'Unknown', 'Terminating', 'Waiting', 'Provisioning', 'Reconciling',
 ])
 const UNHEALTHY_PHASES = new Set([
-  'Failed', 'Error', 'CrashLoopBackOff', 'ImagePullBackOff', 'ErrImagePull', 'Lost', 'Rejected',
+  'Failed', 'Error', 'Errored', 'CrashLoopBackOff', 'ImagePullBackOff', 'ErrImagePull', 'Lost', 'Rejected',
 ])
+// A user or controller deliberately stopped the work. Not a failure, so never
+// red; the text still says what happened.
+const CANCELLED_PHASES = new Set(['Aborted'])
 
 /**
  * Condition types whose polarity is a convention rather than a guess, most
@@ -148,6 +152,8 @@ export function getGenericResourceStatus(resource: any): GenericStatus | null {
     const native = getUpgradePlanStatus(resource)
     return { text: native.text, tone: native.level }
   }
+  const kargo = getKargoStatus(resource)
+  if (kargo) return { text: kargo.text, tone: kargo.level }
   const status = resource?.status
   if (!status || typeof status !== 'object') return null
 
@@ -173,6 +179,7 @@ export function getGenericResourceStatus(resource: any): GenericStatus | null {
     if (HEALTHY_PHASES.has(phase)) return { text: phase, tone: 'healthy' }
     if (DEGRADED_PHASES.has(phase)) return { text: phase, tone: 'degraded', reason }
     if (UNHEALTHY_PHASES.has(phase)) return { text: phase, tone: 'unhealthy', reason }
+    if (CANCELLED_PHASES.has(phase)) return { text: phase, tone: 'neutral', reason }
     // An unrecognized phase does NOT short-circuit. Its health is unknown to
     // us, so a Ready=False condition or a failed replica count below is the
     // better answer; the phase text is kept as the last resort. Returning here

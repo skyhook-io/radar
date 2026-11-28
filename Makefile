@@ -278,6 +278,20 @@ velero-demo-down:
 velero-demo-status:
 	./scripts/velero-demo.sh status
 
+# Real Kargo 1.12 pipeline (Warehouse, then test, uat and prod Stages) on Argo CD,
+# with an in-cluster Gitea as the git remote. Ends with a failed uat
+# verification, an Errored test promotion and an older Failed prod promotion.
+# KUBE_CONTEXT=<ctx> installs into an existing cluster instead of creating one.
+# See scripts/kargo-demo/README.md.
+kargo-demo:
+	./scripts/kargo-demo.sh up
+
+kargo-demo-down:
+	./scripts/kargo-demo.sh down
+
+kargo-demo-status:
+	./scripts/kargo-demo.sh status
+
 # Bootstrap a kind cluster pre-loaded with curated CloudNativePG fixtures
 # (four clusters all 2/2 Ready with four different badges, a real WAL-archiving
 # failure, Pooler/ScheduledBackup/Backups, plus Velero + KubeBlocks CRs for the

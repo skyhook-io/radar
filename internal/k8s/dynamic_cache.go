@@ -461,6 +461,14 @@ var supportedCRDFallbacks = []supportedCRDResource{
 	{Group: "longhorn.io", Versions: []string{"v1beta2"}, Resource: "volumes", Kind: "Volume", Namespaced: true},
 	{Group: "longhorn.io", Versions: []string{"v1beta2"}, Resource: "engines", Kind: "Engine", Namespaced: true},
 	{Group: "longhorn.io", Versions: []string{"v1beta2"}, Resource: "replicas", Kind: "Replica", Namespaced: true},
+	// Kargo. Stage collides with other tools' kinds and Project with OpenShift's,
+	// so every reader matches the group too. The pipeline view, its Issues
+	// source and the Argo CD Application link read these five.
+	{Group: "kargo.akuity.io", Versions: []string{"v1alpha1"}, Resource: "projects", Kind: "Project", Namespaced: false},
+	{Group: "kargo.akuity.io", Versions: []string{"v1alpha1"}, Resource: "warehouses", Kind: "Warehouse", Namespaced: true},
+	{Group: "kargo.akuity.io", Versions: []string{"v1alpha1"}, Resource: "freights", Kind: "Freight", Namespaced: true},
+	{Group: "kargo.akuity.io", Versions: []string{"v1alpha1"}, Resource: "stages", Kind: "Stage", Namespaced: true},
+	{Group: "kargo.akuity.io", Versions: []string{"v1alpha1"}, Resource: "promotions", Kind: "Promotion", Namespaced: true},
 	{Group: "velero.io", Versions: []string{"v1"}, Resource: "backups", Kind: "Backup", Namespaced: true},
 	{Group: "velero.io", Versions: []string{"v1"}, Resource: "restores", Kind: "Restore", Namespaced: true},
 	{Group: "velero.io", Versions: []string{"v1"}, Resource: "schedules", Kind: "Schedule", Namespaced: true},

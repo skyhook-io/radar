@@ -61,6 +61,7 @@ type ResourceSummary struct {
 	CrossplanePause        resourcecontext.CrossplanePauseState `json:"crossplanePause,omitempty"`
 	OpenTelemetryCollector *OpenTelemetryCollectorSummary       `json:"openTelemetryCollector,omitempty"`
 	FlaggerCanary          *FlaggerCanarySummary                `json:"flaggerCanary,omitempty"`
+	Kargo                  *KargoSummary                        `json:"kargo,omitempty"`
 	// OpenTelemetryInstrumentation is absent without a readable non-empty
 	// recorded upgrade-block map; absence does not prove no blocks exist.
 	OpenTelemetryInstrumentation *OpenTelemetryInstrumentationSummary `json:"openTelemetryInstrumentation,omitempty"`

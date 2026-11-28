@@ -54,6 +54,7 @@ func indexExamples() []indexExample {
 		{Storage, &corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "example"}, Spec: corev1.PersistentVolumeSpec{StorageClassName: class, ClaimRef: &corev1.ObjectReference{Name: "claim", Namespace: "shop"}}}},
 		{VolumeSnapshots, vsObject("shop", "example", map[string]any{"volumeSnapshotClassName": "csi-snapclass", "source": map[string]any{"persistentVolumeClaimName": "data"}}, map[string]any{"boundVolumeSnapshotContentName": "snapcontent-1"})},
 		{VolumeSnapshots, vscObject("example", map[string]any{"volumeSnapshotClassName": "csi-snapclass", "volumeSnapshotRef": map[string]any{"namespace": "shop", "name": "daily", "uid": "uid-1"}})},
+		{KargoArgoCDApps, &unstructured.Unstructured{Object: map[string]any{"apiVersion": "kargo.akuity.io/v1alpha1", "kind": "Stage", "metadata": map[string]any{"namespace": "shop", "name": "uat", "annotations": map[string]any{"kargo.akuity.io/argocd-context": `[{"name":"shop-uat","namespace":"argocd"}]`}}}}},
 		{Reflections, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "example", Annotations: map[string]string{"reflector.v1.k8s.emberstack.com/reflects": "shared/source"}}}},
 	}
 	for i := range examples {

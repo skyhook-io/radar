@@ -1,0 +1,70 @@
+# Real objects from a Kargo v1.12.7 pipeline (project kargo-demo), trimmed.
+apiVersion: v1
+items:
+- apiVersion: kargo.akuity.io/v1alpha1
+  kind: Warehouse
+  metadata:
+    creationTimestamp: '2026-11-25T13:07:33Z'
+    name: kargo-demo
+    namespace: kargo-demo
+  spec:
+    freightCreationPolicy: Automatic
+    interval: 5m0s
+    subscriptions:
+    - image:
+        constraint: ^1.29.0
+        discoveryLimit: 5
+        imageSelectionStrategy: SemVer
+        repoURL: public.ecr.aws/nginx/nginx
+        strictSemvers: true
+  status:
+    conditions:
+    - lastTransitionTime: '2026-11-25T13:07:33Z'
+      message: Successfully discovered artifacts from 1 subscriptions
+      observedGeneration: 1
+      reason: ArtifactsDiscovered
+      status: 'True'
+      type: Ready
+    - lastTransitionTime: '2026-11-25T13:07:33Z'
+      message: ''
+      observedGeneration: 1
+      reason: ReconciliationSucceeded
+      status: 'True'
+      type: Healthy
+    - lastTransitionTime: '2026-11-25T13:08:04Z'
+      message: Freight creation criteria satisfied
+      observedGeneration: 1
+      reason: CriteriaSatisfied
+      status: 'True'
+      type: FreightCreationCriteriaSatisfied
+    - lastTransitionTime: '2026-11-25T13:08:04Z'
+      message: Freight composed of the newest artifacts already exists
+      observedGeneration: 1
+      reason: AlreadyExists
+      status: 'False'
+      type: FreightCreated
+    discoveredArtifacts:
+      discoveredAt: '2026-11-25T13:08:04Z'
+      images:
+      - references:
+        - createdAt: '2026-11-24T04:18:25Z'
+          digest: sha256:9ce62af8c757d8e49d85804dc72092119b1ff80a3133e78dd968842b9f9dda07
+          tag: 1.31.10
+        - createdAt: '2026-11-18T16:34:13Z'
+          digest: sha256:7cdd7d67af427e78edfa77db29cc13a9ada62cc0c89beaf05f8d3c5d3f9ac3da
+          tag: 1.31.9
+        - createdAt: '2026-11-05T07:17:53Z'
+          digest: sha256:875df6964525450b1b459b44df8225d2a514a00b72a8e059967e3c38724a486c
+          tag: 1.31.8
+        - createdAt: '2026-10-14T19:20:43Z'
+          digest: sha256:aa221d5fa45aab5c901e245bc653a537aecfdf7977169fda8b0b41200ddd3223
+          tag: 1.31.7
+        - createdAt: '2026-10-06T01:20:04Z'
+          digest: sha256:881a7fcea827afc99d022fd7fc81a92fb5799884965d0d6fb8674583633d4cb4
+          tag: 1.31.6
+        repoURL: public.ecr.aws/nginx/nginx
+    lastFreightID: b56f6e30e82989f403c760e5d534403854ce59ef
+    observedGeneration: 1
+kind: List
+metadata:
+  resourceVersion: ''

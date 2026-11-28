@@ -350,6 +350,8 @@ func enrichDiagnosticContextAuthorized(shaped, flat, grouped []Issue, p Provider
 			addKueueClusterQueueEdges(*i, &incidentEdges, groupedByID)
 		}
 
+		addKargoVerificationEdges(*i, &incidentEdges, p, flat, groupedByID)
+
 		if ctx := b.build(); ctx != nil {
 			i.DiagnosticContext = ctx
 		}

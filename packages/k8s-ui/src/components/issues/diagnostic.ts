@@ -1,3 +1,5 @@
+import type { IssueIncidentParent } from './types';
+
 // Shared labels for rendering an issue's DiagnosticContext (the causal-link
 // surface). Used by both the cluster Issues queue (IssuesView) and the
 // per-resource Operational Issues block (ResourceIssuesSection) so the two
@@ -92,9 +94,17 @@ export function incidentParentLabel(factType?: string, confidence?: string): str
       return 'Likely cause';
     case 'node_blast_radius':
       return 'Related';
+    case 'kargo_verification':
+      return 'Verification check for Kargo stage';
     default:
       return confidence === 'high' ? 'Caused by' : 'Possible cause';
   }
+}
+
+// The parent named after the lead-in. A Kargo verification's lead-in already
+// says it is a stage, so only the stage's name follows.
+export function incidentParentSubject(parent: Pick<IssueIncidentParent, 'fact_type' | 'ref'>): string {
+  return parent.fact_type === 'kargo_verification' ? parent.ref.name : `${parent.ref.kind} / ${parent.ref.name}`;
 }
 
 // Plain-language gloss for the confidence chip's tooltip — the operator should
