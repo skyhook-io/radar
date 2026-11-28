@@ -3,6 +3,7 @@ import { getStrimziConnectorColumnValue, getStrimziClusterColumnValue } from './
 import { getOpenTelemetryColumnValue } from './resource-utils-opentelemetry'
 import { getVolumeSnapshotColumnValue } from './resource-utils-volumesnapshot'
 import { getMetalLBColumnValue } from './resource-utils-metallb'
+import { getRookColumnValue } from './resource-utils-rook'
 import { getFlaggerColumnValue } from './resource-utils-flagger'
 import { getK3sHelmChartColumnValue } from './resource-utils-k3s'
 import { getUpgradePlanColumnValue } from './resource-utils-upgrade-plan'
@@ -2624,6 +2625,8 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
   if (volumeSnapshotValue !== undefined) return volumeSnapshotValue
   const metalLBValue = getMetalLBColumnValue(resource, column)
   if (metalLBValue !== undefined) return metalLBValue
+  const rookValue = getRookColumnValue(resource, column)
+  if (rookValue !== undefined) return rookValue
   const otelValue = getOpenTelemetryColumnValue(resource, column)
   if (otelValue !== undefined) return otelValue
   const flaggerValue = getFlaggerColumnValue(resource, column)

@@ -4,6 +4,7 @@ import { getCRDStatus } from './resource-utils-crd'
 import { getStrimziConnectorStatus, getStrimziClusterStatus, isStrimziKafka, isStrimziKafkaNodePool } from './resource-utils-strimzi'
 import { getVolumeSnapshotStatus, getVolumeSnapshotErrorMessage, isVolumeSnapshot, isVolumeSnapshotContent } from './resource-utils-volumesnapshot'
 import { getMetalLBPoolStatus, getMetalLBConfigurationStateStatus, getMetalLBConfigurationErrors, isMetalLBIPAddressPool, isMetalLBConfigurationState } from './resource-utils-metallb'
+import { getCephClusterStatus, getCephClusterStatusReason, getCephBlockPoolStatus, getCephBlockPoolStatusReason, isCephCluster, isCephBlockPool } from './resource-utils-rook'
 import { getOpenTelemetryCollectorStatus, getOpenTelemetryInstrumentationStatus } from './resource-utils-opentelemetry'
 import { getFlaggerCanaryStatus } from './resource-utils-flagger'
 import { K3S_HELM_GROUP, getK3sHelmChartStatus } from './resource-utils-k3s'
@@ -124,6 +125,14 @@ export function getGenericResourceStatus(resource: any): GenericStatus | null {
   if (isMetalLBConfigurationState(resource)) {
     const native = getMetalLBConfigurationStateStatus(resource)
     return { text: native.text, tone: native.level, reason: native.text === 'Invalid' ? getMetalLBConfigurationErrors(resource).join('; ') || undefined : undefined }
+  }
+  if (isCephCluster(resource)) {
+    const native = getCephClusterStatus(resource)
+    return { text: native.text, tone: native.level, reason: getCephClusterStatusReason(resource) }
+  }
+  if (isCephBlockPool(resource)) {
+    const native = getCephBlockPoolStatus(resource)
+    return { text: native.text, tone: native.level, reason: getCephBlockPoolStatusReason(resource) }
   }
   if (isApiGroup(resource?.apiVersion, 'opentelemetry.io')) {
     const native = resource.kind === 'OpenTelemetryCollector' ? getOpenTelemetryCollectorStatus(resource)

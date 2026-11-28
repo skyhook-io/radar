@@ -245,6 +245,7 @@ rbac:
     prometheus: true        # monitoring.coreos.com
     reflector: true         # reflector.v1.k8s.emberstack.com
     reloader: true          # reloader.stakater.com
+    rook: true              # ceph.rook.io CephClusters and CephBlockPools only (Ceph health, reconcile state, pool configuration)
     sealedSecrets: true     # bitnami.com
     secretsStoreCsi: true   # secrets-store.csi.x-k8s.io (Secrets Store CSI Driver: SecretProviderClasses, SecretProviderClassPodStatuses)
     strimzi: true           # strimzi.io, kafka.strimzi.io, core.strimzi.io (StrimziPodSet only)

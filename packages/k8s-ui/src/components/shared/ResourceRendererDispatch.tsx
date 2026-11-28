@@ -7,6 +7,8 @@ import { getVolumeSnapshotStatus, isVolumeSnapshot, isVolumeSnapshotContent, isV
 import { VolumeSnapshotRenderer, VolumeSnapshotContentRenderer, VolumeSnapshotClassRenderer } from '../resources/renderers/VolumeSnapshotRenderers'
 import { getMetalLBPoolStatus, getMetalLBConfigurationStateStatus, isMetalLBIPAddressPool, isMetalLBL2Advertisement, isMetalLBBGPAdvertisement, isMetalLBBGPPeer, isMetalLBConfigurationState } from '../resources/resource-utils-metallb'
 import { MetalLBIPAddressPoolRenderer, MetalLBL2AdvertisementRenderer, MetalLBBGPAdvertisementRenderer, MetalLBBGPPeerRenderer, MetalLBConfigurationStateRenderer } from '../resources/renderers/MetalLBRenderers'
+import { getCephClusterStatus, getCephBlockPoolStatus, isCephCluster, isCephBlockPool } from '../resources/resource-utils-rook'
+import { CephClusterRenderer, CephBlockPoolRenderer } from '../resources/renderers/RookCephRenderers'
 import { getOpenTelemetryCollectorStatus, getOpenTelemetryInstrumentationStatus } from '../resources/resource-utils-opentelemetry'
 import { OpenTelemetryCollectorRenderer, OpenTelemetryInstrumentationRenderer } from '../resources/renderers/OpenTelemetryRenderers'
 import { FlaggerCanaryRenderer, FlaggerMetricTemplateRenderer } from '../resources/renderers/FlaggerRenderers'
@@ -553,6 +555,7 @@ const KNOWN_KINDS = new Set([
   'kafkaconnectors', 'kafkas', 'kafkanodepools',
   'volumesnapshots', 'volumesnapshotcontents', 'volumesnapshotclasses',
   'ipaddresspools', 'l2advertisements', 'bgpadvertisements', 'bgppeers', 'configurationstates',
+  'cephclusters', 'cephblockpools',
   'opentelemetrycollectors', 'instrumentations',
   'canaries', 'metrictemplates',
   'helmcharts', 'helmchartconfigs',
@@ -832,6 +835,7 @@ export function ResourceRendererDispatch({
     kind === 'kafkaconnectors' || kind === 'kafkas' || kind === 'kafkanodepools' ||
     ['volumesnapshots', 'volumesnapshotcontents', 'volumesnapshotclasses'].includes(kind) ||
     ['ipaddresspools', 'l2advertisements', 'bgpadvertisements', 'bgppeers', 'configurationstates'].includes(kind) ||
+    kind === 'cephclusters' || kind === 'cephblockpools' ||
     ['opentelemetrycollectors', 'instrumentations'].includes(kind) ||
     ['canaries', 'metrictemplates'].includes(kind) ||
     TRAEFIK_PLURALS.includes(kind) ||
@@ -866,6 +870,8 @@ export function ResourceRendererDispatch({
     (kind === 'bgpadvertisements' && isMetalLBBGPAdvertisement(data)) ||
     (kind === 'bgppeers' && isMetalLBBGPPeer(data)) ||
     (kind === 'configurationstates' && isMetalLBConfigurationState(data)) ||
+    (kind === 'cephclusters' && isCephCluster(data)) ||
+    (kind === 'cephblockpools' && isCephBlockPool(data)) ||
     (['opentelemetrycollectors', 'instrumentations'].includes(kind) && isApiGroup(data?.apiVersion, 'opentelemetry.io')) ||
     (['canaries', 'metrictemplates'].includes(kind) && isApiGroup(data?.apiVersion, 'flagger.app')) ||
     (TRAEFIK_PLURALS.includes(kind) && isTraefikResource) ||
@@ -1260,6 +1266,8 @@ export function ResourceRendererDispatch({
         {kind === 'bgpadvertisements' && isMetalLBBGPAdvertisement(data) && <MetalLBBGPAdvertisementRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'bgppeers' && isMetalLBBGPPeer(data) && <MetalLBBGPPeerRenderer data={data} />}
         {kind === 'configurationstates' && isMetalLBConfigurationState(data) && <MetalLBConfigurationStateRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'cephclusters' && isCephCluster(data) && <CephClusterRenderer data={data} />}
+        {kind === 'cephblockpools' && isCephBlockPool(data) && <CephBlockPoolRenderer data={data} />}
         {kind === 'instrumentations' && isApiGroup(data?.apiVersion, 'opentelemetry.io') && <OpenTelemetryInstrumentationRenderer data={data} />}
         {kind === 'canaries' && isApiGroup(data?.apiVersion, 'flagger.app') && <FlaggerCanaryRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'metrictemplates' && isApiGroup(data?.apiVersion, 'flagger.app') && <FlaggerMetricTemplateRenderer data={data} onNavigate={onNavigate} />}
@@ -1340,6 +1348,8 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
   if (k === 'configurationstates' && isMetalLBConfigurationState(data)) return getMetalLBConfigurationStateStatus(data)
   // Advertisements and peers are configuration; MetalLB writes no status on them.
   if ((k === 'l2advertisements' && isMetalLBL2Advertisement(data)) || (k === 'bgpadvertisements' && isMetalLBBGPAdvertisement(data)) || (k === 'bgppeers' && isMetalLBBGPPeer(data))) return null
+  if (k === 'cephclusters' && isCephCluster(data)) return getCephClusterStatus(data)
+  if (k === 'cephblockpools' && isCephBlockPool(data)) return getCephBlockPoolStatus(data)
 
   if (isApiGroup(data.apiVersion, 'opentelemetry.io')) {
     if (k === 'opentelemetrycollectors') return getOpenTelemetryCollectorStatus(data)

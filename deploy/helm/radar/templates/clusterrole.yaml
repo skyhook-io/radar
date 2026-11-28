@@ -504,6 +504,11 @@ rules:
     resources: ["volumes", "engines", "replicas"]
     verbs: ["get", "list", "watch"]
   {{- end }}
+  {{- if .Values.rbac.crdGroups.rook }}
+  - apiGroups: ["ceph.rook.io"]
+    resources: ["cephclusters", "cephblockpools"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
   {{- if .Values.rbac.crdGroups.nvidia }}
   - apiGroups: ["nvidia.com"]
     resources: ["*"]

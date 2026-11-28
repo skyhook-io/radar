@@ -3,6 +3,7 @@ import { getCRDColumnValue } from './resource-utils-crd'
 import { getStrimziConnectorColumnValue, getStrimziClusterColumnValue } from './resource-utils-strimzi'
 import { getVolumeSnapshotColumnValue, getVolumeSnapshotSortValue } from './resource-utils-volumesnapshot'
 import { getMetalLBColumnValue, getMetalLBSortValue } from './resource-utils-metallb'
+import { getRookColumnValue, getRookSortValue } from './resource-utils-rook'
 import { getOpenTelemetryColumnValue } from './resource-utils-opentelemetry'
 import { getFlaggerColumnValue } from './resource-utils-flagger'
 import { K3S_HELM_GROUP, getK3sHelmChartColumnValue } from './resource-utils-k3s'
@@ -421,6 +422,8 @@ const BUILTIN_SORTABLE_COLUMN_KEYS = new Set([
   'snapshotSource', 'restoreSize', 'snapshotClass', 'snapshotContent', 'snapshotTaken', 'snapshotRef', 'snapshotDriver', 'deletionPolicy', 'defaultClass',
   'poolAddresses', 'poolAssigned', 'poolAutoAssign', 'poolAvoidBuggyIPs', 'advertisedPools', 'advertisedNodes', 'l2Interfaces', 'bgpPeers', 'bgpCommunities',
   'peerAddress', 'peerASN', 'myASN', 'bfdProfile', 'ebgpMultiHop', 'configComponent', 'configErrors',
+  'cephPhase', 'cephMessage', 'cephHealthChecks', 'cephCapacity', 'cephVersion', 'cephMons', 'cephExternal', 'cephLastChecked',
+  'cephPoolProtection', 'cephFailureDomain', 'cephDeviceClass', 'cephMirroring',
   'name', 'namespace', 'age', 'status', 'ready', 'restarts', 'type', 'version',
   'desired', 'available', 'upToDate', 'lastSeen', 'count', 'reason', 'object',
   'cpu', 'memory', 'containers',
@@ -712,6 +715,30 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Result', width: 'w-32 shrink-0', tooltip: 'Invalid: the component could not parse the configuration and keeps the last one it accepted.' },
     { key: 'configComponent', label: 'Component', width: 'w-48 shrink-0' },
     { key: 'configErrors', label: 'Errors', width: 'min-w-48' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
+  ],
+  cephclusters: [
+    { key: 'name', label: 'Name', width: 'min-w-40' },
+    { key: 'namespace', label: 'Namespace', width: 'w-40 shrink-0' },
+    { key: 'status', label: 'Status', width: 'w-40 shrink-0', tooltip: 'Ceph health Rook last read from ceph status, or a failed reconcile. A report Rook stopped refreshing reads as stale, never as healthy.' },
+    { key: 'cephHealthChecks', label: 'Health Checks', width: 'min-w-48', tooltip: 'Ceph health check codes in the current report.' },
+    { key: 'cephCapacity', label: 'Raw Used', width: 'w-44 shrink-0', tooltip: 'Raw capacity used / total in the current report, counting every replica.' },
+    { key: 'cephPhase', label: 'Phase', width: 'w-28 shrink-0', tooltip: 'Rook reconcile phase.' },
+    { key: 'cephMessage', label: 'Message', width: 'min-w-48' },
+    { key: 'cephVersion', label: 'Ceph Version', width: 'w-32 shrink-0' },
+    { key: 'cephMons', label: 'Mons', width: 'w-20 shrink-0', tooltip: 'Configured monitor count, not how many are in quorum.' },
+    { key: 'cephExternal', label: 'External', width: 'w-24 shrink-0', defaultVisible: false },
+    { key: 'cephLastChecked', label: 'Last Checked', width: 'w-28 shrink-0', defaultVisible: false, tooltip: 'When Rook last read the Ceph health.' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
+  ],
+  cephblockpools: [
+    { key: 'name', label: 'Name', width: 'min-w-40' },
+    { key: 'namespace', label: 'Namespace', width: 'w-40 shrink-0' },
+    { key: 'status', label: 'Status', width: 'w-36 shrink-0', tooltip: 'Whether Rook configured the pool. Placement-group health is in the CephCluster\'s Ceph health.' },
+    { key: 'cephPoolProtection', label: 'Data Protection', width: 'w-44 shrink-0', tooltip: 'Configured replication or erasure coding, not proof of current redundancy.' },
+    { key: 'cephFailureDomain', label: 'Failure Domain', width: 'w-32 shrink-0' },
+    { key: 'cephDeviceClass', label: 'Device Class', width: 'w-28 shrink-0' },
+    { key: 'cephMirroring', label: 'Mirroring', width: 'w-28 shrink-0' },
     { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   opentelemetrycollectors: [
@@ -3202,6 +3229,8 @@ const CURATED_COLUMN_GROUPS: Record<string, readonly string[]> = {
   bgpadvertisements: ['metallb.io'],
   bgppeers: ['metallb.io'],
   configurationstates: ['metallb.io'],
+  cephclusters: ['ceph.rook.io'],
+  cephblockpools: ['ceph.rook.io'],
   opentelemetrycollectors: ['opentelemetry.io'],
   instrumentations: ['opentelemetry.io'],
   canaries: ['flagger.app'],
@@ -5856,6 +5885,8 @@ export function ResourcesView({
     if (volumeSnapshotValue !== undefined) return volumeSnapshotValue
     const metalLBValue = getMetalLBSortValue(resource, column)
     if (metalLBValue !== undefined) return metalLBValue
+    const rookValue = getRookSortValue(resource, column)
+    if (rookValue !== undefined) return rookValue
     const otelValue = getOpenTelemetryColumnValue(resource, column)
     if (otelValue !== undefined) return otelValue
     const flaggerValue = getFlaggerColumnValue(resource, column)
@@ -8347,6 +8378,11 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
   if (metalLBValue !== undefined) {
     if (column === 'status') return <GenericCell resource={resource} column={column} />
     return <span className="text-sm text-theme-text-secondary break-words">{metalLBValue || '-'}</span>
+  }
+  const rookValue = getRookColumnValue(resource, column)
+  if (rookValue !== undefined) {
+    if (column === 'status') return <GenericCell resource={resource} column={column} />
+    return <span className="text-sm text-theme-text-secondary break-words">{rookValue || '-'}</span>
   }
   if (isApiGroup(resource.apiVersion, 'opentelemetry.io') && ['opentelemetrycollectors', 'instrumentations'].includes(kindLower)) {
     if (column === 'status') return <GenericCell resource={resource} column={column} />

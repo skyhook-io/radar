@@ -116,6 +116,7 @@
             "prometheus": { "type": "boolean" },
             "reflector": { "type": "boolean" },
             "reloader": { "type": "boolean" },
+            "rook": { "type": "boolean" },
             "sealedSecrets": { "type": "boolean" },
             "secretsStoreCsi": { "type": "boolean" },
             "strimzi": { "type": "boolean" },

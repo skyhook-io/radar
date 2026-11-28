@@ -12,6 +12,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/karpenter"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 	"github.com/skyhook-io/radar/pkg/resourceid"
+	"github.com/skyhook-io/radar/pkg/rook"
 )
 
 // summarizeUnstructured produces a Summary for CRDs and dynamic resources.
@@ -121,6 +122,10 @@ func summarizeUnstructuredKind(obj *unstructured.Unstructured, pause resourcecon
 		return summarizeMetalLBBGPPeer(obj)
 	case group == metalLBGroup && kind == "ConfigurationState":
 		return summarizeMetalLBConfigurationState(obj)
+	case group == rook.Group && kind == "CephCluster":
+		return summarizeCephCluster(obj)
+	case group == rook.Group && kind == "CephBlockPool":
+		return summarizeCephBlockPool(obj)
 	}
 
 	// Generic fallback
