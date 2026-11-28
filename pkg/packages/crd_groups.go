@@ -76,7 +76,8 @@ var crdGroupToChart = map[string]string{
 	"barmancloud.cnpg.io": "plugin-barman-cloud",
 
 	// Flagger
-	"flagger.app": "flagger",
+	"flagger.app":            "flagger",
+	"logging.banzaicloud.io": "logging-operator",
 
 	// Secrets Store CSI Driver
 	"secrets-store.csi.x-k8s.io": "secrets-store-csi-driver",

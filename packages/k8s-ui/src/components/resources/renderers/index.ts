@@ -213,3 +213,4 @@ export { MetalLBIPAddressPoolRenderer, MetalLBL2AdvertisementRenderer, MetalLBBG
 export { CustomResourceDefinitionRenderer } from './CustomResourceDefinitionRenderer'
 
 export { CRDSchemaBrowser, type CRDSchemaBrowserProps } from './CRDSchemaBrowser'
+export { LoggingRenderer, LoggingFlowRenderer, LoggingOutputRenderer, FluentbitAgentRenderer } from './LoggingRenderers'

@@ -1268,12 +1268,14 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       }, 3000)
     }
 
-    // Traefik route facts join routes, Middlewares, Services, Pods and Secrets;
-    // only an open drawer's query refetches.
+    // Traefik route facts join routes, Middlewares, Services, Pods and Secrets,
+    // and a pod's log shipping joins its Logging's Flows and Outputs; only an
+    // open drawer's query refetches.
     if (traefikInvalidationRef.current.timer === null) {
       traefikInvalidationRef.current.timer = window.setTimeout(() => {
         traefikInvalidationRef.current = { timer: null }
         queryClient.invalidateQueries({ queryKey: ['traefik'] })
+        queryClient.invalidateQueries({ queryKey: ['logging-pod'] })
       }, 15000)
     }
 

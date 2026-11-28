@@ -243,6 +243,7 @@ export interface FeatureCapabilities {
   podSidecarMarks?: boolean
   kueueQueueWorkloads?: boolean
   podFileUpload?: boolean
+  loggingPodShipping?: boolean
   vulnerabilities?: boolean
   vulnerabilitiesExport?: boolean // GET /api/vulnerabilities/export
   runtimeAdvisoryChecks?: boolean
@@ -2093,4 +2094,44 @@ export interface WorkloadLogStreamEvent {
   reason?: string
   // error event
   message?: string
+}
+
+// GET /api/logging/pods/{namespace}/{name}: which routes forward a pod's logs,
+// per installed shipper. The wire is provider-neutral; a provider's own words
+// (Flow, ClusterOutput) appear only as kind. readErrors non-empty means
+// "can't tell", never "not shipped".
+export interface LogDestination { kind: string; namespace?: string; name: string; type?: string; found: boolean; active?: boolean }
+export interface LogReadError { group: string; resource: string }
+export interface LogRoute {
+  provider: string
+  kind: string
+  group: string
+  namespace: string
+  name: string
+  selected: boolean
+  uncertain: boolean
+  ignored: boolean
+  /** Why the operator can't render the route; empty when valid. */
+  invalid?: string
+  /** The route's shipper has an invalid route and doesn't skip invalid ones, so it renders none of its configuration: what still runs is unknown. */
+  renderBlocked?: boolean
+  /** Receives what no other route of its shipper selects (a Logging's defaultFlow). */
+  fallback?: boolean
+  excluded: boolean
+  /** For a selecting route: whether its logs reach a destination; undefined = unknown. */
+  delivers?: boolean
+  unmet: string[]
+  hasFilters: boolean
+  active?: boolean
+  destinations: LogDestination[]
+}
+export interface LogShipping {
+  /** Installed shippers Radar understands; empty hides the section. */
+  providers: string[]
+  routes: LogRoute[]
+  shipped: boolean
+  uncertain: boolean
+  readErrors: LogReadError[]
+  /** The pod's annotation asking the collector to drop its logs; while set, never "shipped". */
+  excludeAnnotation?: string
 }

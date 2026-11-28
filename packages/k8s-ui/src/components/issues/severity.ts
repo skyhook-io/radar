@@ -152,6 +152,9 @@ export function categoryLabel(category: string): string {
 const REASON_TITLE: Record<string, string> = {
   NodeCertificateExpiry: 'Node certificates need attention',
   FlaggerCanaryFailed: "Canary rollout failed",
+  LoggingOutputProblem: "Log output has problems",
+  LoggingFlowProblem: "Log flow has problems",
+  LoggingFlowInactive: "Log flow inactive",
   UpgradePlanInvalid: "Upgrade Plan is not valid",
   InvalidSchedule: 'Scheduling error reported',
   UnparseableSchedule: 'Scheduling error reported',

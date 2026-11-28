@@ -2,6 +2,7 @@ import { useState, type ReactNode, type JSX } from 'react'
 import { Server, HardDrive, Terminal as TerminalIcon, FileText, Activity, CirclePlay, FolderOpen, List, Eye, EyeOff, Shield, Info } from 'lucide-react'
 import { clsx } from 'clsx'
 import { PolicySection } from './PolicySection'
+import { PodLogShippingSection, type PodLogShippingProps } from './PodLogShippingSection'
 import type { PolicyResourceResponse } from '../../../types/policy'
 import { Section, PropertyList, Property, ConditionsSection, CopyHandler, AlertBanner, ResourceLink, useOperationalIssuesShown, PodAggregateResources } from '../../ui/drawer-components'
 import { SUBSTRATE_GROUP, SUBSTRATE_WORKER_POOL_LABEL } from '../resource-utils-agent-runtimes'
@@ -120,6 +121,9 @@ interface PodRendererProps {
   policyData?: PolicyResourceResponse | null
   policyLoading?: boolean
   policyError?: Error | null
+  /** Which Logging operator Flows ship this pod's logs. Undefined: the host
+   *  didn't wire it (or the operator isn't installed); the section is omitted. */
+  logShipping?: Omit<PodLogShippingProps, 'onNavigate'>
   /** Names of the LimitRanges in this Pod's namespace. Absent while the lookup
    *  is pending or unreadable, which leaves the contextual link unrendered. */
   namespaceLimitRangeNames?: string[] | null
@@ -319,6 +323,7 @@ export function PodRenderer({
   policyData,
   policyLoading,
   policyError,
+  logShipping,
   namespaceLimitRangeNames,
   networkAttachmentLookups,
   secretsStore,
@@ -694,6 +699,7 @@ export function PodRenderer({
       {policyData !== undefined && (
         <PolicySection data={policyData} loading={policyLoading} error={policyError} />
       )}
+      {logShipping && <PodLogShippingSection {...logShipping} onNavigate={onNavigate} />}
 
       {onOpenEphemeralTerminal && canExec && data.apiVersion === 'v1' && data.kind === 'Pod' && data.metadata?.uid && !data.metadata.deletionTimestamp && data.status?.phase === 'Running' && runningDebugContainers.length > 0 && (
         <Section title="Running debug containers" icon={TerminalIcon} defaultExpanded>
