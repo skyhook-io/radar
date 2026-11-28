@@ -29,6 +29,7 @@ type clusterScope struct {
 
 type metricsInputs struct {
 	client        *promclient.Client
+	settingsErr   error
 	cache         *k8s.ResourceCache
 	url           string
 	job           string
@@ -36,6 +37,13 @@ type metricsInputs struct {
 	spansClusters func(context.Context, string, string, time.Duration) (bool, error)
 	relayActive   func() bool
 	operatorScope func() (prom.WorkloadMetricsScope, bool)
+}
+
+func (m *metricsInputs) settingsError() error {
+	if m == nil {
+		return nil
+	}
+	return m.settingsErr
 }
 
 func (m *metricsInputs) clientForOperation() (*promclient.Client, error) {

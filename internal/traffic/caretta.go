@@ -276,6 +276,9 @@ func (c *CarettaSource) resultFromPods(pods []corev1.Pod, result *DetectionResul
 
 // GetFlows retrieves flows from Caretta via Prometheus metrics
 func (c *CarettaSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsResponse, error) {
+	if err := c.metrics.settingsError(); err != nil {
+		return nil, err
+	}
 	c.mu.RLock()
 	connected := c.isConnected
 	c.mu.RUnlock()
@@ -914,6 +917,9 @@ func (c *CarettaSource) Close() error {
 
 // Connect establishes connection to metrics service, starting port-forward if needed
 func (c *CarettaSource) Connect(ctx context.Context, contextName string) (*portforward.ConnectionInfo, error) {
+	if err := c.metrics.settingsError(); err != nil {
+		return nil, err
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -1427,8 +1433,10 @@ func (c *CarettaSource) GetMetricsServiceInfo() (namespace, service string, port
 }
 
 // queryPrometheusRaw executes a PromQL query and returns the parsed response.
-// Used by IstioSource to share Prometheus discovery infrastructure.
 func (c *CarettaSource) queryPrometheusRaw(ctx context.Context, query string) (*prometheusResponse, error) {
+	if err := c.metrics.settingsError(); err != nil {
+		return nil, err
+	}
 	return c.queryMetrics(ctx, c.metricsEndpoint(ctx), query)
 }
 

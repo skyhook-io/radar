@@ -128,7 +128,7 @@ func build(conn *k8s.Connection, settings Settings, previous *Set, rebuild []con
 				s.observe = openobserve.NewConnectionActivator(s.Metrics, s.Metrics.Lifetime())
 			}
 		}
-		s.Traffic = traffic.NewConnectionManager(conn, s.Metrics, settings.BeylaSelector)
+		s.Traffic = traffic.NewConnectionManager(conn, s.Metrics, settings.metricsError(), settings.BeylaSelector)
 		s.Traffic.PreferSource(previous.Traffic.SourcePreference())
 	}
 	if previous.ArgoCD == nil || slices.Contains(rebuild, config.IntegrationArgoCD) || settings.ArgoCD != old.ArgoCD ||
@@ -194,20 +194,20 @@ func (s *Set) closeDisplaced(kept *Set) {
 	if kept == nil {
 		kept = &Set{}
 	}
-	if s.Metrics != kept.Metrics {
-		_ = s.Metrics.Close()
-	}
-	if s.unavailableScans != nil && s.unavailableScans != kept.unavailableScans {
-		s.unavailableScans.Invalidate()
-	}
-	if s.ArgoCD != kept.ArgoCD {
-		_ = s.ArgoCD.Close()
+	if s.Traffic != nil && s.Traffic != kept.Traffic {
+		_ = s.Traffic.Close()
 	}
 	if s.Cost != kept.Cost {
 		_ = s.Cost.Close()
 	}
-	if s.Traffic != nil && s.Traffic != kept.Traffic {
-		_ = s.Traffic.Close()
+	if s.ArgoCD != kept.ArgoCD {
+		_ = s.ArgoCD.Close()
+	}
+	if s.unavailableScans != nil && s.unavailableScans != kept.unavailableScans {
+		s.unavailableScans.Invalidate()
+	}
+	if s.Metrics != kept.Metrics {
+		_ = s.Metrics.Close()
 	}
 }
 

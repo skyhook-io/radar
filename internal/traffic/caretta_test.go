@@ -19,6 +19,21 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 )
 
+func TestTrafficQueriesReturnMetricsSettingsError(t *testing.T) {
+	settingsErr := errors.New("invalid Metrics settings")
+	inputs := &metricsInputs{settingsErr: settingsErr}
+	caretta := NewCarettaSource(nil)
+	caretta.metrics = inputs
+	if _, err := caretta.queryPrometheusRaw(t.Context(), "up"); !errors.Is(err, settingsErr) {
+		t.Fatalf("Caretta query = %v, want %v", err, settingsErr)
+	}
+	istio := NewIstioSource(nil)
+	istio.metrics = inputs
+	if _, err := istio.defaultQuery(t.Context(), "up"); !errors.Is(err, settingsErr) {
+		t.Fatalf("Istio query = %v, want %v", err, settingsErr)
+	}
+}
+
 func TestCarettaRejectsCrossOriginRedirects(t *testing.T) {
 	var received atomic.Int32
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

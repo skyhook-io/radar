@@ -326,16 +326,3 @@ func (st *relayState) probeHealth(lifetime context.Context) {
 		_, _ = t.Do(ctx, http.MethodGet, "/api/v1/query", url.Values{"query": {"vector(1)"}})
 	}()
 }
-
-// resetSavedScope forgets the operator's workload scope and Beyla selector
-// set aside for when the relay ends, as Retire and a Reinitialize to another
-// connection clear them on the client: they belong to the old cluster.
-func (st *relayState) resetSavedScope() {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	if !st.saved.captured {
-		return
-	}
-	st.saved.scope = nil
-	st.saved.beylaJobSelector = ""
-}

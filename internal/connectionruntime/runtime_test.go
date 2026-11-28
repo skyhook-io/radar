@@ -152,6 +152,36 @@ func TestSettingsSwapKeepsUnchangedMembersAndCancelsOldQuery(t *testing.T) {
 	}
 }
 
+func TestTrafficReturnsMetricsSettingsErrorWithoutDiscovery(t *testing.T) {
+	t.Cleanup(k8s.SnapshotTestConnection())
+	t.Cleanup(k8s.SetTestLocalMode())
+	cluster := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("unexpected discovery request: %s", r.URL.Path)
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(cluster.Close)
+	installTestBuild(t, &rest.Config{Host: cluster.URL})
+	t.Cleanup(k8s.RetireServingConnection)
+	settingsErr := errors.New("invalid Metrics settings")
+	set := admitRuntime(t, New(nil, Settings{MetricsError: settingsErr}))
+	for _, name := range []string{"caretta", "istio"} {
+		t.Run(name, func(t *testing.T) {
+			if err := set.Traffic.SetActiveSource(name); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := set.Traffic.GetFlows(t.Context(), traffic.FlowOptions{}); !errors.Is(err, settingsErr) {
+				t.Fatalf("GetFlows = %v, want %v", err, settingsErr)
+			}
+		})
+	}
+	if err := set.Traffic.SetActiveSource("caretta"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := set.Traffic.Connect(t.Context()); !errors.Is(err, settingsErr) {
+		t.Fatalf("Connect = %v, want %v", err, settingsErr)
+	}
+}
+
 func TestMetricsEditPreservesAvailableTrafficSource(t *testing.T) {
 	cluster := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -542,8 +572,9 @@ func TestArgoEnvDiscoveryTokenStaysBoundToLaunchConnection(t *testing.T) {
 			t.Cleanup(k8s.SetTestProfileSource("/test/kubeconfig", cluster, "user"))
 			member, _ := runtime.Build(t.Context(), k8s.Current())
 			defer member.Close()
-			manager := member.(*Set).ArgoCD
-			if !manager.IsEnvManaged() || !manager.IsConfigured() {
+			set := member.(*Set)
+			manager := set.ArgoCD
+			if !set.settings.ArgoEnv || !manager.IsConfigured() {
 				t.Fatal("replacement lost the environment configuration")
 			}
 			err := manager.Probe(t.Context())

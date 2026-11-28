@@ -448,38 +448,6 @@ func (m *Manager) SeedFromEnvFailed(reason string) {
 	m.bumpAndReset()
 }
 
-// IsEnvManaged reports whether the token was provisioned from the environment.
-func (m *Manager) IsEnvManaged() bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.ensureSeededLocked()
-	return m.envManaged
-}
-
-// EnvManagedConfig returns the effective URL + TLS mode when the integration is
-// environment-managed, so callers (e.g. GET /api/config) can present the real
-// endpoint instead of the stale on-disk values, which env-managed mode ignores.
-// ok is false when not env-managed. The token is never returned.
-func (m *Manager) EnvManagedConfig() (url string, insecureTLS bool, ok bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.ensureSeededLocked()
-	if !m.envManaged {
-		return "", false, false
-	}
-	return m.manualURL, m.insecureTLS, true
-}
-
-// EnvManagedError returns the sanitized reason environment provisioning failed,
-// or "" when it succeeded (or isn't env-managed). The UI surfaces this so a
-// misconfigured declarative credential isn't invisible behind one startup log.
-func (m *Manager) EnvManagedError() string {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.ensureSeededLocked()
-	return m.envError
-}
-
 // RestoreConfig rolls the manager back to a previously-captured state, INCLUDING
 // the token's source binding. It exists for the connect-rollback path: the
 // candidate SetConfig may have re-stamped the binding for a fresh token, and a

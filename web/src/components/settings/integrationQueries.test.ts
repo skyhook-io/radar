@@ -3,6 +3,16 @@ import { describe, expect, it, vi } from 'vitest'
 import { invalidateIntegrationQueries } from './integrationQueries'
 
 describe('invalidateIntegrationQueries', () => {
+  it.each(['metrics', 'cost', 'argocd'] as const)('invalidates diagnostics after saving %s', async kind => {
+    const client = new QueryClient()
+    client.setQueryData(['diagnostics'], 'previous')
+
+    await invalidateIntegrationQueries(client, [kind])
+
+    expect(client.getQueryState(['diagnostics'])?.isInvalidated).toBe(true)
+    client.clear()
+  })
+
   it('refreshes metrics dependents and the selected Argo views after reconfirming both', async () => {
     const client = new QueryClient()
     const affected = [

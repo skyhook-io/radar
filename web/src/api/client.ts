@@ -256,6 +256,10 @@ export class ApiError extends Error {
   }
 }
 
+export function shouldRetryReplacedMember(failureCount: number, error: unknown): boolean {
+  return failureCount < 1 && error instanceof ApiError && (error.status === 409 || error.status === 503);
+}
+
 export function isForbiddenError(error: unknown): boolean {
   return error instanceof ApiError && error.status === 403;
 }

@@ -69,11 +69,11 @@ func NewManager(client kubernetes.Interface, forwards *portforward.Manager, cont
 	}
 }
 
-func NewConnectionManager(conn *k8s.Connection, client *prometheus.Client, selector string) *Manager {
+func NewConnectionManager(conn *k8s.Connection, client *prometheus.Client, settingsErr error, selector string) *Manager {
 	url, headers := client.CurrentConfig()
 	m := NewManager(conn.ClientInterface(), conn.PortForwards(), conn.ContextName(), url, headers)
 	m.metrics = client
-	inputs := &metricsInputs{client: client, cache: conn.ResourceCache(), url: url, job: selector}
+	inputs := &metricsInputs{client: client, settingsErr: settingsErr, cache: conn.ResourceCache(), url: url, job: selector}
 	if client != nil {
 		inputs.resolve = func(ctx context.Context, metric, selector string, window time.Duration) (string, prometheus.SeriesIsolation, error) {
 			return client.ResolveTrafficScope(ctx, metric, selector, window, inputs.cache)
@@ -605,13 +605,13 @@ func (m *Manager) reconcileActiveSource(available []TrafficSource) {
 	}
 	m.sourcePreferenceMu.Lock()
 	defer m.sourcePreferenceMu.Unlock()
-	preferred := m.preferredSource
-	m.preferredSource = ""
 	if len(available) == 0 {
 		m.activeSource = nil
 		m.sourceSnapshot.Store("")
 		return
 	}
+	preferred := m.preferredSource
+	m.preferredSource = ""
 	m.activeSource = available[0]
 	for _, source := range available {
 		if source.Name() == preferred {

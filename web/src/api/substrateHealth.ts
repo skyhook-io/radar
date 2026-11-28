@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { getApiBase } from './config'
 import type { TimeSeries } from '@skyhook-io/k8s-ui/components/charts'
-import { ApiError, fetchJSON, useClusterInfo, useRadarFeature, type PrometheusTimeRange } from './client'
+import { fetchJSON, shouldRetryReplacedMember, useClusterInfo, useRadarFeature, type PrometheusTimeRange } from './client'
 
 export type SubstrateChartState =
   | 'ok'
@@ -127,7 +127,7 @@ export function useSubstrateHealth(target: SubstrateTarget, enabled: boolean) {
     enabled: enabled && feature.support === 'supported',
     staleTime: 30_000,
     refetchInterval: 60_000,
-    retry: (failureCount, error) => failureCount < 1 && error instanceof ApiError && (error.status === 409 || error.status === 503),
+    retry: shouldRetryReplacedMember,
   })
   return { ...query, upgrade: feature.upgrade, blockedReason: feature.blockedReason, support: feature.support }
 }

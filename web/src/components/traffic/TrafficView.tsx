@@ -482,6 +482,10 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
   const reconnectStateRef = useRef<'idle' | 'armed' | 'awaiting-status'>('idle')
   const connectAttemptRef = useRef(0)
 
+  useEffect(() => () => {
+    connectAttemptRef.current++
+  }, [])
+
   // Track cluster context to reset state on cluster change
   const { data: clusterInfo } = useClusterInfo()
   const lastClusterRef = useRef<string | null>(null)

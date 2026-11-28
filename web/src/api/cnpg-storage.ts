@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import type { CNPGDiskReading, CNPGMetricIsolation, Grant } from '@skyhook-io/k8s-ui'
-import { fetchJSON, useRadarFeature } from './client'
+import { fetchJSON, shouldRetryReplacedMember, useRadarFeature } from './client'
 
 export type CNPGPVCRole = 'PG_DATA' | 'PG_WAL' | 'PG_TABLESPACE'
 
@@ -110,7 +110,7 @@ export function useCNPGClusterStorage(namespace: string, name: string, enabled =
     refetchInterval: 30_000,
     refetchIntervalInBackground: false,
     staleTime: 10_000,
-    retry: false,
+    retry: shouldRetryReplacedMember,
     placeholderData: (prev) => prev,
   })
 }
@@ -132,7 +132,7 @@ export function useCNPGFleetDisk(namespaces: string[], enabled = true) {
     enabled,
     staleTime: 20_000,
     refetchInterval: 60_000,
-    retry: false,
+    retry: shouldRetryReplacedMember,
     placeholderData: (prev) => prev,
   })
 }

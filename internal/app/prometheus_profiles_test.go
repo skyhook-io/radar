@@ -11,7 +11,9 @@ import (
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/connectionruntime"
+	"github.com/skyhook-io/radar/internal/connections"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/internal/settings"
 	"github.com/skyhook-io/radar/pkg/argoapi"
 	"github.com/skyhook-io/radar/pkg/prom"
@@ -99,6 +101,39 @@ func TestLaunchOverridesWithoutContextDoNotStopStartup(t *testing.T) {
 	}
 	if got.LocalConnections == nil || got.PrometheusURL != "" {
 		t.Fatalf("unbound override applied: url=%q profiles=%v", got.PrometheusURL, got.LocalConnections != nil)
+	}
+}
+
+func TestLocalLaunchScopeSurvivesSameContextRetry(t *testing.T) {
+	useTempHome(t)
+	t.Cleanup(k8s.SetTestLocalMode())
+	t.Cleanup(k8s.SetTestProfileSource("/test/local", "dev", "developer"))
+	old := k8s.SetTestConfig(&rest.Config{Host: "https://cluster"})
+	t.Cleanup(func() { k8s.SetTestConfig(old) })
+	target, err := k8s.CurrentProfileTarget()
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolver := connections.NewResolver(config.NewProfileStore(), target, nil)
+	runtime := connectionruntime.New(resolver, connectionruntime.Settings{
+		Scope: prom.WorkloadMetricsScope{ClusterLabels: map[string]string{"cluster": "dev"}},
+	})
+	beforeSwitch := clearLaunchScopeOnContextSwitch(runtime)
+	beforeSwitch("dev")
+	member, _ := runtime.Build(t.Context(), k8s.Current())
+	defer member.Close()
+	metrics, err := member.(*connectionruntime.Set).MetricsClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	matchers, isolation, err := metrics.ResolveTrafficScope(t.Context(), "caretta_links_observed", "", 0, nil)
+	if err != nil || matchers != `cluster="dev"` || isolation.Mode != prometheus.SeriesIsolationConfigured {
+		t.Fatalf("scope after same-context Retry = %q, %v, %v", matchers, isolation, err)
+	}
+
+	beforeSwitch("prod")
+	if scope := runtime.Settings().Scope; scope.SingleCluster || len(scope.ClusterLabels) != 0 {
+		t.Fatalf("scope after choosing a different context = %+v", scope)
 	}
 }
 

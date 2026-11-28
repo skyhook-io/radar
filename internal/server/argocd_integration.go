@@ -218,7 +218,7 @@ func (s *Server) handleApplyArgoCDConfig(w http.ResponseWriter, r *http.Request)
 		})
 		return err
 	}); err != nil {
-		s.connectionError(w, err)
+		s.integrationCommitError(w, "Argo CD", err)
 		return
 	}
 

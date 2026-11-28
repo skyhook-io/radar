@@ -142,7 +142,7 @@ func (s *Server) handleApplyCostSource(w http.ResponseWriter, r *http.Request) {
 		})
 		return err
 	}); err != nil {
-		s.connectionError(w, err)
+		s.integrationCommitError(w, "Kubecost", err)
 		return
 	}
 

@@ -174,3 +174,26 @@ func TestDetectSources_FailsOverToAnotherAvailableSource(t *testing.T) {
 		t.Errorf("must fall over to the remaining available source, got %q", name)
 	}
 }
+
+func TestDetectSources_KeepsPreferenceWhenNothingIsAvailable(t *testing.T) {
+	hubble := &stubSource{name: "hubble", result: &DetectionResult{}}
+	beyla := &stubSource{name: "beyla", result: &DetectionResult{}}
+	m := &Manager{
+		k8sClient: fake.NewSimpleClientset(),
+		sources:   map[string]TrafficSource{"hubble": hubble, "beyla": beyla},
+	}
+	m.PreferSource("beyla")
+
+	if response, err := m.DetectSources(t.Context()); err != nil || response.Active != "" {
+		t.Fatalf("empty detection = %+v, %v", response, err)
+	}
+	if got := m.SourcePreference(); got != "beyla" {
+		t.Fatalf("preference after empty detection = %q, want beyla", got)
+	}
+
+	hubble.result = &DetectionResult{Available: true, Present: true}
+	beyla.result = &DetectionResult{Available: true, Present: true}
+	if response, err := m.DetectSources(t.Context()); err != nil || response.Active != "beyla" {
+		t.Fatalf("detection after sources became available = %+v, %v, want beyla", response, err)
+	}
+}

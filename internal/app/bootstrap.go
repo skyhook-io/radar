@@ -389,12 +389,16 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) App
 	}
 	cfg.IntegrationRuntime = connectionruntime.New(cfg.LocalConnections, startup)
 	k8s.RegisterIntegrationBuilder(cfg.IntegrationRuntime.Build)
-	k8s.OnBeforeContextSwitch(func(next string) {
-		if cfg.LocalConnections != nil || next != k8s.GetContextName() {
-			cfg.IntegrationRuntime.ClearLaunchScope()
-		}
-	})
+	k8s.OnBeforeContextSwitch(clearLaunchScopeOnContextSwitch(cfg.IntegrationRuntime))
 	return cfg
+}
+
+func clearLaunchScopeOnContextSwitch(runtime *connectionruntime.Runtime) k8s.ContextSwitchCallback {
+	return func(next string) {
+		if next != k8s.GetContextName() {
+			runtime.ClearLaunchScope()
+		}
+	}
 }
 
 func persistKubecostContextBindings(cfg AppConfig) AppConfig {

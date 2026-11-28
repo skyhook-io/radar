@@ -93,11 +93,11 @@ func TestConfigureStartupFailsClosedOnInvalidEnvironment(t *testing.T) {
 		}
 		return ""
 	})
-	if err == nil || !m.IsEnvManaged() || m.EnvManagedError() == "" {
-		t.Fatalf("configureStartup error=%v managed=%v envError=%q", err, m.IsEnvManaged(), m.EnvManagedError())
+	if err == nil || err.Error() == "" {
+		t.Fatalf("configureStartup error = %v, want the environment failure reason", err)
 	}
-	if _, selectedErr := m.Selected(context.Background()); !errors.Is(selectedErr, ErrCostSourceEnvConfig) {
-		t.Fatalf("Selected error = %v, want ErrCostSourceEnvConfig", selectedErr)
+	if _, selectedErr := m.Selected(context.Background()); !errors.Is(selectedErr, ErrCostSourceEnvConfig) || !errors.Is(selectedErr, err) {
+		t.Fatalf("Selected error = %v, want ErrCostSourceEnvConfig wrapping %v", selectedErr, err)
 	}
 }
 

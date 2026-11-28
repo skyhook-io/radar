@@ -123,6 +123,33 @@ func TestApplyPrometheusURL_EmptyHeadersPreserveLaunchScope(t *testing.T) {
 	}
 }
 
+func TestApplyPrometheusURL_CommitFailureStatus(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		busy bool
+		want int
+	}{
+		{"missing home directory", false, http.StatusInternalServerError},
+		{"connection changing", true, http.StatusConflict},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := setupPrometheusIntegrationTest(t, nil)
+			previous := currentTestIntegrations().Metrics
+			t.Setenv("HOME", "")
+			t.Setenv("USERPROFILE", "")
+			t.Cleanup(k8s.SetTestContextOperationInProgress(tc.busy))
+
+			response := applyPrometheus(s, `{"prometheusUrl":"https://metrics.example"}`)
+			if response.Code != tc.want {
+				t.Fatalf("save returned %d %s, want %d", response.Code, response.Body.String(), tc.want)
+			}
+			if currentTestIntegrations().Metrics != previous || previous.Closed() {
+				t.Fatal("failed save replaced the active Metrics member")
+			}
+		})
+	}
+}
+
 func TestApplyPrometheusURL_ManagedHeaders(t *testing.T) {
 	for _, source := range []string{"environment", "flags"} {
 		for _, edit := range []string{`{}`, `{"authorization":"replacement"}`} {

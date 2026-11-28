@@ -2,7 +2,7 @@ import type { QueryClient, QueryFilters } from '@tanstack/react-query'
 import type { IntegrationKind } from './LocalConnectionSettings'
 
 const metricsKeys = new Set([
-  'workload-metrics', 'substrate-health', 'dashboard', 'diagnostics',
+  'workload-metrics', 'substrate-health', 'dashboard',
   'traffic-sources', 'traffic-flows', 'traffic-source-active', 'traffic-connection',
 ])
 const cnpgMetricsKeys = ['history', 'fleet-metrics', 'storage', 'disk']
@@ -22,6 +22,7 @@ export async function invalidateIntegrationQueries(
   const filters: QueryFilters = {
     predicate: ({ queryKey: [root, section] }) => {
       if (typeof root !== 'string') return false
+      if (root === 'diagnostics') return kinds.length > 0
       if (cost && root.startsWith('opencost-')) return true
       if (argo && argoKeys.has(root)) return true
       if (!metrics) return false

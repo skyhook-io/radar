@@ -143,6 +143,9 @@ func (s *IstioSource) getPrometheusClient() (*promclient.Client, error) {
 var errIstioPrometheusUnavailable = errors.New("prometheus not available for Istio metrics")
 
 func (s *IstioSource) defaultQuery(ctx context.Context, query string) (*prom.QueryResult, error) {
+	if err := s.metrics.settingsError(); err != nil {
+		return nil, err
+	}
 	client, err := s.getPrometheusClient()
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", errIstioPrometheusUnavailable, err)
@@ -290,6 +293,9 @@ var errIstioTCPUnchecked = errors.New("could not check which cluster the TCP ser
 
 // GetFlows retrieves flows from Istio metrics via the shared Prometheus client
 func (s *IstioSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsResponse, error) {
+	if err := s.metrics.settingsError(); err != nil {
+		return nil, err
+	}
 	var missing []string
 
 	ambientNamespaces := s.ambientNamespaceFn()

@@ -292,21 +292,6 @@ func (m *Manager) ConfigSnapshot() ManagerConfig {
 	return m.config
 }
 
-func (m *Manager) IsEnvManaged() bool {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.envManaged
-}
-
-func (m *Manager) EnvManagedError() string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	if m.configErr != nil {
-		return m.configErr.Error()
-	}
-	return ""
-}
-
 func (m *Manager) SelectedSourceSnapshot() Source {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

@@ -49,7 +49,7 @@ func TestTrafficRoutesReturnUnavailableWhenMemberCloses(t *testing.T) {
 			if err := client.SetWorkloadMetricsScope(prom.WorkloadMetricsScope{SingleCluster: true}, ""); err != nil {
 				t.Fatal(err)
 			}
-			manager := traffic.NewConnectionManager(k8s.Current(), client, "")
+			manager := traffic.NewConnectionManager(k8s.Current(), client, nil, "")
 			defer manager.Close()
 			t.Cleanup(k8s.SetTestIntegrations(&connectionruntime.Set{Traffic: manager}))
 			if err := manager.SetActiveSource("beyla"); err != nil {

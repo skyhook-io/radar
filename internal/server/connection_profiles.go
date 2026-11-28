@@ -254,6 +254,16 @@ func (s *Server) connectionError(w http.ResponseWriter, err error) {
 	s.writeError(w, status, prom.RedactURLs(err.Error()))
 }
 
+func (s *Server) integrationCommitError(w http.ResponseWriter, integration string, err error) {
+	if errors.Is(err, config.ErrProfileConflict) || errors.Is(err, config.ErrProfileBusy) || errors.Is(err, k8s.ErrContextConfigurationBusy) {
+		s.connectionError(w, err)
+		return
+	}
+	message := prom.RedactURLs(err.Error())
+	log.Printf("[config] Failed to persist %s configuration: %s", integration, message)
+	s.writeError(w, http.StatusInternalServerError, message)
+}
+
 func (s *Server) refreshIntegrationProfiles(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.integrationRuntime != nil {

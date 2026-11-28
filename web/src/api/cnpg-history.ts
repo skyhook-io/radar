@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import type { CNPGFleetMetricsReading, Grant } from '@skyhook-io/k8s-ui'
-import { fetchJSON, useRadarFeature } from './client'
+import { fetchJSON, shouldRetryReplacedMember, useRadarFeature } from './client'
 import { shouldRetryRadarQuery } from './radarFeatures'
 import type { CNPGClusterActivityResponse } from './cnpg'
 
@@ -76,7 +76,7 @@ export function useCNPGClusterHistory(namespace: string, name: string, range: CN
     refetchInterval: range === '15m' ? 30_000 : 60_000,
     refetchIntervalInBackground: false,
     staleTime: 10_000,
-    retry: false,
+    retry: shouldRetryReplacedMember,
     placeholderData: (prev) => (prev?.range === range ? prev : undefined),
   })
 }
@@ -101,7 +101,7 @@ export function useCNPGFleetMetrics(namespaces: string[], enabled = true) {
     enabled,
     staleTime: 20_000,
     refetchInterval: 60_000,
-    retry: false,
+    retry: shouldRetryReplacedMember,
     placeholderData: (prev) => prev,
   })
 }

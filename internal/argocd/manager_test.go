@@ -566,22 +566,18 @@ func TestSeedFromEnvBindsAndMarksManaged(t *testing.T) {
 	}
 }
 
-// TestEnvManagedConfigReflectsEffective pins that EnvManagedConfig returns the
-// effective env URL/TLS (never the token) only when env-managed — the config
-// endpoint uses this so the read-only card shows the real endpoint, not disk.
-func TestEnvManagedConfigReflectsEffective(t *testing.T) {
+func TestSeedFromEnvSetsEffectiveProbeConfig(t *testing.T) {
 	m := newTestManager(config.Config{ArgoCDURL: "https://disk.example.com", ArgoCDToken: "disk-token"})
 	m.contextName = func() string { return "in-cluster" }
 
-	if _, _, ok := m.EnvManagedConfig(); ok {
-		// Before seeding it lazily loads the disk config, which is NOT env-managed.
-		t.Fatal("EnvManagedConfig must report ok=false when not env-managed")
+	if !m.IsConfigured() || m.envManaged {
+		t.Fatal("the seeded disk config should be configured without environment management")
 	}
 
 	m.SeedFromEnv("https://argocd.example.com", "env-token", true, "", "")
-	url, insecure, ok := m.EnvManagedConfig()
-	if !ok || url != "https://argocd.example.com" || !insecure {
-		t.Fatalf("EnvManagedConfig = (%q, %v, %v), want the effective env values", url, insecure, ok)
+	snap := m.snapshotLocked()
+	if !m.envManaged || snap.manualURL != "https://argocd.example.com" || !snap.insecureTLS {
+		t.Fatalf("probe config = (%q, %v), managed = %v, want the effective env values", snap.manualURL, snap.insecureTLS, m.envManaged)
 	}
 }
 
@@ -718,13 +714,14 @@ func TestSeedFromEnvFailed_SuppressesDiskFallback(t *testing.T) {
 	m := newTestManager(config.Config{ArgoCDURL: "https://stale.example.com", ArgoCDToken: "stale-disk-token"})
 	m.contextName = func() string { return "in-cluster" }
 
-	m.SeedFromEnvFailed("invalid RADAR_ARGOCD_URL: must include a host")
+	const reason = "invalid RADAR_ARGOCD_URL: must include a host"
+	m.SeedFromEnvFailed(reason)
 
-	if !m.IsEnvManaged() {
+	if !m.envManaged {
 		t.Fatal("a failed env provisioning must stay env-managed (UI read-only)")
 	}
-	if got := m.EnvManagedError(); got == "" {
-		t.Fatal("EnvManagedError must surface the failure reason")
+	if m.envError != reason {
+		t.Fatalf("env error = %q, want %q", m.envError, reason)
 	}
 	if m.IsConfigured() {
 		t.Fatal("a failed env provisioning must leave the integration unconfigured (no stale disk token)")
@@ -733,8 +730,9 @@ func TestSeedFromEnvFailed_SuppressesDiskFallback(t *testing.T) {
 		t.Fatal("Get must not return a client for the suppressed/errored state")
 	}
 	// The disk token must never surface.
-	if url, insecure, ok := m.EnvManagedConfig(); !ok || url != "" || insecure {
-		t.Fatalf("EnvManagedConfig = (%q,%v,%v), want empty effective config in the errored state", url, insecure, ok)
+	snap := m.snapshotLocked()
+	if snap.manualURL != "" || snap.insecureTLS || snap.token != "" {
+		t.Fatal("the errored state must leave the effective probe config empty")
 	}
 }
 
@@ -746,12 +744,12 @@ func TestSeedFromEnvClearsError(t *testing.T) {
 
 	m.SeedFromEnvFailed("some reason")
 	m.SeedFromEnv("", "good-token", false, "in-cluster", "in-cluster")
-	if m.EnvManagedError() != "" || !m.IsEnvManaged() || !m.IsConfigured() {
+	if m.envError != "" || !m.envManaged || !m.IsConfigured() {
 		t.Fatal("a successful seed after a failure must clear the error and configure the token")
 	}
 
 	m.SetConfig("https://ui.example.com", "ui-token", false, true)
-	if m.IsEnvManaged() || m.EnvManagedError() != "" {
+	if m.envManaged || m.envError != "" {
 		t.Fatal("an interactive SetConfig must clear env-managed and the env error")
 	}
 }

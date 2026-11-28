@@ -6349,7 +6349,7 @@ func (s *Server) handleApplyPrometheusURL(w http.ResponseWriter, r *http.Request
 		return err
 	})
 	if err != nil {
-		s.connectionError(w, err)
+		s.integrationCommitError(w, "Prometheus", err)
 		return
 	}
 

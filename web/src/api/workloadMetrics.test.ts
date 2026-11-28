@@ -3,12 +3,10 @@ import { ApiError } from './client'
 import type { WorkloadMetrics } from './workloadMetrics'
 
 vi.mock('@tanstack/react-query', () => ({ useQuery: (options: unknown) => options }))
-vi.mock('./client', () => ({
+vi.mock('./client', async importOriginal => ({
+  ...(await importOriginal<typeof import('./client')>()),
   useClusterInfo: () => ({ data: { context: 'cluster-a' } }),
   fetchJSON: vi.fn(),
-  ApiError: class extends Error {
-    constructor(message: string, readonly status: number) { super(message) }
-  },
 }))
 vi.mock('./config', () => ({ getApiBase: () => '/api' }))
 const { useWorkloadMetrics: workloadQueryOptions } = await import('./workloadMetrics')

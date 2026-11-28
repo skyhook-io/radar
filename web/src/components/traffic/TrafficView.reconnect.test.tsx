@@ -35,6 +35,7 @@ it.each([
   'success',
   'failure',
   'cancelled detection',
+  'unmounted during detection',
   'cancelled manual Retry',
   'status stays disconnected',
   'initial status stays disconnected',
@@ -53,6 +54,8 @@ it.each([
   let connected = false
   let sourceAvailable = true
   let freshDetections = 0
+  let resumeDetection: (() => void) | undefined
+  let unmounted = false
   let warnings = 0
   let disconnectedStatusReads = 0
   let statusReadsAfterReconnect = 0
@@ -63,10 +66,16 @@ it.each([
     const { pathname, search } = new URL(url, window.location.origin)
     switch (pathname) {
       case '/api/traffic/sources':
-        if (!search && ++freshDetections === cancelledDetection) {
-          return new Promise<Response>((_, reject) => {
-            init!.signal!.addEventListener('abort', () => reject(init!.signal!.reason), { once: true })
-          })
+        if (!search) {
+          freshDetections++
+          if (freshDetections === cancelledDetection) {
+            return new Promise<Response>((_, reject) => {
+              init!.signal!.addEventListener('abort', () => reject(init!.signal!.reason), { once: true })
+            })
+          }
+          if (scenario === 'unmounted during detection') {
+            await new Promise<void>(resolve => { resumeDetection = resolve })
+          }
         }
         return Response.json({
           cluster: {}, active: sourceAvailable ? source : '', notDetected: [],
@@ -136,6 +145,18 @@ it.each([
       expect(warnings).toBeGreaterThan(warningsBeforeSave)
     }
 
+    if (scenario === 'unmounted during detection') {
+      await vi.waitFor(() => expect(resumeDetection).toBeDefined())
+      expect(connectOrigins).toEqual(['auto'])
+      act(() => root.unmount())
+      unmounted = true
+      resumeDetection!()
+      await settle()
+      expect(queryClient.getQueryState(['traffic-sources'])?.status).toBe('success')
+      expect(connectOrigins).toEqual(['auto'])
+      return
+    }
+
     if (source === 'beyla') {
       await vi.waitFor(async () => {
         await settle()
@@ -196,7 +217,7 @@ it.each([
     expect(connectOrigins).toEqual(['auto', 'auto'])
     expect(freshDetections).toBe(scenario === 'cancelled detection' ? 2 : 1)
   } finally {
-    act(() => root.unmount())
+    if (!unmounted) act(() => root.unmount())
     queryClient.clear()
     container.remove()
     setAutomaticRequestMarking(false)
