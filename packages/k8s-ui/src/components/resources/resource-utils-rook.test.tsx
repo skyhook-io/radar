@@ -85,7 +85,7 @@ describe('getCephHealth', () => {
     expect(parseGoDuration('-5m')).toBe(-5 * 60_000)
     expect(parseGoDuration('1500us')).toBe(1.5)
     expect(parseGoDuration('0')).toBe(0)
-    for (const text of ['', '+', '.s', '1h0', '5', '1d', '1hm']) expect(parseGoDuration(text), text).toBeUndefined()
+    for (const text of ['', '+', '.s', '1h0', '5', '1d', '1hm', `${'0'.repeat(100_000)}x`]) expect(parseGoDuration(text), text.slice(0, 8)).toBeUndefined()
   })
 })
 

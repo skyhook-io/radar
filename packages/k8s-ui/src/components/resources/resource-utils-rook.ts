@@ -24,17 +24,37 @@ const MIN_STALE_AFTER_MS = 10 * 60_000
 const STALE_INTERVALS = 3
 /** How far ahead of this clock lastChecked may be. Mirrors maxClockSkew in pkg/rook. */
 const MAX_CLOCK_SKEW_MS = 5 * 60_000
-const GO_DURATION_UNIT_MS: Record<string, number> = { ns: 1e-6, us: 1e-3, 'µs': 1e-3, 'μs': 1e-3, ms: 1, s: 1000, m: 60_000, h: 3_600_000 }
-const GO_DURATION_TERM = /(\d+\.?\d*|\.\d+)(ns|us|µs|μs|ms|s|m|h)/g
-const GO_DURATION = new RegExp(`^([-+]?)(0|(?:${GO_DURATION_TERM.source})+)$`)
+// The units of a Go duration in milliseconds, two-letter ones first.
+const GO_DURATION_UNITS: [string, number][] = [['ns', 1e-6], ['us', 1e-3], ['µs', 1e-3], ['μs', 1e-3], ['ms', 1], ['s', 1000], ['m', 60_000], ['h', 3_600_000]]
 
-/** Milliseconds in a Go duration ("60s", "1m30s", "+.5h"), or undefined where time.ParseDuration fails. */
+const isDigit = (c: string | undefined): boolean => c !== undefined && c >= '0' && c <= '9'
+
+/**
+ * Milliseconds in a Go duration ("60s", "1m30s", "+.5h"), or undefined where
+ * time.ParseDuration fails. Scanned by hand, in one pass.
+ */
 export function parseGoDuration(text: unknown): number | undefined {
-  const match = typeof text === 'string' ? GO_DURATION.exec(text) : null
-  if (!match) return undefined
+  if (typeof text !== 'string') return undefined
+  const sign = text[0] === '-' ? -1 : 1
+  let at = text[0] === '-' || text[0] === '+' ? 1 : 0
+  if (text.slice(at) === '0') return 0
+  if (at === text.length) return undefined
   let total = 0
-  for (const [, amount, unit] of match[2].matchAll(GO_DURATION_TERM)) total += Number(amount) * GO_DURATION_UNIT_MS[unit]
-  return match[1] === '-' ? -total : total
+  while (at < text.length) {
+    const start = at
+    while (isDigit(text[at])) at++
+    if (text[at] === '.') {
+      at++
+      while (isDigit(text[at])) at++
+    }
+    const amount = text.slice(start, at)
+    if (amount === '' || amount === '.') return undefined
+    const unit = GO_DURATION_UNITS.find(([name]) => text.startsWith(name, at))
+    if (!unit) return undefined
+    at += unit[0].length
+    total += Number(amount) * unit[1]
+  }
+  return sign * total
 }
 
 /**
