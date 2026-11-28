@@ -222,6 +222,8 @@ export interface FeatureCapabilities {
   veleroDeleteBackup?: boolean
   veleroRunArtifacts?: boolean
   veleroRunVolumes?: boolean
+  /** GET /api/longhorn/workspace */
+  longhornWorkspace?: boolean
   /** DELETE /api/resources/... honours ?uid=&resourceVersion= preconditions */
   resourceDeletePreconditions?: boolean
   /** POST /api/workloads/{kind}/{ns}/{name}/restart accepts {uid, resourceVersion}; an older Radar ignores the body and restarts unconditionally. */

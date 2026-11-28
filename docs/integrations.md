@@ -28,6 +28,8 @@ Cluster-scoped drawers retain refresh-on-reopen/focus instead of automatic polli
 
 **PersistentVolume drawer:** a Longhorn PV's Related Resources include its Volume, when Radar has exactly one cached Volume with that name and the caller may list Longhorn Volumes in its namespace. Two Volumes with one name (a leftover second install) link neither way. Until Radar has read every Volume (while it starts, or after a list error), neither direction links, and the answer reports that it couldn't check rather than an empty one.
 
+**Workspace read:** `GET /api/longhorn/workspace` returns every Volume the caller can read with its health counts, healthy replicas, current PV and Issues; [longhorn.md](longhorn.md) lists each value's source and how it reads when unknown.
+
 **Status badge (drawer header):** Healthy, Degraded (amber), Faulted (red), Detached (neutral), Unknown. The Volumes table keeps the CRD's printer columns (State, Robustness, Scheduled, Size, Node), so robustness reads there as Longhorn writes it.
 
 **Kind collisions:** Longhorn serves `nodes` and `volumes` plurals. Only the core `Node` gets the Node drawer, status, Debug Shell, cordon, uncordon and drain; a Longhorn `Node` renders generically. A `volumes` plural from any other group renders generically too.
