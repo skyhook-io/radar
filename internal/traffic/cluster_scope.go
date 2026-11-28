@@ -47,6 +47,9 @@ func (m *metricsInputs) settingsError() error {
 }
 
 func (m *metricsInputs) clientForOperation() (*promclient.Client, error) {
+	if err := m.settingsError(); err != nil {
+		return nil, err
+	}
 	if m == nil || m.client == nil {
 		return nil, promclient.ErrPrometheusUnavailable
 	}

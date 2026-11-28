@@ -32,6 +32,11 @@ func TestTrafficQueriesReturnMetricsSettingsError(t *testing.T) {
 	if _, err := istio.defaultQuery(t.Context(), "up"); !errors.Is(err, settingsErr) {
 		t.Fatalf("Istio query = %v, want %v", err, settingsErr)
 	}
+	beyla := NewBeylaSource(nil)
+	beyla.metrics = inputs
+	if info, err := beyla.Connect(t.Context(), "test"); err != nil || info.Connected || info.Error != settingsErr.Error() {
+		t.Fatalf("Beyla Connect = %+v, %v; want the settings error", info, err)
+	}
 }
 
 func TestCarettaRejectsCrossOriginRedirects(t *testing.T) {
