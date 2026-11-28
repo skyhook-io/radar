@@ -640,7 +640,7 @@ function InfoStep({
           </button>
           {showReadme && (
             <div className="mt-3 p-4 bg-theme-base/50 rounded-lg text-xs overflow-auto max-h-96">
-              <Markdown>{readme}</Markdown>
+              <Markdown allowImages>{readme}</Markdown>
             </div>
           )}
         </div>

@@ -13,6 +13,14 @@ interface MarkdownHooks {
    */
   linkRenderer?: (href: string | undefined, children: ReactNode) => ReactNode | null
   codeActions?: (code: string) => ReactNode
+  /**
+   * Render markdown images as images. Off by default: text from a model or a
+   * cluster can carry an image whose URL holds the data around it, and the
+   * browser would fetch it as soon as the answer renders. Off, an image shows
+   * as its alt text. Turn it on only for content whose author is trusted to
+   * load remote images, such as a Helm chart README.
+   */
+  allowImages?: boolean
 }
 
 interface MarkdownProps extends MarkdownHooks {
@@ -58,6 +66,11 @@ const COMPONENTS: Components = {
         {children}
       </a>
     )
+  },
+  img: function MarkdownImage({ src, alt }) {
+    const { allowImages } = useContext(MarkdownHooksContext)
+    if (!allowImages) return alt ? <span>{alt}</span> : null
+    return <img src={src} alt={alt ?? ''} loading="lazy" referrerPolicy="no-referrer" className="inline max-w-full" />
   },
   ul: ({ children }) => (
     <ul className="list-disc list-outside pl-4 my-2 space-y-1 text-theme-text-secondary">{children}</ul>
@@ -150,8 +163,8 @@ const COMPONENTS: Components = {
   ),
 }
 
-export function Markdown({ children, className, linkRenderer, codeActions }: MarkdownProps) {
-  const hooks = useMemo(() => ({ linkRenderer, codeActions }), [linkRenderer, codeActions])
+export function Markdown({ children, className, linkRenderer, codeActions, allowImages }: MarkdownProps) {
+  const hooks = useMemo(() => ({ linkRenderer, codeActions, allowImages }), [linkRenderer, codeActions, allowImages])
   return (
     <div className={clsx('markdown-content', className)}>
       <MarkdownHooksContext.Provider value={hooks}>
