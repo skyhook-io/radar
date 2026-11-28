@@ -127,3 +127,15 @@ func TestValidEnvVarName(t *testing.T) {
 		}
 	}
 }
+
+// A URL with no host passes url.Parse but can never be reached.
+func TestStartupURLNeedsAHost(t *testing.T) {
+	for _, raw := range []string{"http:///path", "https://", "http:"} {
+		if validateStartupPrometheusURL(raw) == nil {
+			t.Errorf("%q was accepted", raw)
+		}
+	}
+	if err := validateStartupPrometheusURL("http://user:pw@loki.logging:3100/?orgId=1"); err != nil {
+		t.Errorf("a URL with userinfo and a query was refused: %v", err)
+	}
+}

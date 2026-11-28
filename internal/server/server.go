@@ -1033,6 +1033,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Put("/integrations/argocd", s.handleApplyArgoCDConfig)
 			r.Get("/integrations/argocd/status", s.handleArgoCDStatus)
 			r.Get("/integrations/connections", s.handleLocalConnections)
+			r.Get("/loki/status", s.handleLokiStatus)
 			r.Put("/integrations/connections", s.handleUpdateLocalConnection)
 			r.Get("/integrations/openobserve", s.handleOpenObserveSetupView)
 			r.Delete("/integrations/openobserve", s.handleOpenObserveRemoveAll)
@@ -1639,6 +1640,7 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 
 		OpenObserveCollectorPresence: true,
 		OpenObserveLocalSetup:        true,
+		LokiConnection:               true,
 	}
 }
 

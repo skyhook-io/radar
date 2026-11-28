@@ -13,7 +13,7 @@ import (
 // parameters: the transport honors them, and launch flags and Helm values carry
 // them. Settings saves use the stricter prom.ValidateBaseURL.
 func validateStartupPrometheusURL(raw string) error {
-	if u, err := url.Parse(raw); err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+	if u, err := url.Parse(raw); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
 		return errors.New("must be a valid HTTP(S) URL (e.g., http://prometheus-server.monitoring:9090)")
 	}
 	return nil
