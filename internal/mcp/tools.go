@@ -3529,7 +3529,7 @@ func handleIssuesTool(ctx context.Context, _ *mcp.CallToolRequest, input issuesI
 		resp.UncheckedSources = append(resp.UncheckedSources, helmUnchecked)
 	}
 	resp.ClusterContext = provider.ClusterContextForIssues(allowedNamespaces, func(group, resource string) bool {
-		return canReadInNamespace(ctx, group, resource, "kube-system", "list")
+		return checkNamespaceAccess(ctx, "kube-system") && canReadInNamespace(ctx, group, resource, "kube-system", "list")
 	})
 	// Per-issue change correlation (single-namespace responses): each
 	// critical and warning issue (criticals first under a shared cap)
@@ -3573,11 +3573,11 @@ func handleIssuesTool(ctx context.Context, _ *mcp.CallToolRequest, input issuesI
 			len(out), stats.TotalMatched,
 		)
 	}
-	if resp.ClusterContext != nil && resp.ClusterContext.DNS != nil && resp.ClusterContext.DNS.Hint != "" {
+	if resp.ClusterContext != nil && resp.ClusterContext.DNSConfig != nil && resp.ClusterContext.DNSConfig.Hint != "" {
 		if resp.NarrowHint != "" {
 			resp.NarrowHint += "; "
 		}
-		resp.NarrowHint += resp.ClusterContext.DNS.Hint
+		resp.NarrowHint += resp.ClusterContext.DNSConfig.Hint
 	}
 	if result := k8s.GetCachedPermissionResult(); result != nil {
 		if visibility := k8s.BuildVisibilitySummary(result, k8s.VisibilityNamespace(allowedNamespaces)); visibility != nil {

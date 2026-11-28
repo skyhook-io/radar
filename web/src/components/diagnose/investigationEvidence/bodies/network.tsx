@@ -2,10 +2,32 @@ import { useContext } from "react";
 import { AlertTriangle } from "lucide-react";
 import { Badge, StatusDot, ResourceLink } from "@skyhook-io/k8s-ui";
 import { EvidenceNavigationContext } from "../navigation";
-import { type EvidenceDataOf, severityBadge } from "../cardParts";
+import { type EvidenceDataOf } from "../cardParts";
 
 export function DNSBody({ data }: { data: EvidenceDataOf<"dns"> }) {
   const { onOpenResource } = useContext(EvidenceNavigationContext);
+  const rules = data.dns.coreDNSRules ?? [];
+  const source = (ref: { kind: string; namespace: string; name: string }) => (
+    <>
+      <Badge tone="structural" size="sm">
+        {ref.kind}
+      </Badge>
+      <span className="font-mono text-xs">
+        <ResourceLink
+          name={ref.name}
+          kind={ref.kind}
+          namespace={ref.namespace}
+          group=""
+          label={`${ref.namespace}/${ref.name}`}
+          onNavigate={
+            ref.kind.toLowerCase() === "configmap" && onOpenResource
+              ? (target) => onOpenResource(target)
+              : undefined
+          }
+        />
+      </span>
+    </>
+  );
   return (
     <div className="space-y-2">
       {(data.dns.signals ?? []).map((signal) => (
@@ -16,37 +38,52 @@ export function DNSBody({ data }: { data: EvidenceDataOf<"dns"> }) {
           {signal}
         </p>
       ))}
-      {(data.dns.coreDNSFindings ?? []).map((finding) => (
+      {rules.length > 0 && (
+        <p className="text-xs text-theme-text-tertiary">
+          Rewrite and template rules in the CoreDNS config
+        </p>
+      )}
+      {rules.map((rule) => (
         <div
-          key={`${finding.kind}-${finding.namespace}-${finding.name}-${finding.reason}`}
+          key={`${rule.namespace}-${rule.name}-${rule.key}-${rule.line}`}
           className="rounded-md border border-theme-border bg-theme-base/40 p-2"
         >
           <div className="flex flex-wrap gap-1.5">
-            <Badge tone="structural" size="sm">
-              {finding.kind}
-            </Badge>
-            <span className="font-mono text-xs">
-              <ResourceLink
-                name={finding.name}
-                kind={finding.kind}
-                namespace={finding.namespace}
-                group=""
-                label={`${finding.namespace}/${finding.name}`}
-                onNavigate={
-                  finding.kind.toLowerCase() === "configmap" && onOpenResource
-                    ? (ref) => onOpenResource(ref)
-                    : undefined
-                }
-              />
+            {source(rule)}
+            <span className="text-xs text-theme-text-tertiary">
+              {rule.key}, line {rule.line}
             </span>
-            <Badge severity={severityBadge(finding.severity)} size="sm">
-              {finding.severity}
-            </Badge>
           </div>
-          <p className="mt-1 text-xs text-theme-text-secondary">
-            {finding.reason}
-            {finding.message ? ` — ${finding.message}` : ""}
-          </p>
+          <pre className="mt-1 overflow-x-auto whitespace-pre-wrap break-words font-mono text-xs text-theme-text-secondary">
+            {rule.text}
+          </pre>
+          {rule.truncated && (
+            <p className="mt-1 text-xs text-theme-text-tertiary">
+              Cut short. Open the ConfigMap for the whole rule.
+            </p>
+          )}
+        </div>
+      ))}
+      {(data.dns.omittedCoreDNSRules ?? 0) > 0 && (
+        <p className="text-xs text-theme-text-tertiary">
+          {data.dns.omittedCoreDNSRules} more{" "}
+          {data.dns.omittedCoreDNSRules === 1 ? "rule is" : "rules are"} not
+          shown.
+        </p>
+      )}
+      {/* A `coreDNSFindings` entry is a verdict on the ConfigMap. Its reason
+          and message are shown as text, without its severity. */}
+      {(data.dns.coreDNSFindings ?? []).map((finding, index) => (
+        <div
+          key={`legacy-${finding.namespace}-${finding.name}-${index}`}
+          className="rounded-md border border-theme-border bg-theme-base/40 p-2"
+        >
+          <div className="flex flex-wrap gap-1.5">{source(finding)}</div>
+          {(finding.reason || finding.message) && (
+            <p className="mt-1 text-xs text-theme-text-secondary">
+              {[finding.reason, finding.message].filter(Boolean).join(": ")}
+            </p>
+          )}
         </div>
       ))}
     </div>

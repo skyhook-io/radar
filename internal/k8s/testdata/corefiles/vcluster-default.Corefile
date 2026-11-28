@@ -1,0 +1,23 @@
+.:1053 {
+    errors
+    health
+    ready
+    rewrite name regex .*\.nodes\.vcluster\.com kubernetes.default.svc.cluster.local
+    kubernetes cluster.local in-addr.arpa ip6.arpa {
+        pods insecure
+        fallthrough in-addr.arpa ip6.arpa
+    }
+    hosts /etc/coredns/NodeHosts {
+        ttl 60
+        reload 15s
+        fallthrough
+    }
+    prometheus :9153
+    forward . /etc/resolv.conf
+    cache 30
+    loop
+    reload
+    loadbalance
+}
+
+import /etc/coredns/custom/*.server

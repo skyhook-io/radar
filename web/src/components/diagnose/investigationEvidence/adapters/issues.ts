@@ -1,6 +1,10 @@
 import { type Issue, type IssueRecentChange } from "@skyhook-io/k8s-ui";
 import { type UncheckedSource } from "../../../../api/client";
-import { type DiagnosisDNSContext } from "../../diagnoseEvidenceTypes";
+import {
+  type DiagnosisDNSContext,
+  dnsSignalReportsFailure,
+  coreDNSRulesSummary,
+} from "../../diagnoseEvidenceTypes";
 import {
   ProjectionBuilder,
   addChanges,
@@ -111,26 +115,38 @@ export function adaptIssues(
     invalidPayload(builder, source, "Issue-related changes");
   }
   addClusterScopedChanges(builder, source, value.cluster_scoped_changes);
-  const clusterDNS = record(record(value.cluster_context)?.dns);
+  // `dns_config` holds `rules`. A response may carry `dns` instead, whose
+  // `findings` are verdicts on a CoreDNS ConfigMap.
+  const clusterContext = record(value.cluster_context);
+  const clusterDNS =
+    record(clusterContext?.dns_config) ?? record(clusterContext?.dns);
   if (clusterDNS) {
     const signals = stringArray(clusterDNS.signals) ?? [];
+    const rules = Array.isArray(clusterDNS.rules) ? clusterDNS.rules : [];
     const findings = Array.isArray(clusterDNS.findings)
       ? clusterDNS.findings
       : [];
-    if (signals.length > 0 || findings.length > 0) {
+    if (signals.length > 0 || rules.length > 0 || findings.length > 0) {
       builder.observe(`dns:issues:${scopeFromArgs(source)}`, "dns", source, {
         tier: "context",
         relevance: "broader",
-        tone: "warning",
+        // A CoreDNS rollout or config change with stored rules is context.
+        // Only a reported failure is a warning.
+        tone: signals.some(dnsSignalReportsFailure) ? "warning" : "info",
         title: "Cluster DNS signals",
         summary:
           signals[0] ||
-          `${findings.length} CoreDNS finding${findings.length === 1 ? "" : "s"}`,
+          coreDNSRulesSummary(rules.length + findings.length),
         data: {
           type: "dns",
           dns: {
             signals,
+            coreDNSRules: rules as DiagnosisDNSContext["coreDNSRules"],
             coreDNSFindings: findings as DiagnosisDNSContext["coreDNSFindings"],
+            omittedCoreDNSRules:
+              typeof clusterDNS.omitted_rules === "number"
+                ? clusterDNS.omitted_rules
+                : undefined,
           },
         },
       });

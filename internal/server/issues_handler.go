@@ -148,7 +148,7 @@ func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 		resp.UncheckedSources = append(resp.UncheckedSources, helmUnchecked)
 	}
 	resp.ClusterContext = provider.ClusterContextForIssues(namespaces, func(group, resource string) bool {
-		return s.canRead(r, group, resource, "kube-system", "list")
+		return len(s.getUserNamespaces(r, []string{"kube-system"})) > 0 && s.canRead(r, group, resource, "kube-system", "list")
 	})
 	if len(namespaces) == 1 && stats.TotalMatched == len(out) && meaningfulchanges.IssueChangesQueryEligible(q.Get("kind"), q.Get("filter"), q.Get("severity")) {
 		if recentChangesReason := meaningfulchanges.IssueChangesReason(out); recentChangesReason != "" {

@@ -478,15 +478,15 @@ func (p *CacheProvider) ClusterContextForIssues(namespaces []string, canReadCore
 	if dns == nil {
 		return nil
 	}
-	return &issuesapi.ClusterContext{DNS: dns}
+	return &issuesapi.ClusterContext{DNSConfig: dns}
 }
 
 func (p *CacheProvider) clusterDNSContext(namespaces []string, access coreDNSAccess) *issuesapi.ClusterDNSContext {
 	if p == nil || p.cache == nil {
 		return nil
 	}
-	findings := k8s.DetectSuspiciousCoreDNS(p.cache, time.Now())
-	if len(findings) == 0 {
+	rules, omitted := k8s.CoreDNSRuleExcerpts(p.cache)
+	if len(rules) == 0 {
 		return nil
 	}
 	signals := p.clusterDNSSignals(namespaces, access)
@@ -494,26 +494,20 @@ func (p *CacheProvider) clusterDNSContext(namespaces []string, access coreDNSAcc
 		return nil
 	}
 	out := &issuesapi.ClusterDNSContext{
-		Signals: signals,
-		Hint:    "Cluster DNS context may be relevant: inspect kube-system/CoreDNS before attributing DNS or service-resolution symptoms only to application workloads.",
+		Signals:      signals,
+		OmittedRules: omitted,
+		Hint:         "The CoreDNS ConfigMap has rewrite or template rules. Compare them with the name that fails before attributing DNS or service-resolution symptoms only to application workloads.",
 	}
-	for _, f := range findings {
-		out.Findings = append(out.Findings, issuesapi.ClusterDNSFinding{
-			Kind:      f.Kind,
-			Namespace: f.Namespace,
-			Name:      f.Name,
-			Severity:  f.Severity,
-			Reason:    f.Reason,
-			Message:   f.Message,
-			Evidence:  strings.Join(signals, "; "),
+	for _, r := range rules {
+		out.Rules = append(out.Rules, issuesapi.ClusterDNSRule{
+			Kind:      "ConfigMap",
+			Namespace: r.Namespace,
+			Name:      r.Name,
+			Key:       r.Key,
+			Line:      r.Line,
+			Text:      r.Text,
+			Truncated: r.Truncated,
 		})
-		if len(out.Findings) >= 3 {
-			break
-		}
-	}
-	if len(out.Findings) > 0 {
-		first := out.Findings[0]
-		out.Hint = fmt.Sprintf("%s %s/%s is suspicious (%s); %s", first.Kind, first.Namespace, first.Name, first.Reason, out.Hint)
 	}
 	return out
 }
@@ -577,7 +571,7 @@ func (p *CacheProvider) namespaceDNSSymptomSignals(namespaces []string) []string
 				continue
 			}
 			if textContainsDNSSymptom(e.Reason + " " + e.Message) {
-				out = append(out, fmt.Sprintf("Warning events in namespace %s contain DNS resolution errors", ns))
+				out = append(out, fmt.Sprintf("Warning events in namespace %s contain DNS resolution failures", ns))
 				return
 			}
 		}

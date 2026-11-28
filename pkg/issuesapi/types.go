@@ -414,24 +414,35 @@ type CreatedObjects struct {
 	Objects     []string          `json:"objects"`
 }
 
+// ClusterContext is cluster-wide context attached to an issues response.
+// DNSConfig holds the CoreDNS rules and the DNS signals that make them relevant.
 type ClusterContext struct {
-	DNS *ClusterDNSContext `json:"dns,omitempty"`
+	DNSConfig *ClusterDNSContext `json:"dns_config,omitempty"`
 }
 
+// ClusterDNSContext is attached when DNS is already the subject: DNS failures
+// were seen, or CoreDNS changed recently. It reports what is configured and
+// what was observed, with no verdict.
 type ClusterDNSContext struct {
-	Signals  []string            `json:"signals,omitempty"`
-	Findings []ClusterDNSFinding `json:"findings,omitempty"`
-	Hint     string              `json:"hint,omitempty"`
+	Signals []string         `json:"signals,omitempty"`
+	Rules   []ClusterDNSRule `json:"rules,omitempty"`
+	// OmittedRules counts stored rules left out of Rules by the cap.
+	OmittedRules int    `json:"omitted_rules,omitempty"`
+	Hint         string `json:"hint,omitempty"`
 }
 
-type ClusterDNSFinding struct {
+// ClusterDNSRule is one rewrite or template rule copied from a stored CoreDNS
+// Corefile. It carries no verdict: Text is what the ConfigMap says, not what
+// CoreDNS did.
+type ClusterDNSRule struct {
 	Kind      string `json:"kind"`
 	Namespace string `json:"namespace"`
 	Name      string `json:"name"`
-	Severity  string `json:"severity"`
-	Reason    string `json:"reason"`
-	Message   string `json:"message,omitempty"`
-	Evidence  string `json:"evidence,omitempty"`
+	Key       string `json:"key"`
+	// Line is the 1-based line of the rule within Key.
+	Line      int    `json:"line"`
+	Text      string `json:"text"`
+	Truncated bool   `json:"truncated,omitempty"`
 }
 
 // RestartLoop describes a container that keeps restarting. A crashloop issue

@@ -738,3 +738,58 @@ func TestResourceIssuesReportAKueueQueueCheckTheCallerCannotMake(t *testing.T) {
 		t.Fatalf("a caller who can list ClusterQueues gets the row: %s", w.Body.String())
 	}
 }
+
+// The DNS context carries raw kube-system config. A caller limited to some
+// namespaces needs kube-system among them as well as the ConfigMap read.
+func TestIssuesDNSContextNeedsKubeSystemInAllowedNamespaces(t *testing.T) {
+	restoreFixtureCache(t)
+	k8s.ResetResourceCache()
+	client := fake.NewClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "shop"}},
+		&corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: "coredns", Namespace: "kube-system"},
+			Data:       map[string]string{"Corefile": ".:53 {\n  rewrite name a.example a.default.svc.cluster.local\n}\n"},
+		},
+		&corev1.Event{
+			ObjectMeta: metav1.ObjectMeta{Name: "dns-failure", Namespace: "shop"},
+			Type:       corev1.EventTypeWarning,
+			Reason:     "Failed",
+			Message:    "lookup payments.shop.svc.cluster.local: no such host",
+		},
+	)
+	if err := k8s.InitTestResourceCache(client); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	s := newAuthServer(auth.Config{Mode: "proxy"})
+
+	rules := func(allowed []string) []issuesapi.ClusterDNSRule {
+		perms := &auth.UserPermissions{AllowedNamespaces: allowed}
+		perms.SetCanI("list", "", "configmaps", "kube-system", true)
+		s.permCache.Set("pg-user", nil, perms)
+		w := resourceIssuesRequest(t, s, "/api/issues?namespaces=shop")
+		if w.Code != http.StatusOK {
+			t.Fatalf("status %d (body %s)", w.Code, w.Body.String())
+		}
+		var resp struct {
+			ClusterContext *issuesapi.ClusterContext `json:"cluster_context"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if resp.ClusterContext == nil || resp.ClusterContext.DNSConfig == nil {
+			if strings.Contains(w.Body.String(), "a.example") {
+				t.Fatalf("rule text leaked outside cluster_context: %s", w.Body.String())
+			}
+			return nil
+		}
+		return resp.ClusterContext.DNSConfig.Rules
+	}
+
+	if got := rules([]string{"shop"}); got != nil {
+		t.Fatalf("a caller without kube-system among its namespaces got its config: %+v", got)
+	}
+	got := rules([]string{"shop", "kube-system"})
+	if len(got) != 1 || !strings.Contains(got[0].Text, "rewrite name a.example") {
+		t.Fatalf("a caller with kube-system access lost the stored rule: %+v", got)
+	}
+}

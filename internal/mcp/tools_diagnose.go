@@ -208,18 +208,26 @@ type startupBlocker struct {
 	Action   string `json:"action,omitempty"`
 }
 
+// diagnoseDNSContext is what diagnose knows about DNS for a workload: the
+// signals observed on it, and the rewrite and template rules in the cluster's
+// CoreDNS ConfigMaps.
 type diagnoseDNSContext struct {
-	Signals         []string             `json:"signals,omitempty"`
-	CoreDNSFindings []diagnoseDNSFinding `json:"coreDNSFindings,omitempty"`
+	Signals      []string          `json:"signals,omitempty"`
+	CoreDNSRules []diagnoseDNSRule `json:"coreDNSRules,omitempty"`
+	// OmittedCoreDNSRules counts stored rules left out of CoreDNSRules by the cap.
+	OmittedCoreDNSRules int `json:"omittedCoreDNSRules,omitempty"`
 }
 
-type diagnoseDNSFinding struct {
+// diagnoseDNSRule is one rewrite or template rule copied from a stored CoreDNS
+// Corefile, with no verdict attached.
+type diagnoseDNSRule struct {
 	Kind      string `json:"kind"`
 	Namespace string `json:"namespace"`
 	Name      string `json:"name"`
-	Severity  string `json:"severity"`
-	Reason    string `json:"reason"`
-	Message   string `json:"message,omitempty"`
+	Key       string `json:"key"`
+	Line      int    `json:"line"`
+	Text      string `json:"text"`
+	Truncated bool   `json:"truncated,omitempty"`
 }
 
 // maxDiagnosePods caps the log fan-out so large DaemonSets / Deployments
@@ -702,25 +710,28 @@ func dnsContextForDiagnose(ctx context.Context, cache *k8s.ResourceCache, obj an
 		return nil
 	}
 	out := &diagnoseDNSContext{Signals: signals}
-	if canReadInNamespace(ctx, "", "configmaps", "kube-system", "list") {
-		findings := k8s.DetectSuspiciousCoreDNS(cache, time.Now())
-		for _, f := range findings {
-			out.CoreDNSFindings = append(out.CoreDNSFindings, diagnoseDNSFinding{
-				Kind:      f.Kind,
-				Namespace: f.Namespace,
-				Name:      f.Name,
-				Severity:  f.Severity,
-				Reason:    f.Reason,
-				Message:   f.Message,
+	// The rule text is raw kube-system config: the caller needs kube-system in
+	// their allowed namespaces as well as the ConfigMap read itself.
+	if checkNamespaceAccess(ctx, "kube-system") && canReadInNamespace(ctx, "", "configmaps", "kube-system", "list") {
+		rules, omitted := k8s.CoreDNSRuleExcerpts(cache)
+		out.OmittedCoreDNSRules = omitted
+		for _, r := range rules {
+			out.CoreDNSRules = append(out.CoreDNSRules, diagnoseDNSRule{
+				Kind:      "ConfigMap",
+				Namespace: r.Namespace,
+				Name:      r.Name,
+				Key:       r.Key,
+				Line:      r.Line,
+				Text:      r.Text,
+				Truncated: r.Truncated,
 			})
-			if len(out.CoreDNSFindings) >= 5 {
-				break
-			}
 		}
 	}
 	return out
 }
 
+// The failure signals say "failures", the word Radar's UI reads as a failed
+// lookup when it colours the DNS evidence.
 func diagnoseDNSSignals(obj any, pods []*corev1.Pod, current, previous []podLogEntry, events []aicontext.DeduplicatedEvent) []string {
 	seen := map[string]bool{}
 	var signals []string
@@ -731,21 +742,23 @@ func diagnoseDNSSignals(obj any, pods []*corev1.Pod, current, previous []podLogE
 		seen[s] = true
 		signals = append(signals, s)
 	}
+	// Failures go first: the list is capped, and the DNS settings of a
+	// workload and its pods can fill it on their own.
+	if logEntriesContainDNSSymptoms(current) || logEntriesContainDNSSymptoms(previous) {
+		add("pod logs contain DNS resolution failures")
+	}
+	for _, e := range events {
+		if textContainsDNSSymptom(e.Reason + " " + e.Message) {
+			add("warning events contain DNS resolution failures")
+			break
+		}
+	}
 	for _, s := range dnsConfigSignalsForObject(obj) {
 		add(s)
 	}
 	for _, p := range pods {
 		for _, s := range dnsConfigSignalsForPodSpec(p.Name, p.Spec) {
 			add(s)
-		}
-	}
-	if logEntriesContainDNSSymptoms(current) || logEntriesContainDNSSymptoms(previous) {
-		add("pod logs contain DNS resolution errors")
-	}
-	for _, e := range events {
-		if textContainsDNSSymptom(e.Reason + " " + e.Message) {
-			add("warning events contain DNS resolution errors")
-			break
 		}
 	}
 	return signals

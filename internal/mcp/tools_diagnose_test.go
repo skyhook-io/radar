@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -18,6 +19,7 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 )
 
@@ -349,7 +351,7 @@ func TestDiagnoseWorkloadWarnsAboutClippedRelationships(t *testing.T) {
 	}
 }
 
-func TestHandleDiagnose_AttachesPodDNSSignalButRBACGatesCoreDNSFinding(t *testing.T) {
+func TestHandleDiagnose_AttachesPodDNSSignalAndRBACGatesCoreDNSRules(t *testing.T) {
 	defer k8s.ResetTestState()
 	fakeClient := fake.NewClientset(
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "alpha"}, Status: corev1.NamespaceStatus{Phase: corev1.NamespaceActive}},
@@ -387,8 +389,111 @@ func TestHandleDiagnose_AttachesPodDNSSignalButRBACGatesCoreDNSFinding(t *testin
 	if !strings.Contains(body, `"dnsContext"`) || !strings.Contains(body, "dnsPolicy=None") {
 		t.Fatalf("expected dnsContext with pod DNS signal: %s", body)
 	}
-	if strings.Contains(body, "CoreDNS NXDOMAIN override") {
-		t.Fatalf("expected CoreDNS finding to be RBAC-gated from dnsContext: %s", body)
+	// Without read access to kube-system ConfigMaps the response carries
+	// neither the stored rule nor the fact that a CoreDNS ConfigMap has one.
+	for _, leak := range []string{"coreDNSRules", "coreDNSFindings", "rcode NXDOMAIN", "template ANY", "kube-system", "Corefile"} {
+		if strings.Contains(body, leak) {
+			t.Fatalf("CoreDNS config must be RBAC-gated from dnsContext, found %q: %s", leak, body)
+		}
+	}
+
+	getPermCache().Get("admin", nil).SetCanI("list", "", "configmaps", "kube-system", true)
+	result, _, err = handleDiagnose(ctx, nil, testDiagnoseInput("pod", "alpha", "frontend"))
+	if err != nil {
+		t.Fatalf("handleDiagnose with ConfigMap access: %v", err)
+	}
+	body = extractText(t, result)
+	for _, want := range []string{`"coreDNSRules"`, `"namespace":"kube-system"`, `"name":"coredns"`, `"key":"Corefile"`, `"line":2`, "rcode NXDOMAIN"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("expected the stored rule with its source once the caller can read it, missing %q: %s", want, body)
+		}
+	}
+	var parsed struct {
+		DNSContext struct {
+			CoreDNSRules []map[string]any `json:"coreDNSRules"`
+		} `json:"dnsContext"`
+	}
+	if err := json.Unmarshal([]byte(body), &parsed); err != nil || len(parsed.DNSContext.CoreDNSRules) != 1 {
+		t.Fatalf("decode dnsContext: %v: %s", err, body)
+	}
+	// Rules travel as coreDNSRules only. coreDNSFindings is a different shape.
+	if strings.Contains(body, `"coreDNSFindings"`) {
+		t.Fatalf("response must not use the old coreDNSFindings field: %s", body)
+	}
+	// A stored rule is passed on as text. It carries no verdict.
+	for _, field := range []string{"severity", "reason", "message"} {
+		if _, ok := parsed.DNSContext.CoreDNSRules[0][field]; ok {
+			t.Fatalf("stored rule must carry no %q: %+v", field, parsed.DNSContext.CoreDNSRules[0])
+		}
+	}
+}
+
+// A caller limited to some namespaces can hold a ConfigMap read in kube-system
+// and still not have kube-system among them. The stored rules are raw
+// kube-system config, so that caller does not get them.
+func TestHandleDiagnose_CoreDNSRulesNeedKubeSystemInAllowedNamespaces(t *testing.T) {
+	defer k8s.ResetTestState()
+	fakeClient := fake.NewClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "alpha"}, Status: corev1.NamespaceStatus{Phase: corev1.NamespaceActive}},
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: "frontend", Namespace: "alpha"},
+			Spec: corev1.PodSpec{
+				DNSPolicy:  corev1.DNSNone,
+				DNSConfig:  &corev1.PodDNSConfig{Nameservers: []string{"8.8.8.8"}},
+				Containers: []corev1.Container{{Name: "frontend"}},
+			},
+			Status: corev1.PodStatus{Phase: corev1.PodRunning},
+		},
+		&corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: "coredns", Namespace: "kube-system"},
+			Data:       map[string]string{"Corefile": ".:53 {\n  rewrite name a.example a.default.svc.cluster.local\n}\n"},
+		},
+	)
+	if err := k8s.InitTestResourceCache(fakeClient); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	t.Cleanup(func() { getPermCache().Invalidate() })
+	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "fake-test"})
+	ctx := withRestrictedUser(t, "scoped", []string{"alpha"})
+	grantDiagnoseRead(t, "scoped")
+	getPermCache().Get("scoped", nil).SetCanI("list", "", "configmaps", "kube-system", true)
+
+	result, _, err := handleDiagnose(ctx, nil, testDiagnoseInput("pod", "alpha", "frontend"))
+	if err != nil {
+		t.Fatalf("handleDiagnose: %v", err)
+	}
+	body := extractText(t, result)
+	if !strings.Contains(body, "dnsPolicy=None") {
+		t.Fatalf("expected the pod's own DNS signal: %s", body)
+	}
+	for _, leak := range []string{"coreDNSRules", "rewrite name", "a.example", "kube-system"} {
+		if strings.Contains(body, leak) {
+			t.Fatalf("kube-system config reached a caller without kube-system access, found %q: %s", leak, body)
+		}
+	}
+}
+
+// The signal list is capped. A workload and its pods can fill it with their DNS
+// settings alone, so an observed failure must not be the part that is dropped.
+func TestDiagnoseDNSSignalsKeepFailuresWhenSettingsFillTheCap(t *testing.T) {
+	spec := corev1.PodSpec{
+		DNSPolicy: corev1.DNSNone,
+		DNSConfig: &corev1.PodDNSConfig{
+			Nameservers: []string{"8.8.8.8"},
+			Searches:    []string{"example.com"},
+			Options:     []corev1.PodDNSConfigOption{{Name: "ndots"}},
+		},
+	}
+	pods := []*corev1.Pod{
+		{ObjectMeta: metav1.ObjectMeta{Name: "api-1"}, Spec: spec},
+		{ObjectMeta: metav1.ObjectMeta{Name: "api-2"}, Spec: spec},
+		{ObjectMeta: metav1.ObjectMeta{Name: "api-3"}, Spec: spec},
+	}
+	logs := []podLogEntry{{Logs: aicontext.FilteredLogs{Lines: []string{"dial tcp: lookup payments.shop.svc.cluster.local: no such host"}}}}
+
+	signals := diagnoseDNSSignals(pods[0], pods, logs, nil, nil)
+	if len(signals) == 0 || signals[0] != "pod logs contain DNS resolution failures" {
+		t.Fatalf("signals = %q, want the observed failure first", signals)
 	}
 }
 
